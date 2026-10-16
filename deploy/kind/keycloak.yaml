@@ -1,0 +1,154 @@
+apiVersion: v1
+kind: Secret
+metadata:
+  name: keycloak-db
+  namespace: ai-grid
+type: Opaque
+stringData:
+  username: keycloak
+  password: keycloak
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: keycloak-db
+  namespace: ai-grid
+spec:
+  selector:
+    app: keycloak-db
+  ports:
+    - port: 5432
+      targetPort: 5432
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: keycloak-db
+  namespace: ai-grid
+spec:
+  selector:
+    matchLabels:
+      app: keycloak-db
+  template:
+    metadata:
+      labels:
+        app: keycloak-db
+    spec:
+      containers:
+        - name: postgres
+          image: postgres:16-alpine
+          env:
+            - name: POSTGRES_DB
+              value: keycloak
+            - name: POSTGRES_USER
+              valueFrom:
+                secretKeyRef: {name: keycloak-db, key: username}
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef: {name: keycloak-db, key: password}
+          ports:
+            - containerPort: 5432
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: keycloak
+  namespace: ai-grid
+spec:
+  selector:
+    app: keycloak
+  ports:
+    - name: http
+      port: 8080
+      targetPort: 8080
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: keycloak
+  namespace: ai-grid
+spec:
+  selector:
+    matchLabels:
+      app: keycloak
+  template:
+    metadata:
+      labels:
+        app: keycloak
+    spec:
+      containers:
+        - name: keycloak
+          image: quay.io/keycloak/keycloak:26.3
+          args: ["start-dev", "--http-port=8080"]
+          env:
+            - name: KC_BOOTSTRAP_ADMIN_USERNAME
+              value: admin
+            - name: KC_BOOTSTRAP_ADMIN_PASSWORD
+              value: admin
+            - name: KC_DB
+              value: postgres
+            - name: KC_DB_URL
+              value: jdbc:postgresql://keycloak-db:5432/keycloak
+            - name: KC_DB_USERNAME
+              valueFrom:
+                secretKeyRef: {name: keycloak-db, key: username}
+            - name: KC_DB_PASSWORD
+              valueFrom:
+                secretKeyRef: {name: keycloak-db, key: password}
+          ports:
+            - containerPort: 8080
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: keycloak-init
+  namespace: ai-grid
+data:
+  init.sh: |
+    #!/bin/sh
+    set -eu
+    base=http://keycloak:8080
+    until curl -fsS "$base/realms/master/.well-known/openid-configuration" >/dev/null; do
+      sleep 2
+    done
+    token=$(curl -fsS -X POST "$base/realms/master/protocol/openid-connect/token" \
+      -H 'Content-Type: application/x-www-form-urlencoded' \
+      --data-urlencode grant_type=password --data-urlencode client_id=admin-cli \
+      --data-urlencode username=admin --data-urlencode password=admin | \
+      sed -n 's/.*"access_token":"\([^"]*\)".*/\1/p')
+    auth="Authorization: Bearer $token"
+    curl -sS -o /dev/null -w '%{http_code}' -X POST "$base/admin/realms" \
+      -H "$auth" -H 'Content-Type: application/json' \
+      --data '{"realm":"ai-grid","enabled":true}' | grep -E '^(201|409)$' >/dev/null
+    curl -sS -o /dev/null -w '%{http_code}' -X PUT "$base/admin/realms/ai-grid" \
+      -H "$auth" -H 'Content-Type: application/json' \
+      --data '{"realm":"ai-grid","enabled":true,"organizationsEnabled":true}' | grep '^204$' >/dev/null
+    for tenant in tenant-a tenant-b; do
+      curl -sS -o /dev/null -w '%{http_code}' -X POST "$base/admin/realms/ai-grid/organizations" \
+        -H "$auth" -H 'Content-Type: application/json' \
+        --data "{\"name\":\"$tenant\",\"alias\":\"$tenant\",\"domains\":[{\"name\":\"$tenant.example.com\",\"verified\":false}]}" | \
+        grep -E '^(201|409)$' >/dev/null
+    done
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: keycloak-init
+  namespace: ai-grid
+spec:
+  backoffLimit: 10
+  template:
+    spec:
+      restartPolicy: OnFailure
+      containers:
+        - name: init
+          image: curlimages/curl:8.10.1
+          command: ["/bin/sh", "/opt/init/init.sh"]
+          volumeMounts:
+            - name: init
+              mountPath: /opt/init
+      volumes:
+        - name: init
+          configMap:
+            name: keycloak-init
+            defaultMode: 0755

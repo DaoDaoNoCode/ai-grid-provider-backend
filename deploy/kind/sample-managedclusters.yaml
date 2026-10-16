@@ -1,0 +1,21 @@
+# This file is only for a local smoke test. In a full OCM installation these
+# objects are created and reconciled by clusteradm/OCM instead.
+apiVersion: cluster.open-cluster-management.io/v1
+kind: ManagedCluster
+metadata:
+  name: ai-grid-sample-a
+  labels:
+    environment: development
+    region: local
+spec:
+  hubAcceptsClient: true
+---
+apiVersion: cluster.open-cluster-management.io/v1
+kind: ManagedCluster
+metadata:
+  name: ai-grid-sample-b
+  labels:
+    environment: staging
+    region: local
+spec:
+  hubAcceptsClient: true

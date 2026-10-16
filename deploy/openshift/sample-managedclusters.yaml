@@ -1,0 +1,21 @@
+# Local/OpenShift smoke samples. On hubs with real ACM clusters, set
+# APPLY_SAMPLES=0 when running hack/openshift-up.sh.
+apiVersion: cluster.open-cluster-management.io/v1
+kind: ManagedCluster
+metadata:
+  name: ai-grid-sample-a
+  labels:
+    environment: development
+    region: local
+spec:
+  hubAcceptsClient: true
+---
+apiVersion: cluster.open-cluster-management.io/v1
+kind: ManagedCluster
+metadata:
+  name: ai-grid-sample-b
+  labels:
+    environment: staging
+    region: local
+spec:
+  hubAcceptsClient: true
