@@ -22,6 +22,7 @@ import (
 	apivalidation "k8s.io/apimachinery/pkg/api/validation"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	utilrand "k8s.io/apimachinery/pkg/util/rand"
 	"k8s.io/apimachinery/pkg/util/validation/field"
@@ -375,17 +376,9 @@ func (h *Hub) patch(w http.ResponseWriter, r *http.Request) {
 		writeStatus(w, apierrors.NewInternalError(err))
 		return
 	}
-	var patched []byte
-	if mediaType == "application/merge-patch+json" {
-		patched, err = jsonpatch.MergePatch(original, body)
-	} else {
-		var p jsonpatch.Patch
-		if p, err = jsonpatch.DecodePatch(body); err == nil {
-			patched, err = p.Apply(original)
-		}
-	}
-	if err != nil {
-		writeStatus(w, apierrors.NewBadRequest(err.Error()))
+	patched, statusErr := applyPatch(mediaType, original, body)
+	if statusErr != nil {
+		writeStatus(w, statusErr)
 		return
 	}
 	next, statusErr := decodeObject(patched, name)
@@ -394,6 +387,41 @@ func (h *Hub) patch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	h.writeUpdate(w, cur, next, name)
+}
+
+// maxJSONPatchOperations is the API server's limit on JSON patch operations
+// (apiserver pkg/endpoints/handlers/patch.go).
+const maxJSONPatchOperations = 10000
+
+// applyPatch is apiserver pkg/endpoints/handlers/patch.go applyJSPatch: a
+// JSON patch that does not decode is 400 BadRequest, one with too many
+// operations 413, and one that decodes but does not apply (a failed `test`,
+// a missing path) 422 from NewGenericServerResponse; a merge patch that is
+// not valid JSON (ErrBadJSONPatch) is 400, any other merge failure is
+// returned unwrapped, which the API server reports as 500.
+func applyPatch(mediaType string, original, body []byte) ([]byte, *apierrors.StatusError) {
+	if mediaType == "application/merge-patch+json" {
+		patched, err := jsonpatch.MergePatch(original, body)
+		switch {
+		case errors.Is(err, jsonpatch.ErrBadJSONPatch):
+			return nil, apierrors.NewBadRequest(err.Error())
+		case err != nil:
+			return nil, apierrors.NewInternalError(err)
+		}
+		return patched, nil
+	}
+	p, err := jsonpatch.DecodePatch(body)
+	if err != nil {
+		return nil, apierrors.NewBadRequest(err.Error())
+	}
+	if len(p) > maxJSONPatchOperations {
+		return nil, apierrors.NewRequestEntityTooLargeError(fmt.Sprintf("The allowed maximum operations in a JSON patch is %d, got %d", maxJSONPatchOperations, len(p)))
+	}
+	patched, err := p.Apply(original)
+	if err != nil {
+		return nil, apierrors.NewGenericServerResponse(http.StatusUnprocessableEntity, "", schema.GroupResource{}, "", err.Error(), 0, false)
+	}
+	return patched, nil
 }
 
 // writeUpdate is the API server's update path for a custom resource:

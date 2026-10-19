@@ -643,3 +643,41 @@ func TestAccessReviewAndRBACAgree(t *testing.T) {
 		t.Errorf("service account review reason = %v", reason)
 	}
 }
+
+// TestPatchErrorCodes follows k8s.io/apiserver pkg/endpoints/handlers/patch.go
+// applyJSPatch: a JSON patch that does not decode is 400, one that decodes
+// but does not apply is 422; a merge patch that is not JSON is 400.
+func TestPatchErrorCodes(t *testing.T) {
+	th := startHub(t, testFixtures())
+	client := th.client(t, testToken)
+	ctx := context.Background()
+	for _, tc := range []struct {
+		name  string
+		pt    types.PatchType
+		patch string
+		code  int
+		check func(error) bool
+	}{
+		{"json patch that does not decode", types.JSONPatchType, `[{"op":`, 400, apierrors.IsBadRequest},
+		{"json patch whose test fails", types.JSONPatchType, `[{"op":"test","path":"/spec/hubAcceptsClient","value":false}]`, 422, apierrors.IsInvalid},
+		{"json patch on a missing path", types.JSONPatchType, `[{"op":"remove","path":"/metadata/labels/nope"}]`, 422, apierrors.IsInvalid},
+		{"merge patch that is not JSON", types.MergePatchType, `{`, 400, apierrors.IsBadRequest},
+	} {
+		_, err := client.Patch(ctx, "site-a", tc.pt, []byte(tc.patch), metav1.PatchOptions{})
+		var status apierrors.APIStatus
+		if !tc.check(err) || !errorsAs(err, &status) || int(status.Status().Code) != tc.code {
+			t.Errorf("%s: error = %v, want code %d", tc.name, err, tc.code)
+		}
+	}
+	if obj := getCluster(t, th, "site-a"); obj.GetResourceVersion() != "100" {
+		t.Fatalf("a failed patch wrote: rv %s", obj.GetResourceVersion())
+	}
+}
+
+func errorsAs(err error, target *apierrors.APIStatus) bool {
+	s, ok := err.(apierrors.APIStatus)
+	if ok {
+		*target = s
+	}
+	return ok
+}
