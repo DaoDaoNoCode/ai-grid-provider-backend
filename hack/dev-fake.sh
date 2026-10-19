@@ -18,14 +18,16 @@ BACKEND_BIN="${BACKEND_BIN:-bin/ai-grid-provider-backend}"
 
 # The fake Keycloak's realms and admin credentials. Local fake only; the
 # backend gets the same values below, never the caller's KEYCLOAK_* settings.
-KC_ADMIN_REALM=master
-KC_REALM=ai-grid
-KC_ADMIN_USERNAME=admin
-KC_ADMIN_PASSWORD=admin
+KC_ADMIN_REALM="master"
+KC_REALM="ai-grid"
+KC_ADMIN_USERNAME="admin"
+KC_ADMIN_PASSWORD="admin"
 
 infra_pid=""
 backend_pid=""
 
+# Runs from the EXIT trap below.
+# shellcheck disable=SC2329
 cleanup() {
   trap - EXIT INT TERM
   for pid in "$backend_pid" "$infra_pid"; do
