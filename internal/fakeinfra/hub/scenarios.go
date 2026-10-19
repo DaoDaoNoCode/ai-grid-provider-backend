@@ -8,6 +8,7 @@ package hub
 
 import (
 	"fmt"
+	"slices"
 	"sort"
 	"time"
 
@@ -175,8 +176,7 @@ func (h *Hub) advance() {
 			continue
 		}
 		if c, ok := h.clusters[d.detach]; ok && terminating(c) {
-			h.finishDetach(c)
-			h.logger.Info("detach finished", "cluster", d.detach)
+			h.completeDetach(c)
 		}
 	}
 }
@@ -192,7 +192,11 @@ func (h *Hub) applyScenario(sc *scenario, at time.Time) {
 	}
 	h.logger.Info("scenario", "cluster", sc.Cluster, "event", sc.Event, "at", sc.At.Duration())
 	if sc.Event == EventDetached {
-		h.finishDetach(c)
+		if !terminating(c) {
+			h.logger.Info("scenario skipped: detached needs a cluster whose deletion was requested", "cluster", sc.Cluster)
+			return
+		}
+		h.completeDetach(c)
 		return
 	}
 	next := c.DeepCopy()
@@ -200,10 +204,35 @@ func (h *Hub) applyScenario(sc *scenario, at time.Time) {
 	h.commit(c, next)
 }
 
-// finishDetach is the last hub controller removing its finalizer: with none
-// left, the API server deletes the object (a write with its own
-// resourceVersion that nobody can read back).
-func (h *Hub) finishDetach(c *ManagedCluster) {
+// hubFinalizers are the finalizers the hub's own controllers hold on a
+// ManagedCluster (the Finalizer* constants in acm.go, with their sources).
+var hubFinalizers = []string{
+	FinalizerImportCleanup, FinalizerManifestWork, FinalizerClusterInfo,
+	FinalizerClusterRole, FinalizerResourceCleanup, FinalizerClusterAPIResource,
+}
+
+// completeDetach is the hub controllers finishing their cleanup of a
+// terminating cluster: each removes its own finalizer, in one write. With no
+// finalizer left the API server deletes the object; one that still carries
+// a finalizer of somebody else stays terminating until that one goes too.
+// Must be called under h.mu.
+func (h *Hub) completeDetach(c *ManagedCluster) {
+	next := c.DeepCopy()
+	next.Finalizers = slices.DeleteFunc(next.Finalizers, func(f string) bool { return slices.Contains(hubFinalizers, f) })
+	if len(next.Finalizers) == 0 {
+		next.Finalizers = nil
+	}
+	delete(h.detaches, c.Name)
+	if stored, _ := h.commit(c, next); stored != nil {
+		h.logger.Info("detach finished; other finalizers keep the cluster", "cluster", c.Name, "finalizers", stored.Finalizers)
+		return
+	}
+	h.logger.Info("detach finished", "cluster", c.Name)
+}
+
+// removeObject is the API server deleting an object (a write with its own
+// resourceVersion that nobody can read back). Must be called under h.mu.
+func (h *Hub) removeObject(c *ManagedCluster) {
 	delete(h.clusters, c.Name)
 	delete(h.detaches, c.Name)
 	h.nextResourceVersion()

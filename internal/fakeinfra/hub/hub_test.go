@@ -578,3 +578,45 @@ func TestConcurrentWrites(t *testing.T) {
 		t.Fatalf("resourceVersion after 20 writes = %q, want 140", rv)
 	}
 }
+
+// TestDetachKeepsForeignFinalizers: when the hub controllers finish they
+// remove only their own finalizers; an object that still carries another
+// one stays terminating until that is removed too, as on the API server.
+func TestDetachKeepsForeignFinalizers(t *testing.T) {
+	fx := testFixtures()
+	lyon := detachingCluster("edge-lyon-2", "130")
+	lyon.Finalizers = append(lyon.Finalizers, "example.com/keep")
+	fx.Clusters = append(fx.Clusters, lyon)
+	fx.Scenarios = []ScenarioEvent{{Cluster: "edge-lyon-2", At: Duration(5 * time.Second), Event: EventDetached}}
+	th := startHub(t, fx)
+	client := th.client(t, testToken)
+	ctx := context.Background()
+
+	if _, err := client.Patch(ctx, "site-a", types.MergePatchType, []byte(`{"metadata":{"finalizers":["`+FinalizerImportCleanup+`","`+FinalizerClusterInfo+`","`+FinalizerResourceCleanup+`","`+FinalizerClusterRole+`","`+FinalizerManifestWork+`","`+FinalizerClusterAPIResource+`","example.com/keep"]}}`), metav1.PatchOptions{}); err != nil {
+		t.Fatalf("Patch(finalizers) error = %v", err)
+	}
+	if err := client.Delete(ctx, "site-a", metav1.DeleteOptions{}); err != nil {
+		t.Fatalf("Delete() error = %v", err)
+	}
+	before := getCluster(t, th, "site-a").GetResourceVersion()
+	th.clock.Advance(DefaultDetachAfter)
+	for _, name := range []string{"site-a", "edge-lyon-2"} {
+		obj, err := client.Get(ctx, name, metav1.GetOptions{})
+		if err != nil {
+			t.Fatalf("%s gone although a foreign finalizer remains: %v", name, err)
+		}
+		if got := obj.GetFinalizers(); len(got) != 1 || got[0] != "example.com/keep" || obj.GetDeletionTimestamp() == nil {
+			t.Fatalf("%s finalizers %v deletionTimestamp %v", name, got, obj.GetDeletionTimestamp())
+		}
+	}
+	if after := getCluster(t, th, "site-a").GetResourceVersion(); after == before {
+		t.Fatal("finalizer removal was not a write")
+	}
+	// Removing the last finalizer deletes the object.
+	if _, err := client.Patch(ctx, "site-a", types.MergePatchType, []byte(`{"metadata":{"finalizers":null}}`), metav1.PatchOptions{}); err != nil {
+		t.Fatalf("Patch(remove finalizer) error = %v", err)
+	}
+	if _, err := client.Get(ctx, "site-a", metav1.GetOptions{}); !apierrors.IsNotFound(err) {
+		t.Fatalf("Get after last finalizer = %v, want NotFound", err)
+	}
+}

@@ -484,7 +484,7 @@ func (h *Hub) delete(w http.ResponseWriter, r *http.Request) {
 	}
 	if len(cur.Finalizers) == 0 {
 		uid := cur.UID
-		h.finishDetach(cur)
+		h.removeObject(cur)
 		h.logger.Debug("managedcluster deleted", "name", name)
 		writeJSON(w, http.StatusOK, &metav1.Status{
 			TypeMeta: metav1.TypeMeta{Kind: "Status", APIVersion: "v1"},
@@ -540,7 +540,7 @@ func (h *Hub) commit(cur, next *ManagedCluster) (*ManagedCluster, bool) {
 		}
 	}
 	if next.DeletionTimestamp != nil && len(next.Finalizers) == 0 {
-		h.finishDetach(next)
+		h.removeObject(next)
 		return nil, true
 	}
 	next.ResourceVersion = h.nextResourceVersion()
