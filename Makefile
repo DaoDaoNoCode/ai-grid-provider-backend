@@ -9,13 +9,16 @@ FAKE_INFRA_BIN := $(BIN_DIR)/ai-grid-fake-infra
 
 # Dev mode with fake infrastructure (make dev-fake). Override any of these,
 # for example `make dev-fake DEV_GRPC_PORT=19090`. gRPC 9090 is what the
-# console BFF dials by default; 9091 is where it sends SelfSubjectAccessReview.
+# console BFF dials by default; 9091 is where it sends SelfSubjectAccessReview;
+# 9094 serves the console's draft API (ai_grid.draft.v1, docs/draft/README.md).
 DEV_HOST ?= 127.0.0.1
 DEV_GRPC_PORT ?= 9090
 DEV_HUB_PORT ?= 9091
 DEV_HTTP_PORT ?= 9092
 DEV_KEYCLOAK_PORT ?= 9093
+DEV_DRAFT_PORT ?= 9094
 DEV_FIXTURES ?= fixtures/default
+DEV_DRAFT_FIXTURES ?= fixtures/draft/default
 DEV_KUBECONFIG ?= $(BIN_DIR)/fake-kubeconfig
 
 # Container image (Podman preferred). Override with IMAGE=... TAG=dev.
@@ -67,23 +70,24 @@ unit: ## Run unit tests (excludes Kind integration)
 
 test: unit ## Alias for unit
 
-build-fake-infra: ## Build the fake hub and Keycloak (cmd/ai-grid-fake-infra)
+build-fake-infra: ## Build the fake hub, Keycloak and draft API (cmd/ai-grid-fake-infra)
 	mkdir -p $(BIN_DIR)
 	$(GO) build -buildvcs=false -trimpath -o $(FAKE_INFRA_BIN) ./cmd/ai-grid-fake-infra
 
-# Runs the fake hub API and fake Keycloak (cmd/ai-grid-fake-infra) and the real
-# backend against them in one terminal; Ctrl-C stops both. See README.md,
+# Runs the fake hub API, fake Keycloak and draft fake (cmd/ai-grid-fake-infra)
+# and the real backend against them in one terminal; Ctrl-C stops both. See README.md,
 # "Dev mode with fake infrastructure".
-dev-fake: build build-fake-infra ## Run the real backend on a fake hub and Keycloak
+dev-fake: build build-fake-infra ## Run the real backend on a fake hub and Keycloak, plus the draft fake
 	@DEV_HOST="$(DEV_HOST)" DEV_GRPC_PORT="$(DEV_GRPC_PORT)" DEV_HUB_PORT="$(DEV_HUB_PORT)" \
 		DEV_HTTP_PORT="$(DEV_HTTP_PORT)" DEV_KEYCLOAK_PORT="$(DEV_KEYCLOAK_PORT)" \
+		DEV_DRAFT_PORT="$(DEV_DRAFT_PORT)" DEV_DRAFT_FIXTURES="$(DEV_DRAFT_FIXTURES)" \
 		DEV_FIXTURES="$(DEV_FIXTURES)" DEV_KUBECONFIG="$(DEV_KUBECONFIG)" \
 		FAKE_INFRA_BIN="$(FAKE_INFRA_BIN)" BACKEND_BIN="$(BACKEND_BIN)" \
 		bash hack/dev-fake.sh
 
-# The same on the PoC preset (fixtures/poc).
-dev-fake-poc: ## dev-fake on the PoC preset (fixtures/poc)
-	@$(MAKE) --no-print-directory dev-fake DEV_FIXTURES=fixtures/poc
+# The same on the PoC preset (fixtures/poc, fixtures/draft/poc).
+dev-fake-poc: ## dev-fake on the PoC preset (fixtures/poc, fixtures/draft/poc)
+	@$(MAKE) --no-print-directory dev-fake DEV_FIXTURES=fixtures/poc DEV_DRAFT_FIXTURES=fixtures/draft/poc
 
 vet:
 	$(GO) vet ./...
