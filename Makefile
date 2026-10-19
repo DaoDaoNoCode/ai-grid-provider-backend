@@ -3,6 +3,18 @@ SHELL := /usr/bin/env bash
 GO := go
 BIN_DIR := bin
 BACKEND_BIN := $(BIN_DIR)/ai-grid-provider-backend
+FAKE_INFRA_BIN := $(BIN_DIR)/ai-grid-fake-infra
+
+# Dev mode with fake infrastructure (make dev-fake). Override any of these,
+# for example `make dev-fake DEV_GRPC_PORT=19090`. gRPC 9090 is what the
+# console BFF dials by default; 9091 is where it sends SelfSubjectAccessReview.
+DEV_HOST ?= 127.0.0.1
+DEV_GRPC_PORT ?= 9090
+DEV_HUB_PORT ?= 9091
+DEV_HTTP_PORT ?= 9092
+DEV_KEYCLOAK_PORT ?= 9093
+DEV_FIXTURES ?= fixtures/default
+DEV_KUBECONFIG ?= $(BIN_DIR)/fake-kubeconfig
 
 # Container image (Podman preferred). Override with IMAGE=... TAG=dev.
 # Default linux/amd64 so OpenShift nodes can run images built on Apple Silicon.
@@ -26,6 +38,7 @@ HTTP_ADDR ?= http://localhost:8081
 .PHONY: help all binary build-bin build test unit smoke vet fmt-check lint verify generate \
 	image container push build-and-push run \
 	keycloak-up keycloak-down keycloak-seed \
+	build-fake-infra dev-fake dev-fake-poc \
 	prereqs kind-test clean-kind openshift-up openshift-down acm-hub-up acm-hub-down
 
 help: ## Show available targets
@@ -52,11 +65,29 @@ unit: ## Run unit tests (excludes Kind integration)
 
 test: unit ## Alias for unit
 
+build-fake-infra: ## Build the fake hub and Keycloak (cmd/ai-grid-fake-infra)
+	mkdir -p $(BIN_DIR)
+	$(GO) build -buildvcs=false -trimpath -o $(FAKE_INFRA_BIN) ./cmd/ai-grid-fake-infra
+
+# Runs the fake hub API and fake Keycloak (cmd/ai-grid-fake-infra) and the real
+# backend against them in one terminal; Ctrl-C stops both. See README.md,
+# "Dev mode with fake infrastructure".
+dev-fake: build build-fake-infra ## Run the real backend on a fake hub and Keycloak
+	@DEV_HOST="$(DEV_HOST)" DEV_GRPC_PORT="$(DEV_GRPC_PORT)" DEV_HUB_PORT="$(DEV_HUB_PORT)" \
+		DEV_HTTP_PORT="$(DEV_HTTP_PORT)" DEV_KEYCLOAK_PORT="$(DEV_KEYCLOAK_PORT)" \
+		DEV_FIXTURES="$(DEV_FIXTURES)" DEV_KUBECONFIG="$(DEV_KUBECONFIG)" \
+		FAKE_INFRA_BIN="$(FAKE_INFRA_BIN)" BACKEND_BIN="$(BACKEND_BIN)" \
+		bash hack/dev-fake.sh
+
+# The same on the PoC preset (fixtures/poc).
+dev-fake-poc: ## dev-fake on the PoC preset (fixtures/poc)
+	@$(MAKE) --no-print-directory dev-fake DEV_FIXTURES=fixtures/poc
+
 vet:
 	$(GO) vet ./...
 
 fmt-check:
-	@files="$$(gofmt -l client cmd gen integration internal)"; \
+	@files="$$(gofmt -l client cmd gen hack integration internal)"; \
 	if [[ -n "$$files" ]]; then \
 		echo "gofmt is required for:"; echo "$$files"; exit 1; \
 	fi
