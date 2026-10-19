@@ -12,6 +12,7 @@ import (
 	"time"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
 )
 
 // Scenario events. Each one is a transition a hub controller drives, with the
@@ -101,9 +102,12 @@ type SpokeStatus struct {
 	ClusterClaims []ManagedClusterClaim `json:"clusterClaims,omitempty"`
 }
 
-// scenario is a parsed event waiting to fire.
+// scenario is a parsed event waiting to fire. uid is the fixture object's
+// metadata.uid: the event belongs to that object, and not to another one
+// that is created later under the same name.
 type scenario struct {
 	ScenarioEvent
+	uid     types.UID
 	applied bool
 }
 
@@ -119,13 +123,14 @@ func parseScenarios(events []ScenarioEvent, clusters map[string]*ManagedCluster)
 		if !knownEvents[ev.Event] {
 			return nil, fmt.Errorf("scenario %d: unknown event %q", i, ev.Event)
 		}
-		if _, ok := clusters[ev.Cluster]; !ok {
+		c, ok := clusters[ev.Cluster]
+		if !ok {
 			return nil, fmt.Errorf("scenario %d: cluster %q is not in the fixtures", i, ev.Cluster)
 		}
 		if ev.Spoke != nil && ev.Event != EventJoined {
 			return nil, fmt.Errorf("scenario %d: spoke is only read by %q events", i, EventJoined)
 		}
-		out = append(out, &scenario{ScenarioEvent: ev})
+		out = append(out, &scenario{ScenarioEvent: ev, uid: c.UID})
 	}
 	sort.SliceStable(out, func(i, j int) bool { return out[i].At.Duration() < out[j].At.Duration() })
 	return out, nil
@@ -180,6 +185,10 @@ func (h *Hub) applyScenario(sc *scenario, at time.Time) {
 	c, ok := h.clusters[sc.Cluster]
 	if !ok {
 		return // detached earlier
+	}
+	if c.UID != sc.uid {
+		h.logger.Info("scenario skipped: the fixture cluster was deleted and its name reused", "cluster", sc.Cluster, "event", sc.Event, "fixtureUID", sc.uid, "uid", c.UID)
+		return
 	}
 	h.logger.Info("scenario", "cluster", sc.Cluster, "event", sc.Event, "at", sc.At.Duration())
 	if sc.Event == EventDetached {
