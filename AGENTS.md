@@ -47,6 +47,9 @@ deploy/kind/                    Kind manifests
 deploy/openshift/               OpenShift manifests
 deploy/acm-hub/                 RHACM hub development assets
 hack/                           development, smoke, and deployment helpers
+cmd/ai-grid-fake-infra/         fake hub API and fake Keycloak for make dev-fake
+internal/fakeinfra/             fakes of the hub API (hub/) and Keycloak (keycloak/); TLS and kubeconfig (devserve/)
+fixtures/                       fake infrastructure fixtures (default/, poc/), converted; see fixtures/README.md
 ```
 
 Go module: `github.com/osac-project/ai-grid-provider-backend`.
@@ -156,10 +159,20 @@ make kind-test
 
 Run this for changes affecting Kubernetes behavior, OCM/RHACM resources, Keycloak integration, generated API behavior, deployment manifests, or end-to-end request flow. If the environment cannot run it, state exactly what was not validated.
 
+### Local development without a cluster
+
+```bash
+make dev-fake         # real backend on the fake hub (:9091) and fake Keycloak (:9093); gRPC :9090, REST :9092
+make dev-fake-poc     # the same on fixtures/poc; override ports with DEV_*_PORT=...
+```
+
+`make dev-fake` runs the unmodified backend against `internal/fakeinfra` (README.md, "Dev mode with fake infrastructure"). With the console, run `make -j2 dev-bff-fake dev-frontend-fake` in the console repo in a second terminal. It is a development aid, not a substitute for `make kind-test`.
+
 ## Testing conventions
 
 - Keep unit tests beside the package under test using `*_test.go`.
 - Keep Kind-backed integration coverage under `integration/` and its supporting scripts.
+- Keep `internal/fakeinfra` faithful to the real hub and Keycloak: every status code, reason, and message it writes cites its source, and `go test ./internal/fakeinfra/...` runs the real servers and clients against it. Change fixtures by re-running `hack/convert-console-fixtures` (fixtures/README.md), not by hand-editing the converted JSON.
 - Prefer deterministic tests and typed assertions over matching human-readable error strings.
 - Test gRPC status codes and response contracts.
 - Do not weaken or delete tests merely to make a change pass.

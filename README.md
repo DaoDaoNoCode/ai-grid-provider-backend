@@ -214,6 +214,8 @@ make image            # build container image (Podman); alias: container
 make push             # push container image to Quay
 make build-and-push   # image + push
 make kind-test        # full Podman/Kind integration test
+make dev-fake         # real backend on fake hub + fake Keycloak (see below)
+make dev-fake-poc     # the same on the PoC fixtures
 ```
 
 ## Run the API locally
@@ -241,6 +243,77 @@ make smoke
 The unit test uses a Kubernetes dynamic fake client. The Kind integration test
 uses the real Kubernetes API server, real OCM CRD, real `ManagedCluster`
 objects, Keycloak Organizations, and the deployed gRPC service.
+
+## Dev mode with fake infrastructure
+
+`make dev-fake` runs the real, unmodified backend on a laptop without Kind,
+a hub or Keycloak. It starts `cmd/ai-grid-fake-infra`, which fakes the two
+systems the backend talks to, then the backend itself against them, in one
+terminal; Ctrl-C stops both.
+
+```text
+make dev-fake
+├── bin/ai-grid-fake-infra --fixtures fixtures/default
+│   ├── fake hub API   127.0.0.1:9091  ManagedClusters + SelfSubjectAccessReview
+│   │                                  (TLS for the backend, plain HTTP for the console BFF)
+│   └── fake Keycloak  127.0.0.1:9093  token endpoint + Organizations Admin API
+└── bin/ai-grid-provider-backend --kubeconfig bin/fake-kubeconfig
+    ├── gRPC           127.0.0.1:9090  (what the console BFF dials by default)
+    └── REST + Swagger 127.0.0.1:9092  (/api/v1/clusters, /api/v1/tenants, /docs/)
+```
+
+The fakes answer the way the real systems do: the hub with the Kubernetes API
+server's status codes and `metav1.Status` messages, optimistic concurrency on
+`resourceVersion`, finalizers and the ACM controllers' conditions, taints and
+labels; Keycloak with 26.8's status codes and verbatim error messages. The
+backend gets `KEYCLOAK_URL=http://127.0.0.1:9093` with the fake's admin
+credentials and a kubeconfig carrying the fake ServiceAccount token. The data
+is fictional; see [fixtures/README.md](fixtures/README.md) for what each
+preset contains and where it comes from.
+
+```sh
+make dev-fake                         # fixtures/default: ten clusters in every ACM state, six organizations,
+                                      # and a timeline (a cluster joins at 20s, one detaches at 30s, ...)
+make dev-fake-poc                     # fixtures/poc: the PoC's four sites and three organizations, static
+make dev-fake DEV_GRPC_PORT=19090 DEV_HUB_PORT=19091 DEV_HTTP_PORT=19092 DEV_KEYCLOAK_PORT=19093
+                                      # when the default ports are taken
+
+curl -s http://127.0.0.1:9092/api/v1/clusters
+curl -s http://127.0.0.1:9092/api/v1/tenants
+grpcurl -plaintext -d '{"id":"site-paris-1"}' 127.0.0.1:9090 ai_grid.v1.Clusters/Get
+```
+
+Writes go to the fakes' memory and are gone on restart. A cluster deleted
+through the API stays detaching for 30 seconds (divided by `speed` in
+`settings.json`) before it disappears, as the hub's finalizers would hold it.
+To see the console as a non-admin or with a rejected token, use the tokens in
+`fixtures/default/access.json` (`viewer-token`, `expired-token`).
+
+### With the console
+
+Two terminals:
+
+```sh
+# terminal 1, this repository: fake hub + fake Keycloak + real backend
+make dev-fake
+
+# terminal 2, ai-grid-provider-console: its BFF (dials 127.0.0.1:9090 and sends its
+# SelfSubjectAccessReview to http://127.0.0.1:9091) and its frontend
+make -j2 dev-bff-fake dev-frontend-fake
+```
+
+Then open http://127.0.0.1:9000. Do not run the console's own `make dev-fake`
+at the same time: it starts the console's fake backend on the same 9090 and
+9091. The console's `dev-bff-fake` passes `--fake-backend`, so the UI shows its
+fake-backend banner although the backend is real here. The console's BFF
+is built on the console's draft `ai_grid.v1` proto, whose services are named
+differently from this backend's (`ManagedClusters/ListManagedClusters` and
+`Tenants/ListTenants` there, `Clusters/List` and `Tenants/List` here; checked
+at console commit `537df38`), so until the two protos converge the gRPC calls
+it makes for clusters and tenants answer `Unimplemented` and those pages show
+"not available on this backend". The sign-in and provider-admin check
+(SelfSubjectAccessReview on the fake hub) work as with the console's own
+fake.
 
 ## Clean up
 
@@ -353,6 +426,11 @@ hack/check-prereqs.sh            local toolchain and runtime preflight
 hack/smoke-apis.sh               grpcurl smoke test for every RPC
 hack/test-kind.sh                end-to-end integration test
 integration/kind_test.go         typed gRPC integration test
+cmd/ai-grid-fake-infra/          fake hub API + fake Keycloak for make dev-fake
+internal/fakeinfra/              the fakes (hub, keycloak, devserve) and their tests
+fixtures/                        fake infrastructure fixtures (default, poc)
+hack/dev-fake.sh                 runs the fakes and the backend for make dev-fake
+hack/convert-console-fixtures/   regenerates fixtures/ from the console's fixtures
 Makefile                         build, test, lint, generate, Kind, OpenShift, ACM targets
 ```
 
