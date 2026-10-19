@@ -40,7 +40,16 @@ trap cleanup EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
-rm -f "$DEV_KUBECONFIG"
+# Only ever remove a stale kubeconfig ai-grid-fake-infra wrote (its
+# current-context is ai-grid-fake-hub); never someone's real kubeconfig.
+if [[ -e "$DEV_KUBECONFIG" ]]; then
+  if grep -qx 'current-context: ai-grid-fake-hub' "$DEV_KUBECONFIG"; then
+    rm -f "$DEV_KUBECONFIG"
+  else
+    echo "dev-fake: $DEV_KUBECONFIG exists and was not written by ai-grid-fake-infra; refusing to touch it. Set DEV_KUBECONFIG to another path." >&2
+    exit 1
+  fi
+fi
 "$FAKE_INFRA_BIN" \
   --fixtures "$DEV_FIXTURES" \
   --hub-address "$DEV_HOST:$DEV_HUB_PORT" \

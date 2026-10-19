@@ -62,7 +62,7 @@ func TestDualListenerAndKubeconfig(t *testing.T) {
 	}
 
 	path := filepath.Join(t.TempDir(), "kubeconfig")
-	if err := WriteKubeconfig(path, "https://"+addr, caPEM, "sa-token"); err != nil {
+	if _, err := WriteKubeconfig(path, "https://"+addr, caPEM, "sa-token"); err != nil {
 		t.Fatalf("WriteKubeconfig() error = %v", err)
 	}
 	cfg, err := clientcmd.BuildConfigFromFlags("", path)
