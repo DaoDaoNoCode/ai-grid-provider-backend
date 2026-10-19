@@ -285,7 +285,14 @@ grpcurl -plaintext -d '{"id":"site-paris-1"}' 127.0.0.1:9090 ai_grid.v1.Clusters
 
 Writes go to the fakes' memory and are gone on restart. A cluster deleted
 through the API stays detaching for 30 seconds (divided by `speed` in
-`settings.json`) before it disappears, as the hub's finalizers would hold it.
+`settings.json`) while the hub controllers drain it; then they remove their
+own finalizers, and the cluster disappears unless a finalizer of someone
+else is still on it.
+
+The kubeconfig is written to `bin/fake-kubeconfig` (`DEV_KUBECONFIG`) with the
+context `ai-grid-fake-hub`, and removed on exit. An existing file at that path
+that is not such a kubeconfig is never replaced or removed: `make dev-fake`
+stops with an error instead.
 To see the console as a non-admin or with a rejected token, use the tokens in
 `fixtures/default/access.json` (`viewer-token`, `expired-token`).
 
