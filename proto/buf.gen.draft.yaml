@@ -1,0 +1,22 @@
+version: v2
+
+# The console's draft proto, ai_grid.draft.v1 (ai_grid/draft/v1): Go messages
+# and gRPC stubs only, into gen/ai_grid/draft/v1. The draft has no HTTP
+# annotations, so there is no grpc-gateway or OpenAPI output, and it stays out
+# of docs/openapi. Run from proto/: buf generate --template buf.gen.draft.yaml
+# (make generate runs both templates). See docs/draft/proto/README.md.
+inputs:
+  - directory: .
+    paths:
+      - ai_grid/draft
+
+plugins:
+  - remote: buf.build/protocolbuffers/go:v1.36.5
+    out: ../gen
+    opt:
+      - paths=source_relative
+
+  - remote: buf.build/grpc/go:v1.5.1
+    out: ../gen
+    opt:
+      - paths=source_relative

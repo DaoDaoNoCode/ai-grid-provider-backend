@@ -1,0 +1,43 @@
+// DRAFT: the console's PROPOSAL to ai-grid-backend, not the backend's shipped API.
+//
+// The backend's real proto (vendored unchanged in mock/proto/upstream/ai_grid.proto)
+// has three RPCs. This draft keeps those services, messages, field names, numbers and
+// types byte-for-byte compatible and adds the shapes drafted in
+// mock/research/backend-conventions.md section 6, so the console's fake backend, BFF
+// and UI can be built against them. bff/internal/protodrift proves the draft stays a
+// strict superset of the vendored upstream file.
+//
+// When the backend ships these RPCs the console switches its import back to the
+// backend's generated package and deletes this draft.
+
+syntax = "proto3";
+
+package ai_grid.draft.v1;
+
+import "google/protobuf/timestamp.proto";
+
+option go_package = "github.com/osac-project/ai-grid-provider-backend/gen/ai_grid/draft/v1;aigriddraftv1";
+
+// Metadata of an object stored in the hub. Mirrors the subset of Kubernetes
+// ObjectMeta that the console needs; the backend never exposes raw manifests.
+// Used by new Kubernetes-backed objects; `ManagedCluster` keeps its flat fields.
+message ObjectMeta {
+  // Namespace of the object. Empty for cluster-scoped kinds.
+  string namespace = 1;
+  // Server-assigned unique identifier (Kubernetes UID). Output only.
+  string uid = 2;
+  // Opaque version used for optimistic concurrency (`lock` on Update). Output only.
+  string resource_version = 3;
+  // Generation of the desired state. Output only.
+  int64 generation = 4;
+  // Time the object was created. Output only.
+  google.protobuf.Timestamp creation_timestamp = 5;
+  // Time deletion was requested; unset while the object is live. Output only.
+  google.protobuf.Timestamp deletion_timestamp = 6;
+  // Kubernetes labels. Keys follow the Kubernetes label-key rules.
+  map<string, string> labels = 7;
+  // Kubernetes annotations. Opaque to the backend.
+  map<string, string> annotations = 8;
+  // Finalizers still blocking deletion. Output only.
+  repeated string finalizers = 9;
+}

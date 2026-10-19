@@ -1,0 +1,66 @@
+// DRAFT: the console's PROPOSAL to ai-grid-backend, not the backend's shipped API.
+//
+// The backend's real proto (vendored unchanged in mock/proto/upstream/ai_grid.proto)
+// has three RPCs. This draft keeps those services, messages, field names, numbers and
+// types byte-for-byte compatible and adds the shapes drafted in
+// mock/research/backend-conventions.md section 6, so the console's fake backend, BFF
+// and UI can be built against them. bff/internal/protodrift proves the draft stays a
+// strict superset of the vendored upstream file.
+//
+// When the backend ships these RPCs the console switches its import back to the
+// backend's generated package and deletes this draft.
+//
+// Placeholder: the names are agreed now, the fields later. Empty request and
+// response messages are deliberate; adding fields is additive, and the fake can
+// already register the service so the drift test covers it. Every RPC answers
+// Unimplemented until the shape is agreed.
+
+syntax = "proto3";
+
+package ai_grid.draft.v1;
+
+option go_package = "github.com/osac-project/ai-grid-provider-backend/gen/ai_grid/draft/v1;aigriddraftv1";
+
+// Catalog entries offered to tenants: ConfigMaps on the hub. OSAC-style plural of CatalogItem.
+service CatalogItems {
+  // Lists CatalogItems.
+  rpc ListCatalogItems(ListCatalogItemsRequest) returns (ListCatalogItemsResponse);
+  // Returns one CatalogItem.
+  rpc GetCatalogItem(GetCatalogItemRequest) returns (GetCatalogItemResponse);
+  // Creates a CatalogItem.
+  rpc CreateCatalogItem(CreateCatalogItemRequest) returns (CreateCatalogItemResponse);
+  // Updates a CatalogItem.
+  rpc UpdateCatalogItem(UpdateCatalogItemRequest) returns (UpdateCatalogItemResponse);
+  // Deletes a CatalogItem.
+  rpc DeleteCatalogItem(DeleteCatalogItemRequest) returns (DeleteCatalogItemResponse);
+}
+
+// Request of ListCatalogItems. Fields to be agreed.
+message ListCatalogItemsRequest {}
+
+// Response of ListCatalogItems. Fields to be agreed.
+message ListCatalogItemsResponse {}
+
+// Request of GetCatalogItem. Fields to be agreed.
+message GetCatalogItemRequest {}
+
+// Response of GetCatalogItem. Fields to be agreed.
+message GetCatalogItemResponse {}
+
+// Request of CreateCatalogItem. Fields to be agreed.
+message CreateCatalogItemRequest {}
+
+// Response of CreateCatalogItem. Fields to be agreed.
+message CreateCatalogItemResponse {}
+
+// Request of UpdateCatalogItem. Fields to be agreed.
+message UpdateCatalogItemRequest {}
+
+// Response of UpdateCatalogItem. Fields to be agreed.
+message UpdateCatalogItemResponse {}
+
+// Request of DeleteCatalogItem. Fields to be agreed.
+message DeleteCatalogItemRequest {}
+
+// Response of DeleteCatalogItem. Fields to be agreed.
+message DeleteCatalogItemResponse {}

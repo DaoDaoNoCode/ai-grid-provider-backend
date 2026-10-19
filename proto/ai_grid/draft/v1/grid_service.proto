@@ -1,0 +1,97 @@
+// DRAFT: the console's PROPOSAL to ai-grid-backend, not the backend's shipped API.
+//
+// The backend's real proto (vendored unchanged in mock/proto/upstream/ai_grid.proto)
+// has three RPCs. This draft keeps those services, messages, field names, numbers and
+// types byte-for-byte compatible and adds the shapes drafted in
+// mock/research/backend-conventions.md section 6, so the console's fake backend, BFF
+// and UI can be built against them. bff/internal/protodrift proves the draft stays a
+// strict superset of the vendored upstream file.
+//
+// When the backend ships these RPCs the console switches its import back to the
+// backend's generated package and deletes this draft.
+//
+// GetNetwork is a placeholder: the names are agreed now, the fields later. Empty
+// request and response messages are deliberate; adding fields is additive, and
+// the fake can already register the service so the drift test covers it. It
+// answers Unimplemented until the shape is agreed.
+
+syntax = "proto3";
+
+package ai_grid.draft.v1;
+
+import "ai_grid/draft/v1/managed_cluster_type.proto";
+import "google/protobuf/timestamp.proto";
+
+option go_package = "github.com/osac-project/ai-grid-provider-backend/gen/ai_grid/draft/v1;aigriddraftv1";
+
+// Fleet-wide views of the grid: metrics overview and network topology.
+service Grid {
+  // Fleet overview: request rate, error rate, latency, GPU utilisation per site
+  // over a range; `metrics_source` tells whether data is live or demo.
+  rpc GetOverview(GetOverviewRequest) returns (GetOverviewResponse);
+  // Grid network topology from the gateway CRDs, when installed.
+  rpc GetNetwork(GetNetworkRequest) returns (GetNetworkResponse);
+}
+
+message GetOverviewRequest {
+  // One of 1h, 6h, 24h; anything else is InvalidArgument "Choose a time range of 1h, 6h, or 24h."
+  string range = 1;
+  // When set, only the clusters whose `ai-grid/site` label equals it.
+  optional string site = 2;
+  bool include_metrics = 3;
+}
+
+// Where the cluster inventory came from.
+enum InventorySource {
+  INVENTORY_SOURCE_UNSPECIFIED = 0;
+  INVENTORY_SOURCE_ACM = 1;
+  INVENTORY_SOURCE_GIT = 2;
+}
+
+// Where the metrics came from: Thanos, or the simulation used when Thanos is not configured.
+enum MetricsSource {
+  METRICS_SOURCE_UNSPECIFIED = 0;
+  METRICS_SOURCE_THANOS = 1;
+  METRICS_SOURCE_DEMO = 2;
+}
+
+// Whether a metric has points, and why not.
+enum MetricStatus {
+  METRIC_STATUS_UNSPECIFIED = 0;
+  METRIC_STATUS_OK = 1;
+  METRIC_STATUS_UNAVAILABLE = 2;
+  METRIC_STATUS_NOT_CONFIGURED = 3;
+  METRIC_STATUS_NO_DATA = 4;
+}
+
+// One sample: Unix seconds and the value.
+message MetricPoint {
+  int64 timestamp = 1;
+  double value = 2;
+}
+
+// One fleet-wide series, such as `requests` in req/s.
+message Metric {
+  string key = 1;
+  string label = 2;
+  string unit = 3;
+  MetricStatus status = 4;
+  // Why there are no points, when status is not OK.
+  optional string message = 5;
+  repeated MetricPoint points = 6;
+}
+
+message GetOverviewResponse {
+  // The end of the time range.
+  google.protobuf.Timestamp updated_at = 1;
+  InventorySource inventory_source = 2;
+  MetricsSource metrics_source = 3;
+  repeated ManagedCluster clusters = 4;
+  repeated Metric metrics = 5;
+}
+
+// Request of GetNetwork. Fields to be agreed.
+message GetNetworkRequest {}
+
+// Response of GetNetwork. Fields to be agreed.
+message GetNetworkResponse {}

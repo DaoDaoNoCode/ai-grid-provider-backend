@@ -1,6 +1,8 @@
 SHELL := /usr/bin/env bash
 
 GO := go
+# buf on PATH by default; without it: make generate BUF='go run github.com/bufbuild/buf/cmd/buf@v1.57.2'
+BUF ?= buf
 BIN_DIR := bin
 BACKEND_BIN := $(BIN_DIR)/ai-grid-provider-backend
 FAKE_INFRA_BIN := $(BIN_DIR)/ai-grid-fake-infra
@@ -99,9 +101,11 @@ lint: fmt-check vet ## gofmt check, go vet; golangci-lint when installed
 		echo "golangci-lint not installed; gofmt and go vet completed"; \
 	fi
 
-# Regenerates protobuf, gRPC, Connect, and OpenAPI (OSAC-style buf pipeline).
-generate: ## Regenerate protobuf, RPC stubs, and OpenAPI
-	cd proto && buf dep update && buf generate
+# Regenerates protobuf, gRPC, Connect, and OpenAPI (OSAC-style buf pipeline) for ai_grid.v1,
+# then Go and gRPC only for the console's draft, ai_grid.draft.v1 (proto/buf.gen.draft.yaml,
+# docs/draft/proto/README.md).
+generate: ## Regenerate protobuf, RPC stubs, OpenAPI, and the draft's Go code
+	cd proto && $(BUF) dep update && $(BUF) generate && $(BUF) generate --template buf.gen.draft.yaml
 	# Drop legacy monolithic stubs if a prior generate left them behind.
 	rm -f gen/ai_grid/v1/ai_grid.pb.go gen/ai_grid/v1/ai_grid_grpc.pb.go gen/ai_grid/v1/ai_grid.pb.gw.go
 	mkdir -p internal/restgateway/openapi
@@ -122,7 +126,14 @@ check-generated: ## fail when the committed output differs from what proto/ gene
 	(cd proto && buf generate --template "$$tmp/buf.gen.yaml") && \
 	diff -r "$$tmp/gen/ai_grid/v1" gen/ai_grid/v1 && \
 	diff -r "$$tmp/openapi" docs/openapi && \
-	diff "$$tmp/openapi/ai_grid.swagger.json" internal/restgateway/openapi/ai_grid.swagger.json
+	diff "$$tmp/openapi/ai_grid.swagger.json" internal/restgateway/openapi/ai_grid.swagger.json && \
+	sed -e "s#out: \.\./gen\$$#out: $$tmp/gen#" proto/buf.gen.draft.yaml > "$$tmp/buf.gen.draft.yaml" && \
+	if grep -q "out: \.\./" "$$tmp/buf.gen.draft.yaml"; then \
+	  echo "check-generated: an out: path in proto/buf.gen.draft.yaml was not redirected" >&2; \
+	  exit 1; \
+	fi && \
+	(cd proto && $(BUF) generate --template "$$tmp/buf.gen.draft.yaml") && \
+	diff -r "$$tmp/gen/ai_grid/draft/v1" gen/ai_grid/draft/v1
 
 verify: build unit lint ## Build binary + unit tests + lint
 

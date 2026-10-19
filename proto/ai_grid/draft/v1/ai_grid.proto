@@ -1,0 +1,111 @@
+// DRAFT: the console's PROPOSAL to ai-grid-backend, not the backend's shipped API.
+//
+// The backend's real proto (vendored unchanged in mock/proto/upstream/ai_grid.proto)
+// has three RPCs. This draft keeps those services, messages, field names, numbers and
+// types byte-for-byte compatible and adds the shapes drafted in
+// mock/research/backend-conventions.md section 6, so the console's fake backend, BFF
+// and UI can be built against them. bff/internal/protodrift proves the draft stays a
+// strict superset of the vendored upstream file.
+//
+// When the backend ships these RPCs the console switches its import back to the
+// backend's generated package and deletes this draft.
+
+syntax = "proto3";
+
+package ai_grid.draft.v1;
+
+option go_package = "github.com/osac-project/ai-grid-provider-backend/gen/ai_grid/draft/v1;aigriddraftv1";
+
+// Health and identity of this service.
+service AiGrid {
+  // Liveness check. Anonymous: it is called by the console's readiness probe
+  // without identity metadata.
+  rpc Ping(PingRequest) returns (PingResponse);
+  // Returns who the caller is, as the backend resolved it from the
+  // `authorization` metadata, and the coarse roles the console uses to show
+  // or hide actions. The backend still authorizes every RPC; this is a hint.
+  rpc GetCurrentUser(GetCurrentUserRequest) returns (GetCurrentUserResponse);
+  // Returns what the hub this backend talks to can do, so the console can
+  // explain a disabled feature instead of failing on it: whether the
+  // ManifestWorkReplicaSet controller runs (with the feature gate off the CRD
+  // may still exist but nothing reconciles it, so creating a placed model is
+  // FailedPrecondition; mock/research/acm.md 4), whether observability is
+  // installed, and the ACM version. Requires authorization like every RPC
+  // but Ping.
+  rpc GetHubCapabilities(GetHubCapabilitiesRequest) returns (GetHubCapabilitiesResponse);
+}
+
+// Request of Ping.
+message PingRequest {
+  // Name echoed back in the response, for example the calling component.
+  string name = 1;
+}
+
+// Response of Ping.
+message PingResponse {
+  // Greeting that includes the request's `name`.
+  string message = 1;
+}
+
+// Request of GetCurrentUser. Empty: the caller is taken from the metadata.
+message GetCurrentUserRequest {}
+
+// Response of GetCurrentUser.
+message GetCurrentUserResponse {
+  // The authenticated caller.
+  CurrentUser user = 1;
+}
+
+// The authenticated caller.
+message CurrentUser {
+  // Username as the identity provider reports it (OpenShift user or Keycloak
+  // `preferred_username`). Never taken from `x-forwarded-user` alone.
+  string username = 1;
+  // E-mail when the identity provider exposes one.
+  string email = 2;
+  // Group memberships known to the identity provider.
+  repeated string groups = 3;
+  // True when the caller may `patch` ManagedClusters on the hub, evaluated with
+  // the caller's own token through a SelfSubjectAccessReview. Replaces the
+  // check the console does itself today.
+  bool is_provider_admin = 4;
+  // Tenants (Keycloak Organizations) the caller belongs to, when the token is a
+  // Keycloak token carrying the `organization` claim. Empty for OpenShift tokens.
+  repeated string tenants = 5;
+  // Identity provider that issued the token.
+  IdentityProviderKind identity_provider = 6;
+}
+
+// Request of GetHubCapabilities. Empty.
+message GetHubCapabilitiesRequest {}
+
+// Response of GetHubCapabilities.
+message GetHubCapabilitiesResponse {
+  // The hub's capabilities.
+  HubCapabilities capabilities = 1;
+}
+
+// What the hub can do, as the backend detects it at start-up and refreshes
+// periodically.
+message HubCapabilities {
+  // True when `ClusterManager.spec.workConfiguration.featureGates` enables
+  // `ManifestWorkReplicaSet` and the `cluster-manager-work-controller`
+  // Deployment runs. The research found it false on the dev hub
+  // (mock/research/acm.md 4).
+  bool manifest_work_replica_set_enabled = 1;
+  // True when a `MultiClusterObservability` is installed and ready, so fleet
+  // metrics can be queried.
+  bool observability_installed = 2;
+  // `MultiClusterHub.status.currentVersion`, for example `2.17.3`.
+  string acm_version = 3;
+}
+
+// Identity provider that issued the caller's token.
+enum IdentityProviderKind {
+  // The backend could not tell which provider issued the token.
+  IDENTITY_PROVIDER_KIND_UNSPECIFIED = 0;
+  // An OpenShift OAuth access token, as kube-auth-proxy forwards it today.
+  IDENTITY_PROVIDER_KIND_OPENSHIFT_OAUTH = 1;
+  // A Keycloak JWT from the AI Grid realm.
+  IDENTITY_PROVIDER_KIND_KEYCLOAK = 2;
+}

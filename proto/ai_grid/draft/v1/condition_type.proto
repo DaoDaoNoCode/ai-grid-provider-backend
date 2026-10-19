@@ -1,0 +1,47 @@
+// DRAFT: the console's PROPOSAL to ai-grid-backend, not the backend's shipped API.
+//
+// The backend's real proto (vendored unchanged in mock/proto/upstream/ai_grid.proto)
+// has three RPCs. This draft keeps those services, messages, field names, numbers and
+// types byte-for-byte compatible and adds the shapes drafted in
+// mock/research/backend-conventions.md section 6, so the console's fake backend, BFF
+// and UI can be built against them. bff/internal/protodrift proves the draft stays a
+// strict superset of the vendored upstream file.
+//
+// When the backend ships these RPCs the console switches its import back to the
+// backend's generated package and deletes this draft.
+
+syntax = "proto3";
+
+package ai_grid.draft.v1;
+
+import "google/protobuf/timestamp.proto";
+
+option go_package = "github.com/osac-project/ai-grid-provider-backend/gen/ai_grid/draft/v1;aigriddraftv1";
+
+// Status of a condition. Kubernetes `Unknown` is reported as UNSPECIFIED.
+enum ConditionStatus {
+  // The system cannot decide whether the object is in the condition.
+  CONDITION_STATUS_UNSPECIFIED = 0;
+  // The object is in the condition.
+  CONDITION_STATUS_TRUE = 1;
+  // The object is not in the condition.
+  CONDITION_STATUS_FALSE = 2;
+}
+
+// One entry of a Kubernetes-style `status.conditions` list.
+message Condition {
+  // Condition type as defined by the owning controller, for example
+  // `ManagedClusterConditionAvailable`, `HubAcceptedManagedCluster`,
+  // `ManagedClusterJoined`. Types are open-ended; clients must ignore unknown ones.
+  string type = 1;
+  // Whether the object is in the condition.
+  ConditionStatus status = 2;
+  // Last time the condition changed from one status to another.
+  google.protobuf.Timestamp last_transition_time = 3;
+  // Machine-readable reason in CamelCase, when the controller provides one.
+  optional string reason = 4;
+  // Human-readable detail, intended for people debugging the object.
+  optional string message = 5;
+  // Generation of the object the condition was computed for; zero when unknown.
+  int64 observed_generation = 6;
+}

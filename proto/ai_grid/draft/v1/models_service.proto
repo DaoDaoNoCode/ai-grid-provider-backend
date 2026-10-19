@@ -1,0 +1,181 @@
+// DRAFT: the console's PROPOSAL to ai-grid-backend, not the backend's shipped API.
+//
+// The backend's real proto (vendored unchanged in mock/proto/upstream/ai_grid.proto)
+// has three RPCs. This draft keeps those services, messages, field names, numbers and
+// types byte-for-byte compatible and adds the shapes drafted in
+// mock/research/backend-conventions.md section 6, so the console's fake backend, BFF
+// and UI can be built against them. bff/internal/protodrift proves the draft stays a
+// strict superset of the vendored upstream file.
+//
+// When the backend ships these RPCs the console switches its import back to the
+// backend's generated package and deletes this draft.
+
+syntax = "proto3";
+
+package ai_grid.draft.v1;
+
+import "ai_grid/draft/v1/model_type.proto";
+import "google/protobuf/field_mask.proto";
+
+option go_package = "github.com/osac-project/ai-grid-provider-backend/gen/ai_grid/draft/v1;aigriddraftv1";
+
+// Models deployed on the grid: a KServe LLMInferenceService on the hub, or a
+// Placement plus a ManifestWorkReplicaSet that deploys it to managed clusters
+// (mock/research/models-maas.md 8.1, mock/research/acm.md "Proposal").
+// Mutations require the caller to be a provider admin.
+service Models {
+  // Lists models in name order within namespace order.
+  rpc ListModels(ListModelsRequest) returns (ListModelsResponse);
+  // Returns one model by namespace and name. NotFound, with the message
+  // `object with identifier '<namespace>/<name>' not found`, when absent.
+  rpc GetModel(GetModelRequest) returns (GetModelResponse);
+  // Creates a model. The object is returned at once with no
+  // LLMInferenceService conditions (a placed model already carries its
+  // Placement decision and ManifestWorkReplicaSet conditions); the
+  // controllers fill the status over the following minutes. InvalidArgument
+  // with the CRD's own message when the spec breaks a CRD rule (name,
+  // `replicas` with `scaling`, the scaling rules), or with the console's
+  // wording for its own checks (URI scheme, Placement operators,
+  // `number_of_clusters`, cluster sets, rollout fields), which the API
+  // server would accept; AlreadyExists for a taken namespace/name;
+  // FailedPrecondition "ManifestWorkReplicaSet feature gate disabled on hub"
+  // (console text) when `placement` is set and the hub does not run the
+  // ManifestWorkReplicaSet controller.
+  rpc CreateModel(CreateModelRequest) returns (CreateModelResponse);
+  // Updates the fields named in `update_mask`. A spec change bumps
+  // `metadata.generation`. A change of the LLMInferenceService spec
+  // (everything but `placement` and `rollout`) also rolls the Deployment out
+  // again and, for a placed model, re-applies the works; a change of only
+  // `rollout` or `placement` re-applies none, as the ManifestWorkReplicaSet
+  // controller compares each work with its template alone (a new placement
+  // adds and removes the works of clusters entering and leaving the decision).
+  // An update after which the spec, labels and annotations equal the stored
+  // ones is not written: the stored model comes back with `resource_version`
+  // and `generation` unchanged, as the Kubernetes API server answers an
+  // unchanged update; the lock and the validation still apply.
+  rpc UpdateModel(UpdateModelRequest) returns (UpdateModelResponse);
+  // Deletes a model and, for a placed model, its Placement and
+  // ManifestWorkReplicaSet. The console's template uses the CRD default,
+  // cascade `Background`: the MWRS is gone at once and the generated works
+  // are deleted in the cluster namespaces shortly after, invisibly to this
+  // API. FailedPrecondition while a catalog entry or a subscription
+  // references the model; Aborted when `resource_version` is set and is not
+  // the stored version.
+  rpc DeleteModel(DeleteModelRequest) returns (DeleteModelResponse);
+  // Proposal for the ai-grid-backend owners; implemented in the fake (P7).
+  // The locations a model can be placed on: the `location` labels of the
+  // ManagedClusters that are AI Grid members (`ai-grid/enabled` and
+  // `ai-grid/provisioned` "true") and Available, unique and sorted, read from
+  // the hub as ListManagedClusters reads it (the PoC's eligibleLocations).
+  rpc ListLocations(ListLocationsRequest) returns (ListLocationsResponse);
+}
+
+// Request of ListModels. Every field is optional.
+message ListModelsRequest {
+  // Zero-based index of the first result. Default zero.
+  optional int32 offset = 1;
+  // Maximum number of results. Omitted means all; zero means count only;
+  // negative is InvalidArgument.
+  optional int32 limit = 2;
+  // CEL over `this` (a Model as Get returns it, status included, fields by
+  // their proto names) and `now` (the server's time, a timestamp), as OSAC's
+  // filters are; empty means all. The language is cel-go's standard library
+  // plus its strings extension (`ext.Strings()`), evaluated over every model
+  // before paging, so `total` counts the matches. Indexing a missing map key
+  // is a CEL `no such key` error, not false, so a label term needs the `in`
+  // guard: `this.metadata.namespace == "ai-grid-models" && "ai-grid/family" in this.metadata.labels && this.metadata.labels["ai-grid/family"] == "granite"`.
+  // A filter that does not compile or is not a bool is InvalidArgument
+  // naming it, and so is one that fails on a model (the unguarded index).
+  optional string filter = 3;
+  // Sort order. Only the default (namespace, then name) is supported; a
+  // non-empty value is InvalidArgument.
+  optional string order = 4;
+}
+
+// Response of ListModels.
+message ListModelsResponse {
+  // Models returned.
+  repeated Model items = 1;
+  // Number of models returned.
+  int32 size = 2;
+  // Number of models matching the filter regardless of paging. Always set
+  // by a backend that honours `offset`, `limit` and `filter` (zero
+  // included); optional so that a backend that does not is visible, as for
+  // ListTenantsResponse.total.
+  optional int32 total = 3;
+}
+
+// Request of GetModel.
+message GetModelRequest {
+  // Model name.
+  string name = 1;
+  // Model namespace.
+  string namespace = 2;
+}
+
+// Response of GetModel.
+message GetModelResponse {
+  // The model.
+  Model object = 1;
+}
+
+// Request of CreateModel.
+message CreateModelRequest {
+  // `name`, `metadata.namespace` and `spec.model.uri` are required. `status`
+  // and the output-only metadata are ignored.
+  Model object = 1;
+}
+
+// Response of CreateModel.
+message CreateModelResponse {
+  // The model as stored, with no LLMInferenceService status yet.
+  Model object = 1;
+}
+
+// Request of UpdateModel.
+message UpdateModelRequest {
+  // The model with the new values. `name` and `metadata.namespace` identify it.
+  Model object = 1;
+  // Supported paths: `spec.replicas`, `spec.main.image`, `spec.main.env`,
+  // `spec.placement`, `spec.rollout`, `metadata.labels`,
+  // `metadata.annotations`. A path replaces that field as a whole (a map path
+  // replaces the map). Any other path, or an empty mask, is InvalidArgument.
+  // Clearing `spec.placement` also clears `spec.rollout`, which belongs to
+  // the placement, unless the mask names `spec.rollout` too.
+  google.protobuf.FieldMask update_mask = 2;
+  // When true, the update fails with Aborted unless
+  // `object.metadata.resource_version` matches the stored value.
+  bool lock = 3;
+}
+
+// Response of UpdateModel.
+message UpdateModelResponse {
+  // The model after the update.
+  Model object = 1;
+}
+
+// Request of DeleteModel.
+message DeleteModelRequest {
+  // Model name.
+  string name = 1;
+  // Model namespace.
+  string namespace = 2;
+  // Expected version: when set (not empty), the delete fails with Aborted
+  // unless it equals the stored `metadata.resource_version` (the
+  // LLMInferenceService's; a Kubernetes delete precondition), so a caller
+  // that read an older version does not delete changes it has not seen.
+  // Empty skips the check.
+  string resource_version = 3;
+}
+
+// Response of DeleteModel. Empty.
+message DeleteModelResponse {}
+
+// Request of ListLocations (P7). Empty.
+message ListLocationsRequest {}
+
+// Response of ListLocations (P7).
+message ListLocationsResponse {
+  // Location label values, unique and sorted.
+  repeated string locations = 1;
+}

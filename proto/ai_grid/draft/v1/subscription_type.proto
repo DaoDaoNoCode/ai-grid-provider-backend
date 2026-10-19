@@ -1,0 +1,175 @@
+// DRAFT: the console's PROPOSAL to ai-grid-backend, not the backend's shipped API.
+//
+// The backend's real proto (vendored unchanged in mock/proto/upstream/ai_grid.proto)
+// has three RPCs. This draft keeps those services, messages, field names, numbers and
+// types byte-for-byte compatible and adds the shapes drafted in
+// mock/research/backend-conventions.md section 6, so the console's fake backend, BFF
+// and UI can be built against them. bff/internal/protodrift proves the draft stays a
+// strict superset of the vendored upstream file.
+//
+// When the backend ships these RPCs the console switches its import back to the
+// backend's generated package and deletes this draft.
+
+syntax = "proto3";
+
+package ai_grid.draft.v1;
+
+import "ai_grid/draft/v1/condition_type.proto";
+import "google/protobuf/timestamp.proto";
+
+option go_package = "github.com/osac-project/ai-grid-provider-backend/gen/ai_grid/draft/v1;aigriddraftv1";
+
+// A MaaS subscription: the groups that may call a set of models, and each model's token limits.
+// The fields are the PoC's MaaSSubscription, including the ones it keeps but doesn't edit
+// (krisv/ai-grid-cloud-provider-poc src/app/types/subscriptions.ts at 62319b8).
+message Subscription {
+  // The resource name, a DNS label of at most 253 characters.
+  string name = 1;
+  string display_name = 2;
+  string description = 3;
+  // From -1,000,000 to 1,000,000; higher numbers win.
+  int32 priority = 4;
+  Owner owner = 5;
+  repeated ModelSubscriptionRef model_refs = 6;
+  TokenMetadata token_metadata = 7;
+  optional int32 inference_priority = 8;
+  repeated GuardrailAttachment guardrails = 9;
+  // Proposal for the ai-grid-backend owners; implemented in the fake (P12).
+  // The MaaSSubscription's status.phase: Active, Degraded, Failed or Invalid
+  // (mock/research/models-maas.md 3.5). Empty until the controller's first
+  // reconcile: the field has no default and the controller never writes
+  // Pending. Output only.
+  string phase = 10;
+  // P12: the PoC's reason and status message give way to conditions.
+  reserved 11, 12;
+  reserved "reason", "status_message";
+  // Opaque version for optimistic concurrency. Output only.
+  string resource_version = 13;
+  // Output only.
+  google.protobuf.Timestamp create_time = 14;
+  // Set while the subscription is being deleted. Output only.
+  google.protobuf.Timestamp deletion_time = 15;
+  // Proposal for the ai-grid-backend owners; implemented in the fake (P12,
+  // fields 16-18). status.conditions; the controller's Ready condition carries
+  // the phase's reason and message. Output only.
+  repeated Condition conditions = 16;
+  // status.modelRefStatuses: one per model reference, reason Valid or
+  // NotFound. Output only.
+  repeated ResourceRefStatus model_ref_statuses = 17;
+  // status.tokenRateLimitStatuses: one per generated TokenRateLimitPolicy
+  // (`maas-trlp-<model>` in the model's namespace). Output only.
+  repeated TokenRateLimitStatus token_rate_limit_statuses = 18;
+}
+
+// Proposal for the ai-grid-backend owners; implemented in the fake (P12).
+// The MaaS ResourceRefStatus: the state of one object a MaaS resource
+// references or generates. Output only.
+message ResourceRefStatus {
+  string name = 1;
+  string namespace = 2;
+  bool ready = 3;
+  // For example Valid or NotFound. For a subscription's TokenRateLimitPolicies,
+  // Accepted or NotAccepted. For an auth policy's gateway AuthPolicies, Accepted,
+  // NotAccepted or NotEnforced.
+  string reason = 4;
+  string message = 5;
+}
+
+// Proposal for the ai-grid-backend owners; implemented in the fake (P12).
+// A generated TokenRateLimitPolicy's status and the model it limits.
+// Output only.
+message TokenRateLimitStatus {
+  ResourceRefStatus ref = 1;
+  string model = 2;
+}
+
+// Proposal for the ai-grid-backend owners; implemented in the fake (P12).
+// A MaaSModelRef's status: a model's registration in the MaaS catalog
+// (mock/research/models-maas.md 3.4). Output only.
+message ModelRegistration {
+  string name = 1;
+  string namespace = 2;
+  // Pending, Ready, Unhealthy, Failed or Invalid.
+  string phase = 3;
+  // Empty in every phase but Ready.
+  string endpoint = 4;
+  // Ready, GovernanceAttached and RuntimeReady.
+  repeated Condition conditions = 5;
+}
+
+// Who may use a subscription.
+message Owner {
+  repeated string users = 1;
+  // Free-text group names.
+  repeated string groups = 2;
+}
+
+// A model in a subscription, with its token limits.
+message ModelSubscriptionRef {
+  // The Model's name.
+  string name = 1;
+  string display_name = 2;
+  string description = 3;
+  // No token limits apply; token_rate_limits is then empty.
+  bool unlimited = 4;
+  repeated TokenRateLimit token_rate_limits = 5;
+  optional string billing_rate_per_token = 6;
+  repeated GuardrailAttachment guardrails = 7;
+  // Proposal for the ai-grid-backend owners; implemented in the fake (P6,
+  // field 8). The Model's namespace; empty in a request means the console's
+  // models namespace, `ai-grid-models`, and a response always names it.
+  string namespace = 8;
+}
+
+// At most limit tokens per window.
+message TokenRateLimit {
+  int64 limit = 1;
+  // `<n><s|m|h>`, n from 1 to 9999.
+  string window = 2;
+}
+
+// Metering metadata of a subscription.
+message TokenMetadata {
+  // The organization (tenant id) the subscription serves, set by the console's
+  // Organization field. A follow-up moves it to MaaS's immutable
+  // spec.organization.id.
+  string organization_id = 1;
+  string cost_center = 2;
+  map<string, string> labels = 3;
+}
+
+// A guardrail applied to a subscription or one of its models.
+message GuardrailAttachment {
+  string ref_name = 1;
+  repeated string checks = 2;
+}
+
+// A MaaS authorization policy: the groups allowed to call a set of models.
+// The fields are the PoC's MaaSAuthPolicy.
+message AuthPolicy {
+  string name = 1;
+  string display_name = 2;
+  string description = 3;
+  // Pending or Active (P12). Output only.
+  string phase = 4;
+  // P12: field 5 held bare model names; model_refs (8) carries the namespace.
+  reserved 5;
+  repeated string subject_groups = 6;
+  // Proposal for the ai-grid-backend owners; implemented in the fake (P12,
+  // field 7). status.conditions: Ready and ConflictingAuthPolicy. Output only.
+  repeated Condition conditions = 7;
+  // Proposal for the ai-grid-backend owners; implemented in the fake (P12,
+  // field 8). The models this policy grants, spec.modelRefs[] as in the CRD
+  // (mock/research/models-maas.md 3.6).
+  repeated AuthPolicyModelRef model_refs = 8;
+}
+
+// Proposal for the ai-grid-backend owners; implemented in the fake (P12).
+// A model an auth policy grants.
+message AuthPolicyModelRef {
+  // The Model's name.
+  string name = 1;
+  // The Model's namespace; empty means the console's models namespace,
+  // `ai-grid-models`.
+  string namespace = 2;
+}
