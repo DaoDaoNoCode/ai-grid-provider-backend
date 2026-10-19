@@ -7,6 +7,7 @@
 package keycloak
 
 import (
+	"bytes"
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
@@ -36,8 +37,8 @@ const (
 	// defaultMax is OrganizationsResource's default page size
 	// (OrganizationsResource.java L157-158).
 	defaultMax = 10
-	// maxBodyBytes bounds request bodies; Keycloak's own limit is larger,
-	// nothing the backend sends comes close.
+	// maxBodyBytes bounds request bodies (413 above it); Keycloak's own
+	// limit is larger, nothing the backend sends comes close.
 	maxBodyBytes = 1 << 20
 )
 
@@ -215,9 +216,21 @@ func (s *Server) token(w http.ResponseWriter, r *http.Request) {
 // first: authenticate the bearer token (401 before anything else), then find
 // the realm (404 "Realm not found."), then the Organizations feature of that
 // realm (404 "Organizations not enabled for this realm."; the admin realm is
-// bootstrapped without it). Handlers run under s.mu.
+// bootstrapped without it). Handlers run under s.mu; the request body is
+// read in full, and bounded, before the lock is taken, so a client that
+// stalls in its body holds up nobody else.
 func (s *Server) admin(next func(http.ResponseWriter, *http.Request)) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(io.LimitReader(r.Body, maxBodyBytes+1))
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "HTTP 400 Bad Request")
+			return
+		}
+		if len(body) > maxBodyBytes {
+			writeError(w, http.StatusRequestEntityTooLarge, "HTTP 413 Request Entity Too Large")
+			return
+		}
+		r.Body = io.NopCloser(bytes.NewReader(body))
 		token, ok := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
 		s.mu.Lock()
 		defer s.mu.Unlock()

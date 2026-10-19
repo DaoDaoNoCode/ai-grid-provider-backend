@@ -55,6 +55,15 @@ func main() {
 	}
 }
 
+// Server timeouts: a request body must arrive, and a response be written,
+// within these, so no slow client can hold a connection or a fake's lock
+// for long. Every fake request is answered from memory in microseconds.
+const (
+	readTimeout  = 30 * time.Second
+	writeTimeout = 30 * time.Second
+	idleTimeout  = 2 * time.Minute
+)
+
 type config struct {
 	fixtures        string
 	hubAddress      string
@@ -126,8 +135,8 @@ func run(logger *slog.Logger, cfg config) error {
 		listener net.Listener
 		server   *http.Server
 	}{
-		{"hub", hubListener, &http.Server{Handler: logRequests(logger, "hub", fakeHub.Handler()), ReadHeaderTimeout: 5 * time.Second}},
-		{"keycloak", keycloakListener, &http.Server{Handler: logRequests(logger, "keycloak", fakeKeycloak.Handler()), ReadHeaderTimeout: 5 * time.Second}},
+		{"hub", hubListener, &http.Server{Handler: logRequests(logger, "hub", fakeHub.Handler()), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: readTimeout, WriteTimeout: writeTimeout, IdleTimeout: idleTimeout}},
+		{"keycloak", keycloakListener, &http.Server{Handler: logRequests(logger, "keycloak", fakeKeycloak.Handler()), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: readTimeout, WriteTimeout: writeTimeout, IdleTimeout: idleTimeout}},
 	}
 	errs := make(chan error, len(servers))
 	var wg sync.WaitGroup
