@@ -40,10 +40,10 @@ func TestManagedClusterFromUnstructured(t *testing.T) {
 			wantJoined:    true,
 		},
 		{
-			name: "OCM long condition names True",
+			name: "condition types as the hub writes them, True",
 			object: managedClusterUnstructured("cluster-c", nil, nil, true, []map[string]interface{}{
 				{"type": "ManagedClusterConditionAvailable", "status": "True"},
-				{"type": "ManagedClusterConditionJoined", "status": "True"},
+				{"type": "ManagedClusterJoined", "status": "True"},
 			}),
 			wantAvailable: true,
 			wantJoined:    true,
