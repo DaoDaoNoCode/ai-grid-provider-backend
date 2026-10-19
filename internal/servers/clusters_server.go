@@ -151,7 +151,8 @@ func (s *ClustersServer) Create(ctx context.Context, req *aigridv1.ClustersCreat
 }
 
 // Update merge-patches labels and/or hubAcceptsClient according to update_mask.
-// An empty mask updates all mutable fields (labels merge + hubAcceptsClient).
+// An empty mask updates the mutable fields the request sets: labels merge when
+// metadata is set, hubAcceptsClient when spec is set.
 func (s *ClustersServer) Update(ctx context.Context, req *aigridv1.ClustersUpdateRequest) (*aigridv1.ClustersUpdateResponse, error) {
 	object := req.GetObject()
 	if object == nil {
@@ -167,7 +168,7 @@ func (s *ClustersServer) Update(ctx context.Context, req *aigridv1.ClustersUpdat
 		return nil, mapManagedClusterAPIError("get", id, err)
 	}
 
-	updateLabels, updateHub := updatePaths(req.GetUpdateMask())
+	updateLabels, updateHub := updatePaths(req.GetUpdateMask(), object)
 
 	patchBody := map[string]interface{}{}
 	if updateLabels {
@@ -224,9 +225,12 @@ func (s *ClustersServer) Delete(ctx context.Context, req *aigridv1.ClustersDelet
 	return &aigridv1.ClustersDeleteResponse{}, nil
 }
 
-func updatePaths(mask *fieldmaskpb.FieldMask) (labels, hub bool) {
+// updatePaths reports which mutable fields an Update changes. Without a mask
+// these are the parts the request sets: a request with no spec leaves
+// hubAcceptsClient as it is instead of setting it to false.
+func updatePaths(mask *fieldmaskpb.FieldMask, object *aigridv1.ManagedCluster) (labels, hub bool) {
 	if mask == nil || len(mask.GetPaths()) == 0 {
-		return true, true
+		return object.GetMetadata() != nil, object.GetSpec() != nil
 	}
 	for _, path := range mask.GetPaths() {
 		p := strings.TrimPrefix(path, "object.")
