@@ -167,7 +167,7 @@ func TestRealClustersServerThroughKubeconfig(t *testing.T) {
 	t.Cleanup(func() { _ = srv.Close() })
 
 	path := filepath.Join(t.TempDir(), "kubeconfig")
-	if err := devserve.WriteKubeconfig(path, "https://"+l.Addr().String(), caPEM, h.ServiceAccountToken()); err != nil {
+	if _, err := devserve.WriteKubeconfig(path, "https://"+l.Addr().String(), caPEM, h.ServiceAccountToken()); err != nil {
 		t.Fatal(err)
 	}
 	cfg, err := clientcmd.BuildConfigFromFlags("", path)

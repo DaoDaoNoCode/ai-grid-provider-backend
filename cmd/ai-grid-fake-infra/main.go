@@ -105,13 +105,15 @@ func run(logger *slog.Logger, cfg config) error {
 		return fmt.Errorf("listen on %s: %w", cfg.keycloakAddress, err)
 	}
 	hubURL := "https://" + hubListener.Addr().String()
-	if err := devserve.WriteKubeconfig(cfg.kubeconfigOut, hubURL, caPEM, fakeHub.ServiceAccountToken()); err != nil {
+	written, err := devserve.WriteKubeconfig(cfg.kubeconfigOut, hubURL, caPEM, fakeHub.ServiceAccountToken())
+	if err != nil {
 		_ = hubListener.Close()
 		_ = keycloakListener.Close()
 		return err
 	}
 	defer func() {
-		if err := os.Remove(cfg.kubeconfigOut); err != nil && !errors.Is(err, os.ErrNotExist) {
+		// Only the file this process wrote, if nobody replaced it since.
+		if err := devserve.RemoveKubeconfig(cfg.kubeconfigOut, written); err != nil {
 			logger.Warn("remove kubeconfig", slog.Any("error", err))
 		}
 	}()

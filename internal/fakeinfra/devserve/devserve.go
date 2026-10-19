@@ -14,6 +14,7 @@ package devserve
 
 import (
 	"bufio"
+	"bytes"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
@@ -173,27 +174,96 @@ type peekedConn struct {
 
 func (c *peekedConn) Read(p []byte) (int, error) { return c.reader.Read(p) }
 
+// Names in the kubeconfig ai-grid-fake-infra writes. FakeContext as the
+// current context is how a fake-infra kubeconfig is recognised: nothing
+// else is ever replaced or removed.
+const (
+	FakeCluster = "ai-grid-fake-hub"
+	FakeContext = "ai-grid-fake-hub"
+	FakeUser    = "ai-grid-fake-hub-backend"
+)
+
+// IsFakeKubeconfig reports whether path holds a kubeconfig WriteKubeconfig
+// wrote: exactly one cluster, user and context, with the fake-infra names,
+// and FakeContext current. A file that does not parse is not one.
+func IsFakeKubeconfig(path string) (bool, error) {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return false, err
+	}
+	cfg, err := clientcmd.Load(raw)
+	if err != nil {
+		return false, nil
+	}
+	_, cluster := cfg.Clusters[FakeCluster]
+	_, user := cfg.AuthInfos[FakeUser]
+	_, context := cfg.Contexts[FakeContext]
+	return cfg.CurrentContext == FakeContext && cluster && user && context &&
+		len(cfg.Clusters) == 1 && len(cfg.AuthInfos) == 1 && len(cfg.Contexts) == 1, nil
+}
+
 // WriteKubeconfig writes a kubeconfig for server that trusts caPEM and
-// authenticates with token. It writes a temporary file and renames it, so a
-// reader never sees half a file; the file mode is 0600 (clientcmd.WriteToFile).
-func WriteKubeconfig(path, server string, caPEM []byte, token string) error {
+// authenticates with token, and returns the bytes it wrote. It refuses to
+// replace an existing file that is not a fake-infra kubeconfig, so pointing
+// it at a real kubeconfig loses nothing. It writes a temporary file in the
+// same directory and renames it, so a reader never sees half a file; the
+// mode is 0600.
+func WriteKubeconfig(path, server string, caPEM []byte, token string) ([]byte, error) {
 	if path == "" {
-		return errors.New("kubeconfig path is empty")
+		return nil, errors.New("kubeconfig path is empty")
+	}
+	if _, err := os.Lstat(path); err == nil {
+		ours, err := IsFakeKubeconfig(path)
+		if err != nil {
+			return nil, fmt.Errorf("check existing kubeconfig %s: %w", path, err)
+		}
+		if !ours {
+			return nil, fmt.Errorf("%s exists and is not a kubeconfig ai-grid-fake-infra wrote (current-context %s); refusing to replace it, choose another path", path, FakeContext)
+		}
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return nil, fmt.Errorf("check existing kubeconfig %s: %w", path, err)
 	}
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return fmt.Errorf("create kubeconfig directory: %w", err)
+		return nil, fmt.Errorf("create kubeconfig directory: %w", err)
 	}
 	cfg := clientcmdapi.NewConfig()
-	cfg.Clusters["fake-hub"] = &clientcmdapi.Cluster{Server: server, CertificateAuthorityData: caPEM}
-	cfg.AuthInfos["ai-grid-provider-backend"] = &clientcmdapi.AuthInfo{Token: token}
-	cfg.Contexts["fake-hub"] = &clientcmdapi.Context{Cluster: "fake-hub", AuthInfo: "ai-grid-provider-backend"}
-	cfg.CurrentContext = "fake-hub"
-	tmp := path + ".tmp"
-	if err := clientcmd.WriteToFile(*cfg, tmp); err != nil {
-		return fmt.Errorf("write kubeconfig: %w", err)
+	cfg.Clusters[FakeCluster] = &clientcmdapi.Cluster{Server: server, CertificateAuthorityData: caPEM}
+	cfg.AuthInfos[FakeUser] = &clientcmdapi.AuthInfo{Token: token}
+	cfg.Contexts[FakeContext] = &clientcmdapi.Context{Cluster: FakeCluster, AuthInfo: FakeUser}
+	cfg.CurrentContext = FakeContext
+	content, err := clientcmd.Write(*cfg)
+	if err != nil {
+		return nil, fmt.Errorf("encode kubeconfig: %w", err)
 	}
-	if err := os.Rename(tmp, path); err != nil {
-		return fmt.Errorf("write kubeconfig: %w", err)
+	tmp, err := os.CreateTemp(filepath.Dir(path), "."+filepath.Base(path)+".*.tmp")
+	if err != nil {
+		return nil, fmt.Errorf("write kubeconfig: %w", err)
 	}
-	return nil
+	_, werr := tmp.Write(content)
+	cerr := tmp.Close()
+	if werr == nil && cerr == nil {
+		werr = os.Rename(tmp.Name(), path)
+	}
+	if werr != nil || cerr != nil {
+		_ = os.Remove(tmp.Name())
+		return nil, fmt.Errorf("write kubeconfig: %w", errors.Join(werr, cerr))
+	}
+	return content, nil
+}
+
+// RemoveKubeconfig removes path only while it still holds exactly the bytes
+// WriteKubeconfig returned (written); a file replaced since, by a newer run
+// or by anyone else, is left alone. A missing file is not an error.
+func RemoveKubeconfig(path string, written []byte) error {
+	raw, err := os.ReadFile(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if !bytes.Equal(raw, written) {
+		return nil
+	}
+	return os.Remove(path)
 }
