@@ -1,0 +1,39 @@
+syntax = "proto3";
+
+package ai_grid.v1;
+
+import "buf/validate/validate.proto";
+import "google/protobuf/timestamp.proto";
+
+option go_package = "github.com/osac-project/ai-grid-provider-backend/gen/ai_grid/v1;aigridv1";
+
+// Metadata common to all kinds of objects.
+message Metadata {
+  // Time of creation of the object.
+  google.protobuf.Timestamp creation_timestamp = 1;
+
+  // Time of deletion of the object.
+  google.protobuf.Timestamp deletion_timestamp = 2;
+
+  // Creator contains the identifier of the user or group that created the object.
+  string creator = 3;
+
+  // Tenant contains the identifier of the tenant that the object belongs to.
+  string tenant = 4;
+
+  // Mandatory, immutable, and unique within scope. Must be a valid RFC 1123 DNS label.
+  string name = 5 [(buf.validate.field).string = {
+    min_len: 1
+    max_len: 63
+    pattern: "^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$"
+  }];
+
+  // Labels contains key-value pairs for organizing and selecting objects.
+  map<string, string> labels = 6;
+
+  // Annotations contains arbitrary metadata for objects.
+  map<string, string> annotations = 7;
+
+  // Version is a numeric field that is automatically incremented with every change to the object.
+  int32 version = 8;
+}

@@ -27,4 +27,4 @@ for _ in $(seq 1 30); do
   sleep 1
 done
 
-AI_GRID_GRPC_ADDRESS=127.0.0.1:18080 go test ./integration -run 'Test(Ping|List(ManagedClusters|Tenants))$' -v
+AI_GRID_GRPC_ADDRESS=127.0.0.1:18080 go test ./integration -run 'Test(Ping|List(Clusters|Tenants))$' -v

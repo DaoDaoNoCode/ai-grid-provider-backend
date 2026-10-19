@@ -1,30 +1,36 @@
 # AI Grid backend
 
-`ai-grid-provider-backend` is a Go gRPC service that reads Open Cluster Management
-(OCM)/RHACM `ManagedCluster` resources from the Kubernetes API.
+`ai-grid-provider-backend` is a Go gRPC service that manages Open Cluster
+Management (OCM)/RHACM `ManagedCluster` resources via the Kubernetes API
+(hub-side CRUD; it does not provision spoke clusters).
 
 The current API includes:
 
 - `ai_grid.v1.AiGrid/Ping`
-- `ai_grid.v1.ManagedClusters/ListManagedClusters`
-- `ai_grid.v1.Tenants/ListTenants`
+- `ai_grid.v1.Clusters/List`
+- `ai_grid.v1.Clusters/Get`
+- `ai_grid.v1.Clusters/Create`
+- `ai_grid.v1.Clusters/Update`
+- `ai_grid.v1.Clusters/Delete`
+- `ai_grid.v1.Tenants/List`
 
 REST (grpc-gateway) and Swagger UI are also exposed on HTTP `:8081`:
 
 - Swagger UI: `http://localhost:8081/docs/`
 - OpenAPI (Swagger 2.0): `http://localhost:8081/openapi.json`
-- REST routes: `/api/ai-grid/v1/ping`, `/api/ai-grid/v1/managed_clusters`, `/api/ai-grid/v1/tenants`
+- REST routes: `/api/v1/ping`, `/api/v1/clusters`, `/api/v1/tenants`
 
 Regenerate protobuf, gateway stubs, and OpenAPI with `make generate` (requires [buf](https://buf.build)).
 
-`ListManagedClusters` uses the Kubernetes dynamic client and queries:
+ManagedCluster RPCs use the Kubernetes dynamic client against:
 
 ```text
 cluster.open-cluster-management.io/v1/managedclusters
 ```
 
 The service runs in-cluster using its Kubernetes ServiceAccount. Its RBAC role
-allows `get`, `list`, and `watch` on `ManagedCluster` resources.
+allows `get`, `list`, `watch`, `create`, `update`, `patch`, and `delete` on
+`ManagedCluster` resources.
 
 `ListTenants` reads Keycloak Organizations from the `ai-grid` realm through the
 Keycloak Admin REST API. The Kind setup creates two sample Organizations,
@@ -143,18 +149,33 @@ List available gRPC services:
 grpcurl -plaintext localhost:8080 list
 ```
 
-Call the ManagedCluster API:
+Call the Clusters API (hub ManagedCluster list / get / create / update / delete):
 
 ```sh
 grpcurl -plaintext -d '{}' localhost:8080 \
-  ai_grid.v1.ManagedClusters/ListManagedClusters
+  ai_grid.v1.Clusters/List
+
+grpcurl -plaintext -d '{"id":"playground-east"}' localhost:8080 \
+  ai_grid.v1.Clusters/Get
+
+grpcurl -plaintext -d '{"object":{"id":"demo-cluster","metadata":{"name":"demo-cluster","labels":{"environment":"dev"}},"spec":{"hub_accepts_client":true}}}' \
+  localhost:8080 ai_grid.v1.Clusters/Create
+
+grpcurl -plaintext -d '{"object":{"id":"demo-cluster","metadata":{"labels":{"ai-grid/enabled":"true"}},"spec":{"hub_accepts_client":true}}}' \
+  localhost:8080 ai_grid.v1.Clusters/Update
+
+grpcurl -plaintext -d '{"id":"demo-cluster"}' localhost:8080 \
+  ai_grid.v1.Clusters/Delete
 ```
+
+REST equivalents use `/api/v1/clusters` (GET list, GET/`PATCH`/`DELETE` by id, POST create).
+Objects use OSAC shape: `id` + `metadata` + `spec` + `status`.
 
 Call the tenant API:
 
 ```sh
 grpcurl -plaintext -d '{}' localhost:8080 \
-  ai_grid.v1.Tenants/ListTenants
+  ai_grid.v1.Tenants/List
 ```
 
 Call the service ping API:
@@ -204,6 +225,21 @@ Delete the local Kind cluster when finished:
 ```sh
 kind delete cluster --name ai-grid-hub
 ```
+
+## Install ACM hub on OpenShift (playground)
+
+To get a real RHACM hub plus queryable sample `ManagedCluster`s on a logged-in
+OpenShift cluster (`oc`, `helm`, OperatorHub required):
+
+```sh
+make acm-hub-up
+# CHANNEL=release-2.13 make acm-hub-up   # override default release-2.16
+# SKIP_SAMPLES=1 make acm-hub-up
+```
+
+See [deploy/acm-hub/README.md](deploy/acm-hub/README.md). Tear down with
+`make acm-hub-down`. After the hub is Running, deploy this backend with
+`APPLY_SAMPLES=0 make openshift-up` so you do not duplicate sample clusters.
 
 ## Deploy to OpenShift
 
@@ -268,16 +304,17 @@ Manifests live under [deploy/openshift/](deploy/openshift/).
 cmd/ai-grid-provider-backend/             service entrypoint
 client/                          reusable gRPC client
 proto/                           protobuf + buf config
-proto/ai_grid/v1/                protobuf contract (google.api.http + OpenAPI options)
+proto/ai_grid/v1/                per-resource *_type.proto / *_service.proto + metadata
 gen/ai_grid/v1/                  generated protobuf, gRPC, and gateway code
 docs/openapi/                    generated OpenAPI (Swagger 2.0) JSON
-internal/ai_grid/                gRPC service implementations
-internal/ai_grid/managedclusters.go Kubernetes-backed cluster API
-internal/ai_grid/tenants.go      Keycloak-backed tenant API
+internal/servers/                Per-resource gRPC servers (OSAC-style builders)
+internal/servers/clusters_server.go         Kubernetes-backed Clusters API
+internal/servers/tenants_server.go Keycloak-backed tenant API
 internal/keycloak/               Keycloak Admin API client
 internal/restgateway/            HTTP gateway + Swagger UI
 deploy/kind/                     Kind Kubernetes manifests
 deploy/openshift/                OpenShift manifests (Routes, kustomize)
+deploy/acm-hub/                  Helm chart + scripts for RHACM hub playground
 hack/kind-up.sh                  build/load/deploy helper
 hack/ocm-up.sh                   OCM bootstrap helper
 hack/openshift-up.sh             OpenShift deploy helper
@@ -286,6 +323,7 @@ hack/check-prereqs.sh            local toolchain and runtime preflight
 hack/smoke-apis.sh               grpcurl smoke test for every RPC
 hack/test-kind.sh                end-to-end integration test
 integration/kind_test.go         typed gRPC integration test
-Makefile                         build, test, lint, generate, Kind, OpenShift targets
+Makefile                         build, test, lint, generate, Kind, OpenShift, ACM targets
 ```
+
 

@@ -11,7 +11,7 @@ TAG ?= latest
 PLATFORM ?= linux/amd64
 CONTAINER_ENGINE ?= $(shell command -v podman 2>/dev/null || command -v docker)
 
-.PHONY: all build test vet fmt-check lint verify generate image push build-and-push prereqs kind-test clean-kind openshift-up openshift-down
+.PHONY: all build test vet fmt-check lint verify generate image push build-and-push prereqs kind-test clean-kind openshift-up openshift-down acm-hub-up acm-hub-down
 
 all: verify
 
@@ -41,6 +41,8 @@ lint: fmt-check vet
 # Regenerates protobuf, gRPC, grpc-gateway, and OpenAPI (OSAC-style buf pipeline).
 generate:
 	cd proto && buf dep update && buf generate
+	# Drop legacy monolithic stubs if a prior generate left them behind.
+	rm -f gen/ai_grid/v1/ai_grid.pb.go gen/ai_grid/v1/ai_grid_grpc.pb.go gen/ai_grid/v1/ai_grid.pb.gw.go
 	mkdir -p internal/restgateway/openapi
 	cp docs/openapi/ai_grid.swagger.json internal/restgateway/openapi/ai_grid.swagger.json
 
@@ -85,3 +87,13 @@ openshift-up:
 
 openshift-down:
 	bash hack/openshift-down.sh
+
+# Install RHACM (OLM + MultiClusterHub) + playground ManagedClusters on the
+# current OpenShift cluster. See deploy/acm-hub/README.md.
+# CHANNEL=release-2.13 SKIP_SAMPLES=1 make acm-hub-up
+acm-hub-up:
+	bash deploy/acm-hub/scripts/acm-hub-up.sh
+
+# FORCE_CLEAN=1 make acm-hub-down  (or: bash deploy/acm-hub/scripts/acm-hub-down.sh --force-clean)
+acm-hub-down:
+	bash deploy/acm-hub/scripts/acm-hub-down.sh

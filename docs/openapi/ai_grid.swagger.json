@@ -2,7 +2,7 @@
   "swagger": "2.0",
   "info": {
     "title": "AI Grid API",
-    "description": "gRPC-Gateway REST surface for ai-grid-provider-backend (Ping, ManagedClusters, Tenants).",
+    "description": "gRPC-Gateway REST surface for ai-grid-provider-backend (Ping, Clusters, Tenants).",
     "version": "0.1.0",
     "contact": {
       "name": "AI Grid",
@@ -14,7 +14,7 @@
       "name": "AiGrid"
     },
     {
-      "name": "ManagedClusters"
+      "name": "Clusters"
     },
     {
       "name": "Tenants"
@@ -31,14 +31,14 @@
     "application/json"
   ],
   "paths": {
-    "/api/ai-grid/v1/managed_clusters": {
+    "/api/v1/clusters": {
       "get": {
-        "operationId": "ManagedClusters_ListManagedClusters",
+        "operationId": "Clusters_List",
         "responses": {
           "200": {
             "description": "A successful response.",
             "schema": {
-              "$ref": "#/definitions/v1ListManagedClustersResponse"
+              "$ref": "#/definitions/v1ClustersListResponse"
             }
           },
           "default": {
@@ -48,19 +48,197 @@
             }
           }
         },
+        "parameters": [
+          {
+            "name": "offset",
+            "description": "Index of the first result. If not specified the default value will be zero.",
+            "in": "query",
+            "required": false,
+            "type": "integer",
+            "format": "int32"
+          },
+          {
+            "name": "limit",
+            "description": "Maximum number of results to be returned by the server. When not specified all\nthe results will be returned.",
+            "in": "query",
+            "required": false,
+            "type": "integer",
+            "format": "int32"
+          },
+          {
+            "name": "filter",
+            "description": "Filter criteria (CEL). Empty means no filter. Not evaluated yet.",
+            "in": "query",
+            "required": false,
+            "type": "string"
+          },
+          {
+            "name": "order",
+            "description": "Order criteria. Empty means undefined order. Not evaluated yet.",
+            "in": "query",
+            "required": false,
+            "type": "string"
+          }
+        ],
         "tags": [
-          "ManagedClusters"
+          "Clusters"
+        ]
+      },
+      "post": {
+        "operationId": "Clusters_Create",
+        "responses": {
+          "200": {
+            "description": "",
+            "schema": {
+              "$ref": "#/definitions/v1ManagedCluster"
+            }
+          },
+          "default": {
+            "description": "An unexpected error response.",
+            "schema": {
+              "$ref": "#/definitions/rpcStatus"
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "object",
+            "in": "body",
+            "required": true,
+            "schema": {
+              "$ref": "#/definitions/v1ManagedCluster"
+            }
+          }
+        ],
+        "tags": [
+          "Clusters"
         ]
       }
     },
-    "/api/ai-grid/v1/ping": {
+    "/api/v1/clusters/{id}": {
+      "get": {
+        "operationId": "Clusters_Get",
+        "responses": {
+          "200": {
+            "description": "",
+            "schema": {
+              "$ref": "#/definitions/v1ManagedCluster"
+            }
+          },
+          "default": {
+            "description": "An unexpected error response.",
+            "schema": {
+              "$ref": "#/definitions/rpcStatus"
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "type": "string"
+          }
+        ],
+        "tags": [
+          "Clusters"
+        ]
+      },
+      "delete": {
+        "operationId": "Clusters_Delete",
+        "responses": {
+          "200": {
+            "description": "A successful response.",
+            "schema": {
+              "$ref": "#/definitions/v1ClustersDeleteResponse"
+            }
+          },
+          "default": {
+            "description": "An unexpected error response.",
+            "schema": {
+              "$ref": "#/definitions/rpcStatus"
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "type": "string"
+          }
+        ],
+        "tags": [
+          "Clusters"
+        ]
+      }
+    },
+    "/api/v1/clusters/{object.id}": {
+      "patch": {
+        "operationId": "Clusters_Update",
+        "responses": {
+          "200": {
+            "description": "",
+            "schema": {
+              "$ref": "#/definitions/v1ManagedCluster"
+            }
+          },
+          "default": {
+            "description": "An unexpected error response.",
+            "schema": {
+              "$ref": "#/definitions/rpcStatus"
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "object.id",
+            "description": "Unique identifier of the managed cluster. For hub CRs this equals metadata.name.",
+            "in": "path",
+            "required": true,
+            "type": "string"
+          },
+          {
+            "name": "object",
+            "in": "body",
+            "required": true,
+            "schema": {
+              "type": "object",
+              "properties": {
+                "metadata": {
+                  "$ref": "#/definitions/v1Metadata"
+                },
+                "spec": {
+                  "$ref": "#/definitions/v1ManagedClusterSpec"
+                },
+                "status": {
+                  "$ref": "#/definitions/v1ManagedClusterStatus"
+                }
+              },
+              "description": "Hub-side ACM/OCM ManagedCluster inventory object.\n\nThe `spec` contains the desired details and may be modified by the user.\nThe `status` contains the current status and is provided by the system."
+            }
+          },
+          {
+            "name": "lock",
+            "description": "Lock enables optimistic locking against metadata.version. Not enforced yet.",
+            "in": "query",
+            "required": false,
+            "type": "boolean"
+          }
+        ],
+        "tags": [
+          "Clusters"
+        ]
+      }
+    },
+    "/api/v1/ping": {
       "get": {
         "operationId": "AiGrid_Ping",
         "responses": {
           "200": {
             "description": "A successful response.",
             "schema": {
-              "$ref": "#/definitions/v1PingResponse"
+              "$ref": "#/definitions/v1AiGridPingResponse"
             }
           },
           "default": {
@@ -83,14 +261,14 @@
         ]
       }
     },
-    "/api/ai-grid/v1/tenants": {
+    "/api/v1/tenants": {
       "get": {
-        "operationId": "Tenants_ListTenants",
+        "operationId": "Tenants_List",
         "responses": {
           "200": {
             "description": "A successful response.",
             "schema": {
-              "$ref": "#/definitions/v1ListTenantsResponse"
+              "$ref": "#/definitions/v1TenantsListResponse"
             }
           },
           "default": {
@@ -100,6 +278,38 @@
             }
           }
         },
+        "parameters": [
+          {
+            "name": "offset",
+            "description": "Index of the first result. If not specified the default value will be zero.",
+            "in": "query",
+            "required": false,
+            "type": "integer",
+            "format": "int32"
+          },
+          {
+            "name": "limit",
+            "description": "Maximum number of results to be returned by the server. When not specified all\nthe results will be returned.",
+            "in": "query",
+            "required": false,
+            "type": "integer",
+            "format": "int32"
+          },
+          {
+            "name": "filter",
+            "description": "Filter criteria (CEL). Empty means no filter. Not evaluated yet.",
+            "in": "query",
+            "required": false,
+            "type": "string"
+          },
+          {
+            "name": "order",
+            "description": "Order criteria. Empty means undefined order. Not evaluated yet.",
+            "in": "query",
+            "required": false,
+            "type": "string"
+          }
+        ],
         "tags": [
           "Tenants"
         ]
@@ -135,48 +345,7 @@
         }
       }
     },
-    "v1ListManagedClustersResponse": {
-      "type": "object",
-      "properties": {
-        "clusters": {
-          "type": "array",
-          "items": {
-            "type": "object",
-            "$ref": "#/definitions/v1ManagedCluster"
-          }
-        }
-      }
-    },
-    "v1ListTenantsResponse": {
-      "type": "object",
-      "properties": {
-        "tenants": {
-          "type": "array",
-          "items": {
-            "type": "object",
-            "$ref": "#/definitions/v1Tenant"
-          }
-        }
-      }
-    },
-    "v1ManagedCluster": {
-      "type": "object",
-      "properties": {
-        "name": {
-          "type": "string"
-        },
-        "labels": {
-          "type": "object",
-          "additionalProperties": {
-            "type": "string"
-          }
-        },
-        "hub_accepts_client": {
-          "type": "boolean"
-        }
-      }
-    },
-    "v1PingResponse": {
+    "v1AiGridPingResponse": {
       "type": "object",
       "properties": {
         "message": {
@@ -184,20 +353,204 @@
         }
       }
     },
+    "v1ClustersCreateResponse": {
+      "type": "object",
+      "properties": {
+        "object": {
+          "$ref": "#/definitions/v1ManagedCluster"
+        }
+      }
+    },
+    "v1ClustersDeleteResponse": {
+      "type": "object"
+    },
+    "v1ClustersGetResponse": {
+      "type": "object",
+      "properties": {
+        "object": {
+          "$ref": "#/definitions/v1ManagedCluster"
+        }
+      }
+    },
+    "v1ClustersListResponse": {
+      "type": "object",
+      "properties": {
+        "size": {
+          "type": "integer",
+          "format": "int32",
+          "description": "Actual number of items returned."
+        },
+        "total": {
+          "type": "integer",
+          "format": "int32",
+          "description": "Total number of items that match the search criteria."
+        },
+        "items": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "$ref": "#/definitions/v1ManagedCluster"
+          },
+          "description": "List of results."
+        }
+      }
+    },
+    "v1ClustersUpdateResponse": {
+      "type": "object",
+      "properties": {
+        "object": {
+          "$ref": "#/definitions/v1ManagedCluster"
+        }
+      }
+    },
+    "v1ManagedCluster": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Unique identifier of the managed cluster. For hub CRs this equals metadata.name."
+        },
+        "metadata": {
+          "$ref": "#/definitions/v1Metadata"
+        },
+        "spec": {
+          "$ref": "#/definitions/v1ManagedClusterSpec"
+        },
+        "status": {
+          "$ref": "#/definitions/v1ManagedClusterStatus"
+        }
+      },
+      "description": "Hub-side ACM/OCM ManagedCluster inventory object.\n\nThe `spec` contains the desired details and may be modified by the user.\nThe `status` contains the current status and is provided by the system."
+    },
+    "v1ManagedClusterSpec": {
+      "type": "object",
+      "properties": {
+        "hub_accepts_client": {
+          "type": "boolean",
+          "description": "Whether the hub accepts the spoke cluster client."
+        }
+      },
+      "description": "Desired state of a hub ManagedCluster."
+    },
+    "v1ManagedClusterStatus": {
+      "type": "object",
+      "properties": {
+        "available": {
+          "type": "boolean",
+          "description": "True when the ManagedCluster Available condition is True."
+        },
+        "joined": {
+          "type": "boolean",
+          "description": "True when the ManagedCluster Joined condition is True."
+        },
+        "available_condition": {
+          "type": "string",
+          "description": "Raw Available condition status (\"True\", \"False\", \"Unknown\", …). Empty when absent.\nUsed by the Clusters presentation layer to derive Ready/Offline/Unknown."
+        }
+      },
+      "description": "Observed state of a hub ManagedCluster."
+    },
+    "v1Metadata": {
+      "type": "object",
+      "properties": {
+        "creation_timestamp": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Time of creation of the object."
+        },
+        "deletion_timestamp": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Time of deletion of the object."
+        },
+        "creator": {
+          "type": "string",
+          "description": "Creator contains the identifier of the user or group that created the object."
+        },
+        "tenant": {
+          "type": "string",
+          "description": "Tenant contains the identifier of the tenant that the object belongs to."
+        },
+        "name": {
+          "type": "string",
+          "description": "Mandatory, immutable, and unique within scope. Must be a valid RFC 1123 DNS label."
+        },
+        "labels": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "Labels contains key-value pairs for organizing and selecting objects."
+        },
+        "annotations": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "Annotations contains arbitrary metadata for objects."
+        },
+        "version": {
+          "type": "integer",
+          "format": "int32",
+          "description": "Version is a numeric field that is automatically incremented with every change to the object."
+        }
+      },
+      "description": "Metadata common to all kinds of objects."
+    },
     "v1Tenant": {
       "type": "object",
       "properties": {
         "id": {
-          "type": "string"
+          "type": "string",
+          "description": "Unique identifier of the tenant (Keycloak organization id)."
         },
-        "name": {
-          "type": "string"
+        "metadata": {
+          "$ref": "#/definitions/v1Metadata"
         },
+        "spec": {
+          "$ref": "#/definitions/v1TenantSpec"
+        },
+        "status": {
+          "$ref": "#/definitions/v1TenantStatus"
+        }
+      },
+      "description": "A tenant groups resources and users. Backed by a Keycloak Organization."
+    },
+    "v1TenantSpec": {
+      "type": "object",
+      "properties": {
         "domains": {
           "type": "array",
           "items": {
             "type": "string"
-          }
+          },
+          "description": "Email domains associated with this tenant."
+        }
+      }
+    },
+    "v1TenantStatus": {
+      "type": "object"
+    },
+    "v1TenantsListResponse": {
+      "type": "object",
+      "properties": {
+        "size": {
+          "type": "integer",
+          "format": "int32",
+          "description": "Actual number of items returned."
+        },
+        "total": {
+          "type": "integer",
+          "format": "int32",
+          "description": "Total number of items that match the search criteria."
+        },
+        "items": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "$ref": "#/definitions/v1Tenant"
+          },
+          "description": "List of results."
         }
       }
     }

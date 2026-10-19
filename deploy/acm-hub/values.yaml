@@ -1,0 +1,64 @@
+# Namespace for the ACM operator and MultiClusterHub.
+namespace: open-cluster-management
+
+operatorGroup:
+  name: open-cluster-management-group
+
+subscription:
+  name: advanced-cluster-management
+  # Must be compatible with the hub OpenShift version.
+  # release-2.16 / MCE 2.11 need OCP >= 4.19. On OCP 4.18 use release-2.13
+  # (pairs with MCE stable-2.8). Override with CHANNEL=... on acm-hub-up.
+  #   oc get clusterversion
+  #   oc get packagemanifest advanced-cluster-management -n openshift-marketplace -o jsonpath='{.status.defaultChannel}{"\n"}'
+  channel: release-2.13
+  source: redhat-operators
+  sourceNamespace: openshift-marketplace
+  installPlanApproval: Automatic
+
+# Created in phase 2 after the operator CRDs exist (see scripts/acm-hub-up.sh).
+multiclusterhub:
+  create: false
+  name: multiclusterhub
+  # Only set on ACM ≥ 2.14 where the CRD defines localClusterName.
+  # Leave unset for release-2.13 (default on OCP 4.18).
+  # localClusterName: local-cluster
+
+clusterSet:
+  create: false
+  name: ai-grid
+
+# Hub-side stub ManagedClusters for API/label experiments (not imported spokes).
+samples:
+  create: false
+  clusters:
+    - name: playground-east
+      labels:
+        name: playground-east
+        cloud: Other
+        vendor: OpenShift
+        openshiftVersion: "4.16.0"
+        openshiftVersion-major-minor: "4.16"
+        clusterID: playground-east-id
+        cluster.open-cluster-management.io/clusterset: ai-grid
+        ai-grid/enabled: "true"
+        ai-grid/provisioned: "true"
+        ai-grid/site: east-1
+        ai-grid/region: us-east
+        location: us-east-1
+        environment: development
+    - name: playground-west
+      labels:
+        name: playground-west
+        cloud: Other
+        vendor: OpenShift
+        openshiftVersion: "4.15.0"
+        openshiftVersion-major-minor: "4.15"
+        clusterID: playground-west-id
+        cluster.open-cluster-management.io/clusterset: ai-grid
+        ai-grid/enabled: "false"
+        ai-grid/provisioned: "false"
+        ai-grid/site: west-1
+        ai-grid/region: us-west
+        location: us-west-2
+        environment: staging

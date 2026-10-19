@@ -1,0 +1,44 @@
+syntax = "proto3";
+
+package ai_grid.v1;
+
+import "ai_grid/v1/metadata_type.proto";
+import "buf/validate/validate.proto";
+
+option go_package = "github.com/osac-project/ai-grid-provider-backend/gen/ai_grid/v1;aigridv1";
+
+// Hub-side ACM/OCM ManagedCluster inventory object.
+//
+// The `spec` contains the desired details and may be modified by the user.
+// The `status` contains the current status and is provided by the system.
+message ManagedCluster {
+  // Unique identifier of the managed cluster. For hub CRs this equals metadata.name.
+  string id = 1 [(buf.validate.field).string = {
+    min_len: 1
+    max_len: 63
+    pattern: "^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$"
+  }];
+
+  Metadata metadata = 2;
+  ManagedClusterSpec spec = 3;
+  ManagedClusterStatus status = 4;
+}
+
+// Desired state of a hub ManagedCluster.
+message ManagedClusterSpec {
+  // Whether the hub accepts the spoke cluster client.
+  bool hub_accepts_client = 1;
+}
+
+// Observed state of a hub ManagedCluster.
+message ManagedClusterStatus {
+  // True when the ManagedCluster Available condition is True.
+  bool available = 1;
+
+  // True when the ManagedCluster Joined condition is True.
+  bool joined = 2;
+
+  // Raw Available condition status ("True", "False", "Unknown", …). Empty when absent.
+  // Used by the Clusters presentation layer to derive Ready/Offline/Unknown.
+  string available_condition = 3;
+}

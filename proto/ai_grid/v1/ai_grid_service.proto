@@ -1,0 +1,39 @@
+syntax = "proto3";
+
+package ai_grid.v1;
+
+import "google/api/annotations.proto";
+import "protoc-gen-openapiv2/options/annotations.proto";
+
+option go_package = "github.com/osac-project/ai-grid-provider-backend/gen/ai_grid/v1;aigridv1";
+
+option (grpc.gateway.protoc_gen_openapiv2.options.openapiv2_swagger) = {
+  info: {
+    title: "AI Grid API"
+    version: "0.1.0"
+    description: "gRPC-Gateway REST surface for ai-grid-provider-backend (Ping, Clusters, Tenants)."
+    contact: {
+      name: "AI Grid"
+      url: "https://github.com/osac-project/ai-grid-provider-backend"
+    }
+  }
+  schemes: HTTP
+  schemes: HTTPS
+  consumes: "application/json"
+  produces: "application/json"
+};
+
+// A minimal health API for this standalone service.
+service AiGrid {
+  rpc Ping(AiGridPingRequest) returns (AiGridPingResponse) {
+    option (google.api.http) = {get: "/api/v1/ping"};
+  }
+}
+
+message AiGridPingRequest {
+  string name = 1;
+}
+
+message AiGridPingResponse {
+  string message = 1;
+}

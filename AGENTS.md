@@ -1,7 +1,7 @@
 # AI Grid Provider Backend
 
 Go gRPC + REST (grpc-gateway) service for AI Grid provider APIs. Today it
-exposes Ping, ManagedClusters (OCM/RHACM), and Tenants (Keycloak Organizations).
+exposes Ping, Clusters CRUD (OCM/RHACM hub ManagedCluster CRs), and Tenants (Keycloak Organizations).
 Local runtime is Kind + Podman; OpenShift deploy is also supported. See
 [`README.md`](README.md).
 
@@ -21,7 +21,7 @@ then read and follow them. These documents are authoritative for their areas.
 - After proto changes, run `make generate` and commit generated outputs.
 - New resource APIs follow OSAC object shape and RPC conventions in
   [`docs/API.md`](docs/API.md): `id` + `metadata` + `spec` + `status`, standard
-  List/Get/Create/Update/Delete naming, flat REST under `/api/ai-grid/v1/`.
+  List/Get/Create/Update/Delete naming, flat REST under `/api/v1/`.
 - Prefer `buf.validate` (or equivalent proto validation) for field rules; put
   cross-resource checks in server logic.
 - Match on gRPC status codes, never on error message text. Wrap with `%w`.
@@ -40,11 +40,12 @@ proto/                          protobuf + buf config
 gen/ai_grid/v1/                 generated protobuf, gRPC, gateway
 docs/openapi/                   generated OpenAPI (Swagger 2.0)
 docs/API.md                     API building standards (authoritative)
-internal/ai_grid/               gRPC service implementations
+internal/servers/               Per-resource gRPC servers (OSAC-style builders)
 internal/keycloak/              Keycloak Admin API client
 internal/restgateway/           HTTP gateway + Swagger UI
 deploy/kind/                    Kind Kubernetes manifests
 deploy/openshift/               OpenShift manifests (kustomize + Routes)
+deploy/acm-hub/                 Helm chart + scripts for RHACM hub playground
 hack/                           Kind/OCM/OpenShift/prereq helpers
 integration/                    Kind gRPC integration tests
 ```
@@ -68,7 +69,7 @@ Full detail: [`docs/API.md`](docs/API.md). When adding or changing APIs:
 | Spec vs status | Spec is user-controlled; status is system-controlled |
 | Service RPCs | List, Get, Create, Update, Delete (+ private Signal if needed) |
 | Request names | `{Service}{Method}Request` / `{Service}{Method}Response` |
-| REST | Flat paths under `/api/ai-grid/v1/`; no nested collections |
+| REST | Flat paths under `/api/v1/`; no nested collections |
 | Types / fields | `CamelCase` types; `snake_case` fields |
 | Enums | `TYPE_PREFIX_VALUE`; first value `_UNSPECIFIED = 0` |
 | References | Typed reference messages, not bare ID strings |
@@ -93,7 +94,10 @@ make push             # push container (podman login quay.io first)
 make build-and-push   # image + push
 make openshift-up     # deploy to current oc context (Quay image by default)
 make openshift-down   # remove OpenShift deploy
+make acm-hub-up       # RHACM via Helm/OLM + playground ManagedClusters
+make acm-hub-down     # tear down ACM hub Helm release
 ```
+
 
 Manual Kind bring-up:
 

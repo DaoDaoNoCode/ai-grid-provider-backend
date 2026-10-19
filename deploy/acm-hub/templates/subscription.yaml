@@ -1,0 +1,13 @@
+apiVersion: operators.coreos.com/v1alpha1
+kind: Subscription
+metadata:
+  name: {{ .Values.subscription.name }}
+  namespace: {{ include "acm-hub.namespace" . }}
+  labels:
+    {{- include "acm-hub.labels" . | nindent 4 }}
+spec:
+  channel: {{ .Values.subscription.channel | quote }}
+  installPlanApproval: {{ .Values.subscription.installPlanApproval }}
+  name: advanced-cluster-management
+  source: {{ .Values.subscription.source }}
+  sourceNamespace: {{ .Values.subscription.sourceNamespace }}

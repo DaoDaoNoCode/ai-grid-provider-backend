@@ -14,14 +14,16 @@ import (
 	"time"
 
 	aigridv1 "github.com/osac-project/ai-grid-provider-backend/gen/ai_grid/v1"
-	"github.com/osac-project/ai-grid-provider-backend/internal/ai_grid"
 	"github.com/osac-project/ai-grid-provider-backend/internal/keycloak"
 	"github.com/osac-project/ai-grid-provider-backend/internal/restgateway"
+	"github.com/osac-project/ai-grid-provider-backend/internal/servers"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/health"
 	healthv1 "google.golang.org/grpc/health/grpc_health_v1"
 	"google.golang.org/grpc/reflection"
+	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/rest"
+	"k8s.io/client-go/tools/clientcmd"
 )
 
 func main() {
@@ -35,28 +37,43 @@ func main() {
 		fmt.Fprintf(os.Stderr, "listen on %s: %v\n", *address, err)
 		os.Exit(1)
 	}
-	var service *aigrid.Service
-	if *kubeconfig == "" {
-		service, err = aigrid.NewServiceFromConfig(mustInClusterConfig())
-	} else {
-		service, err = aigrid.NewServiceFromKubeconfig(*kubeconfig)
-	}
+
+	kubeClient, err := newDynamicClient(*kubeconfig)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "load managed clusters: %v\n", err)
+		fmt.Fprintf(os.Stderr, "load Kubernetes client: %v\n", err)
 		os.Exit(1)
 	}
-	service.SetKeycloakClient(keycloak.New(keycloak.Config{
-		BaseURL:    getEnv("KEYCLOAK_URL", "http://keycloak.ai-grid.svc:8080"),
-		AdminRealm: getEnv("KEYCLOAK_ADMIN_REALM", "master"),
-		Realm:      getEnv("KEYCLOAK_REALM", "ai-grid"),
-		Username:   getEnv("KEYCLOAK_ADMIN_USERNAME", "admin"),
-		Password:   getEnv("KEYCLOAK_ADMIN_PASSWORD", "admin"),
-	}))
+
+	aiGridServer, err := servers.NewAiGridServer().Build()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "build AiGrid server: %v\n", err)
+		os.Exit(1)
+	}
+	clustersServer, err := servers.NewClustersServer().
+		SetDynamicClient(kubeClient).
+		Build()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "build Clusters server: %v\n", err)
+		os.Exit(1)
+	}
+	tenantsServer, err := servers.NewTenantsServer().
+		SetOrganizationLister(keycloak.New(keycloak.Config{
+			BaseURL:    getEnv("KEYCLOAK_URL", "http://keycloak.ai-grid.svc:8080"),
+			AdminRealm: getEnv("KEYCLOAK_ADMIN_REALM", "master"),
+			Realm:      getEnv("KEYCLOAK_REALM", "ai-grid"),
+			Username:   getEnv("KEYCLOAK_ADMIN_USERNAME", "admin"),
+			Password:   getEnv("KEYCLOAK_ADMIN_PASSWORD", "admin"),
+		})).
+		Build()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "build Tenants server: %v\n", err)
+		os.Exit(1)
+	}
 
 	grpcServer := grpc.NewServer()
-	aigridv1.RegisterAiGridServer(grpcServer, service)
-	aigridv1.RegisterManagedClustersServer(grpcServer, service)
-	aigridv1.RegisterTenantsServer(grpcServer, service)
+	aigridv1.RegisterAiGridServer(grpcServer, aiGridServer)
+	aigridv1.RegisterClustersServer(grpcServer, clustersServer)
+	aigridv1.RegisterTenantsServer(grpcServer, tenantsServer)
 
 	healthServer := health.NewServer()
 	healthServer.SetServingStatus("", healthv1.HealthCheckResponse_SERVING)
@@ -67,9 +84,9 @@ func main() {
 	defer stop()
 
 	gateway, err := restgateway.New(ctx, *httpAddress, restgateway.Servers{
-		AiGrid:          service,
-		ManagedClusters: service,
-		Tenants:         service,
+		AiGrid:   aiGridServer,
+		Clusters: clustersServer,
+		Tenants:  tenantsServer,
 	})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "REST gateway: %v\n", err)
@@ -106,11 +123,25 @@ func getEnv(name, fallback string) string {
 	return fallback
 }
 
-func mustInClusterConfig() *rest.Config {
-	config, err := rest.InClusterConfig()
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "load in-cluster Kubernetes config: %v\n", err)
-		os.Exit(1)
+func newDynamicClient(kubeconfig string) (dynamic.Interface, error) {
+	var (
+		config *rest.Config
+		err    error
+	)
+	if kubeconfig == "" {
+		config, err = rest.InClusterConfig()
+		if err != nil {
+			return nil, fmt.Errorf("load in-cluster Kubernetes config: %w", err)
+		}
+	} else {
+		config, err = clientcmd.BuildConfigFromFlags("", kubeconfig)
+		if err != nil {
+			return nil, fmt.Errorf("load kubeconfig: %w", err)
+		}
 	}
-	return config
+	client, err := dynamic.NewForConfig(config)
+	if err != nil {
+		return nil, fmt.Errorf("create Kubernetes client: %w", err)
+	}
+	return client, nil
 }

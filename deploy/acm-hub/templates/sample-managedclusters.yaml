@@ -1,0 +1,16 @@
+{{- if .Values.samples.create }}
+{{- range .Values.samples.clusters }}
+---
+apiVersion: cluster.open-cluster-management.io/v1
+kind: ManagedCluster
+metadata:
+  name: {{ .name }}
+  labels:
+    {{- include "acm-hub.labels" $ | nindent 4 }}
+    {{- range $key, $value := .labels }}
+    {{ $key }}: {{ $value | quote }}
+    {{- end }}
+spec:
+  hubAcceptsClient: true
+{{- end }}
+{{- end }}

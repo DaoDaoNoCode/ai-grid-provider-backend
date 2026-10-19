@@ -1,0 +1,5 @@
+# Patterns to ignore when packaging / templating.
+scripts/
+README.md
+.gitignore
+*.md

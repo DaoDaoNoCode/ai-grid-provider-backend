@@ -169,7 +169,7 @@ echo ""
 echo "OpenShift deploy ready (namespace ${NAMESPACE})."
 if [[ -n "${HTTP_HOST}" ]]; then
   echo "  REST/Swagger: https://${HTTP_HOST}/docs/"
-  echo "  curl example: curl -sk https://${HTTP_HOST}/api/ai-grid/v1/ping"
+  echo "  curl example: curl -sk https://${HTTP_HOST}/api/v1/ping"
 fi
 if [[ -n "${GRPC_HOST}" ]]; then
   echo "  gRPC Route:   ${GRPC_HOST} (passthrough; prefer port-forward for plaintext grpcurl)"

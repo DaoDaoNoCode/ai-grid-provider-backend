@@ -1,0 +1,103 @@
+syntax = "proto3";
+
+package ai_grid.v1;
+
+import "ai_grid/v1/managed_cluster_type.proto";
+import "google/api/annotations.proto";
+import "google/protobuf/field_mask.proto";
+
+option go_package = "github.com/osac-project/ai-grid-provider-backend/gen/ai_grid/v1;aigridv1";
+
+message ClustersListRequest {
+  // Index of the first result. If not specified the default value will be zero.
+  optional int32 offset = 1;
+
+  // Maximum number of results to be returned by the server. When not specified all
+  // the results will be returned.
+  optional int32 limit = 2;
+
+  // Filter criteria (CEL). Empty means no filter. Not evaluated yet.
+  optional string filter = 3;
+
+  // Order criteria. Empty means undefined order. Not evaluated yet.
+  optional string order = 4;
+}
+
+message ClustersListResponse {
+  // Actual number of items returned.
+  int32 size = 1;
+
+  // Total number of items that match the search criteria.
+  int32 total = 2;
+
+  // List of results.
+  repeated ManagedCluster items = 3;
+}
+
+message ClustersGetRequest {
+  string id = 1;
+}
+
+message ClustersGetResponse {
+  ManagedCluster object = 1;
+}
+
+message ClustersCreateRequest {
+  ManagedCluster object = 1;
+}
+
+message ClustersCreateResponse {
+  ManagedCluster object = 1;
+}
+
+message ClustersUpdateRequest {
+  ManagedCluster object = 1;
+  google.protobuf.FieldMask update_mask = 2;
+
+  // Lock enables optimistic locking against metadata.version. Not enforced yet.
+  bool lock = 3;
+}
+
+message ClustersUpdateResponse {
+  ManagedCluster object = 1;
+}
+
+message ClustersDeleteRequest {
+  string id = 1;
+}
+
+message ClustersDeleteResponse {}
+
+// Hub-side ACM/OCM ManagedCluster CRUD. Does not provision spoke clusters.
+service Clusters {
+  rpc List(ClustersListRequest) returns (ClustersListResponse) {
+    option (google.api.http) = {get: "/api/v1/clusters"};
+  }
+
+  rpc Get(ClustersGetRequest) returns (ClustersGetResponse) {
+    option (google.api.http) = {
+      get: "/api/v1/clusters/{id}"
+      response_body: "object"
+    };
+  }
+
+  rpc Create(ClustersCreateRequest) returns (ClustersCreateResponse) {
+    option (google.api.http) = {
+      post: "/api/v1/clusters"
+      body: "object"
+      response_body: "object"
+    };
+  }
+
+  rpc Update(ClustersUpdateRequest) returns (ClustersUpdateResponse) {
+    option (google.api.http) = {
+      patch: "/api/v1/clusters/{object.id}"
+      body: "object"
+      response_body: "object"
+    };
+  }
+
+  rpc Delete(ClustersDeleteRequest) returns (ClustersDeleteResponse) {
+    option (google.api.http) = {delete: "/api/v1/clusters/{id}"};
+  }
+}

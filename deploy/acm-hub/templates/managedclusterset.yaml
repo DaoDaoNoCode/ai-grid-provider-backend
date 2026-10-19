@@ -1,0 +1,9 @@
+{{- if .Values.clusterSet.create }}
+apiVersion: cluster.open-cluster-management.io/v1beta2
+kind: ManagedClusterSet
+metadata:
+  name: {{ .Values.clusterSet.name }}
+  labels:
+    {{- include "acm-hub.labels" . | nindent 4 }}
+spec: {}
+{{- end }}

@@ -1,0 +1,15 @@
+{{- if .Values.multiclusterhub.create }}
+apiVersion: operator.open-cluster-management.io/v1
+kind: MultiClusterHub
+metadata:
+  name: {{ .Values.multiclusterhub.name }}
+  namespace: {{ include "acm-hub.namespace" . }}
+  labels:
+    {{- include "acm-hub.labels" . | nindent 4 }}
+{{- if hasKey .Values.multiclusterhub "localClusterName" }}
+spec:
+  localClusterName: {{ .Values.multiclusterhub.localClusterName | quote }}
+{{- else }}
+spec: {}
+{{- end }}
+{{- end }}

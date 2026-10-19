@@ -1,0 +1,41 @@
+syntax = "proto3";
+
+package ai_grid.v1;
+
+import "ai_grid/v1/tenant_type.proto";
+import "google/api/annotations.proto";
+
+option go_package = "github.com/osac-project/ai-grid-provider-backend/gen/ai_grid/v1;aigridv1";
+
+message TenantsListRequest {
+  // Index of the first result. If not specified the default value will be zero.
+  optional int32 offset = 1;
+
+  // Maximum number of results to be returned by the server. When not specified all
+  // the results will be returned.
+  optional int32 limit = 2;
+
+  // Filter criteria (CEL). Empty means no filter. Not evaluated yet.
+  optional string filter = 3;
+
+  // Order criteria. Empty means undefined order. Not evaluated yet.
+  optional string order = 4;
+}
+
+message TenantsListResponse {
+  // Actual number of items returned.
+  int32 size = 1;
+
+  // Total number of items that match the search criteria.
+  int32 total = 2;
+
+  // List of results.
+  repeated Tenant items = 3;
+}
+
+// Tenants are represented by Keycloak Organizations in the shared ai-grid realm.
+service Tenants {
+  rpc List(TenantsListRequest) returns (TenantsListResponse) {
+    option (google.api.http) = {get: "/api/v1/tenants"};
+  }
+}

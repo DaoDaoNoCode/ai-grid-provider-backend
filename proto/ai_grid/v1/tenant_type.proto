@@ -1,0 +1,24 @@
+syntax = "proto3";
+
+package ai_grid.v1;
+
+import "ai_grid/v1/metadata_type.proto";
+
+option go_package = "github.com/osac-project/ai-grid-provider-backend/gen/ai_grid/v1;aigridv1";
+
+// A tenant groups resources and users. Backed by a Keycloak Organization.
+message Tenant {
+  // Unique identifier of the tenant (Keycloak organization id).
+  string id = 1;
+
+  Metadata metadata = 2;
+  TenantSpec spec = 3;
+  TenantStatus status = 4;
+}
+
+message TenantSpec {
+  // Email domains associated with this tenant.
+  repeated string domains = 1;
+}
+
+message TenantStatus {}

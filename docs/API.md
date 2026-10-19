@@ -8,7 +8,7 @@ agents live in [`../AGENTS.md`](../AGENTS.md).
 
 Patterns, naming conventions, and examples below were verified against the OSAC
 fulfillment service. Adapt package paths and URL prefixes to this repository
-(`ai_grid.v1`, `/api/ai-grid/v1/`) when implementing here. Current MVP endpoints
+(`ai_grid.v1`, `/api/v1/`) when implementing here. Current MVP endpoints
 are intentionally simpler; new resource APIs must converge on these standards.
 
 ---
@@ -39,10 +39,10 @@ are intentionally simpler; new resource APIs must converge on these standards.
 ai-grid-provider-backend/
 ├── cmd/ai-grid-provider-backend/   # Service entrypoint
 ├── client/                         # Reusable gRPC client
-├── proto/                          # Protobuf source + buf config
+├── proto/ai_grid/v1/               # Per-resource *_type.proto / *_service.proto + metadata
 ├── gen/ai_grid/v1/                 # Generated Go + gateway stubs (committed)
 ├── docs/openapi/                   # Generated OpenAPI (Swagger 2.0)
-├── internal/ai_grid/               # gRPC service implementations
+├── internal/servers/               # Per-resource gRPC servers (OSAC-style builders)
 ├── internal/keycloak/              # Keycloak Admin API client
 ├── internal/restgateway/           # HTTP gateway + Swagger UI
 ├── deploy/kind/                    # Kind manifests
@@ -56,8 +56,8 @@ ai-grid-provider-backend/
 
 Module: `github.com/osac-project/ai-grid-provider-backend`.
 
-REST prefix for this service: `/api/ai-grid/v1/`. When the examples below use
-`/api/fulfillment/v1/` or `/api/private/v1/`, map them to `/api/ai-grid/v1/`
+REST prefix for this service: `/api/v1/`. When the examples below use
+`/api/fulfillment/v1/` or `/api/private/v1/`, map them to `/api/v1/`
 unless a public/private split is intentionally introduced.
 
 ### Reference: OSAC Go Workspace
@@ -289,7 +289,7 @@ message ThingsSignalResponse {}
 | Update | `PATCH` | `/api/fulfillment/v1/things/{object.id}` | `object` | `object` |
 | Delete | `DELETE` | `/api/fulfillment/v1/things/{id}` | — | — |
 
-**URL prefix (this service)**: `/api/ai-grid/v1/`.
+**URL prefix (this service)**: `/api/v1/`.
 **URL prefix (OSAC fulfillment reference)**: `/api/fulfillment/v1/` (public), `/api/private/v1/` (private).
 **URL space**: Always flat — no nested collection URLs. Use CEL filters to find related objects.
 
@@ -1543,7 +1543,7 @@ On first authenticated request, automatically creates a user record. Eliminates 
 | DB table | snake_case pluralized | `bare_metal_instances` |
 | Archived table | `archived_<table>` | `archived_bare_metal_instances` |
 | gRPC service name | Plural, no `Service` suffix | `Clusters`, `BareMetalInstances` |
-| REST URL path (this service) | `/api/ai-grid/v1/<resources>` | `/api/ai-grid/v1/managed_clusters` |
+| REST URL path (this service) | `/api/v1/<resources>` | `/api/v1/clusters` |
 | REST URL path (OSAC public ref) | `/api/fulfillment/v1/<resources>` | `/api/fulfillment/v1/clusters` |
 | REST URL path (OSAC private ref) | `/api/private/v1/<resources>` | `/api/private/v1/clusters` |
 | Enum values | `TYPE_PREFIX_VALUE` | `CLUSTER_STATE_READY` |
