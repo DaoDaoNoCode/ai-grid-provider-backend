@@ -1,0 +1,4 @@
+{
+  "_comment": "speed multiplies the fake hub's scenario clock (scenarios.json) and the time a ManagedCluster deleted through the API takes to finish detaching (30s, or detachAfter when set): 1 is real time, 10 plays a 5 minute scenario in 30 seconds. Converted from the console fixture directory's settings.json; its other keys (RPC latency and the hub capabilities the console's fake backend reports) describe the console's fake gRPC backend, which the real backend replaces here, and are not carried over.",
+  "speed": 1
+}

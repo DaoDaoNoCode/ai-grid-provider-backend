@@ -1,0 +1,682 @@
+{
+  "kind": "ManagedClusterList",
+  "apiVersion": "cluster.open-cluster-management.io/v1",
+  "metadata": {},
+  "items": [
+    {
+      "kind": "ManagedCluster",
+      "apiVersion": "cluster.open-cluster-management.io/v1",
+      "metadata": {
+        "name": "site1",
+        "uid": "9a8b7c6d-0001-4e5f-8a1b-2c3d4e5f6a7b",
+        "resourceVersion": "48811300",
+        "generation": 3,
+        "creationTimestamp": "2026-10-01T09:00:00Z",
+        "labels": {
+          "ai-grid/enabled": "true",
+          "ai-grid/provisioned": "true",
+          "ai-grid/region": "us-west",
+          "ai-grid/site": "san-francisco",
+          "cloud": "BareMetal",
+          "cluster.open-cluster-management.io/clusterset": "default",
+          "clusterID": "5e1c0a00-0001-4b2c-9d3e-4f5a6b7c8d9e",
+          "feature.open-cluster-management.io/addon-application-manager": "available",
+          "feature.open-cluster-management.io/addon-cert-policy-controller": "available",
+          "feature.open-cluster-management.io/addon-cluster-proxy": "available",
+          "feature.open-cluster-management.io/addon-config-policy-controller": "available",
+          "feature.open-cluster-management.io/addon-governance-policy-framework": "available",
+          "feature.open-cluster-management.io/addon-managed-serviceaccount": "available",
+          "feature.open-cluster-management.io/addon-work-manager": "available",
+          "location": "site1",
+          "name": "site1",
+          "openshiftVersion": "4.22.15",
+          "openshiftVersion-major": "4",
+          "openshiftVersion-major-minor": "4.22",
+          "vendor": "OpenShift"
+        },
+        "annotations": {
+          "ai-grid/latitude": "37.7749",
+          "ai-grid/longitude": "-122.4194",
+          "ai-grid/site-name": "San Francisco",
+          "installer.multicluster.openshift.io/release-version": "2.17.3",
+          "open-cluster-management/created-via": "other"
+        },
+        "finalizers": [
+          "managedcluster-import-controller.open-cluster-management.io/cleanup",
+          "managedclusterinfo.finalizers.open-cluster-management.io",
+          "cluster.open-cluster-management.io/resource-cleanup",
+          "open-cluster-management.io/managedclusterrole",
+          "managedcluster-import-controller.open-cluster-management.io/manifestwork-cleanup",
+          "cluster.open-cluster-management.io/api-resource-cleanup"
+        ]
+      },
+      "spec": {
+        "managedClusterClientConfigs": [
+          {
+            "url": "https://api.site1.example.com:6443"
+          }
+        ],
+        "hubAcceptsClient": true,
+        "leaseDurationSeconds": 60
+      },
+      "status": {
+        "conditions": [
+          {
+            "type": "ManagedClusterImportSucceeded",
+            "status": "True",
+            "lastTransitionTime": "2026-10-01T09:00:12Z",
+            "reason": "ManagedClusterImported",
+            "message": "Import succeeded"
+          },
+          {
+            "type": "HubAcceptedManagedCluster",
+            "status": "True",
+            "lastTransitionTime": "2026-10-01T09:00:02Z",
+            "reason": "HubClusterAdminAccepted",
+            "message": "Accepted by hub cluster admin"
+          },
+          {
+            "type": "ManagedClusterJoined",
+            "status": "True",
+            "lastTransitionTime": "2026-10-01T09:00:08Z",
+            "reason": "ManagedClusterJoined",
+            "message": "Managed cluster joined"
+          },
+          {
+            "type": "ManagedClusterConditionAvailable",
+            "status": "True",
+            "lastTransitionTime": "2026-10-01T09:00:08Z",
+            "reason": "ManagedClusterAvailable",
+            "message": "Managed cluster is available"
+          },
+          {
+            "type": "ManagedClusterConditionClockSynced",
+            "status": "True",
+            "lastTransitionTime": "2026-10-01T09:00:08Z",
+            "reason": "ManagedClusterClockSynced",
+            "message": "The clock of the managed cluster is synced with the hub."
+          }
+        ],
+        "capacity": {
+          "core_worker": "128",
+          "cpu": "192",
+          "ephemeral-storage": "3600Gi",
+          "hugepages-1Gi": "0",
+          "hugepages-2Mi": "0",
+          "memory": "1572864Mi",
+          "nvidia.com/gpu": "16",
+          "pods": "1000",
+          "socket_worker": "8"
+        },
+        "allocatable": {
+          "cpu": "186",
+          "ephemeral-storage": "3300Gi",
+          "hugepages-1Gi": "0",
+          "hugepages-2Mi": "0",
+          "memory": "1540000Mi",
+          "nvidia.com/gpu": "16",
+          "pods": "1000"
+        },
+        "version": {
+          "kubernetes": "v1.35.6"
+        },
+        "clusterClaims": [
+          {
+            "name": "apiserverurl.openshift.io",
+            "value": "https://api.site1.example.com:6443"
+          },
+          {
+            "name": "consoleurl.cluster.open-cluster-management.io",
+            "value": "https://console-openshift-console.apps.site1.example.com"
+          },
+          {
+            "name": "controlplanetopology.openshift.io",
+            "value": "HighlyAvailable"
+          },
+          {
+            "name": "id.k8s.io",
+            "value": "5e1c0a00-0001-4b2c-9d3e-4f5a6b7c8d9e"
+          },
+          {
+            "name": "id.openshift.io",
+            "value": "5e1c0a00-0001-4b2c-9d3e-4f5a6b7c8d9e"
+          },
+          {
+            "name": "infrastructure.openshift.io",
+            "value": "{\"infraName\": \"site1-5e1c0\"}"
+          },
+          {
+            "name": "kubeversion.open-cluster-management.io",
+            "value": "v1.35.6"
+          },
+          {
+            "name": "oauthredirecturis.openshift.io",
+            "value": "https://oauth.site1.example.com:6443/oauth/token/implicit"
+          },
+          {
+            "name": "platform.open-cluster-management.io",
+            "value": "BareMetal"
+          },
+          {
+            "name": "product.open-cluster-management.io",
+            "value": "OpenShift"
+          },
+          {
+            "name": "schedulable.open-cluster-management.io",
+            "value": "true"
+          },
+          {
+            "name": "version.openshift.io",
+            "value": "4.22.15"
+          }
+        ]
+      }
+    },
+    {
+      "kind": "ManagedCluster",
+      "apiVersion": "cluster.open-cluster-management.io/v1",
+      "metadata": {
+        "name": "site2",
+        "uid": "9a8b7c6d-0002-4e5f-8a1b-2c3d4e5f6a7b",
+        "resourceVersion": "48811301",
+        "generation": 3,
+        "creationTimestamp": "2026-10-01T09:00:00Z",
+        "labels": {
+          "ai-grid/enabled": "true",
+          "ai-grid/provisioned": "true",
+          "ai-grid/region": "us-east",
+          "ai-grid/site": "new-york",
+          "cloud": "BareMetal",
+          "cluster.open-cluster-management.io/clusterset": "default",
+          "clusterID": "5e1c0a00-0002-4b2c-9d3e-4f5a6b7c8d9e",
+          "feature.open-cluster-management.io/addon-application-manager": "available",
+          "feature.open-cluster-management.io/addon-cert-policy-controller": "available",
+          "feature.open-cluster-management.io/addon-cluster-proxy": "available",
+          "feature.open-cluster-management.io/addon-config-policy-controller": "available",
+          "feature.open-cluster-management.io/addon-governance-policy-framework": "available",
+          "feature.open-cluster-management.io/addon-managed-serviceaccount": "available",
+          "feature.open-cluster-management.io/addon-work-manager": "available",
+          "location": "site2",
+          "name": "site2",
+          "openshiftVersion": "4.22.15",
+          "openshiftVersion-major": "4",
+          "openshiftVersion-major-minor": "4.22",
+          "vendor": "OpenShift"
+        },
+        "annotations": {
+          "ai-grid/latitude": "40.7128",
+          "ai-grid/longitude": "-74.0060",
+          "ai-grid/site-name": "New York",
+          "installer.multicluster.openshift.io/release-version": "2.17.3",
+          "open-cluster-management/created-via": "other"
+        },
+        "finalizers": [
+          "managedcluster-import-controller.open-cluster-management.io/cleanup",
+          "managedclusterinfo.finalizers.open-cluster-management.io",
+          "cluster.open-cluster-management.io/resource-cleanup",
+          "open-cluster-management.io/managedclusterrole",
+          "managedcluster-import-controller.open-cluster-management.io/manifestwork-cleanup",
+          "cluster.open-cluster-management.io/api-resource-cleanup"
+        ]
+      },
+      "spec": {
+        "managedClusterClientConfigs": [
+          {
+            "url": "https://api.site2.example.com:6443"
+          }
+        ],
+        "hubAcceptsClient": true,
+        "leaseDurationSeconds": 60
+      },
+      "status": {
+        "conditions": [
+          {
+            "type": "ManagedClusterImportSucceeded",
+            "status": "True",
+            "lastTransitionTime": "2026-10-01T09:00:12Z",
+            "reason": "ManagedClusterImported",
+            "message": "Import succeeded"
+          },
+          {
+            "type": "HubAcceptedManagedCluster",
+            "status": "True",
+            "lastTransitionTime": "2026-10-01T09:00:02Z",
+            "reason": "HubClusterAdminAccepted",
+            "message": "Accepted by hub cluster admin"
+          },
+          {
+            "type": "ManagedClusterJoined",
+            "status": "True",
+            "lastTransitionTime": "2026-10-01T09:00:08Z",
+            "reason": "ManagedClusterJoined",
+            "message": "Managed cluster joined"
+          },
+          {
+            "type": "ManagedClusterConditionAvailable",
+            "status": "True",
+            "lastTransitionTime": "2026-10-01T09:00:08Z",
+            "reason": "ManagedClusterAvailable",
+            "message": "Managed cluster is available"
+          },
+          {
+            "type": "ManagedClusterConditionClockSynced",
+            "status": "True",
+            "lastTransitionTime": "2026-10-01T09:00:08Z",
+            "reason": "ManagedClusterClockSynced",
+            "message": "The clock of the managed cluster is synced with the hub."
+          }
+        ],
+        "capacity": {
+          "core_worker": "128",
+          "cpu": "192",
+          "ephemeral-storage": "3600Gi",
+          "hugepages-1Gi": "0",
+          "hugepages-2Mi": "0",
+          "memory": "1572864Mi",
+          "nvidia.com/gpu": "16",
+          "pods": "1000",
+          "socket_worker": "8"
+        },
+        "allocatable": {
+          "cpu": "186",
+          "ephemeral-storage": "3300Gi",
+          "hugepages-1Gi": "0",
+          "hugepages-2Mi": "0",
+          "memory": "1540000Mi",
+          "nvidia.com/gpu": "16",
+          "pods": "1000"
+        },
+        "version": {
+          "kubernetes": "v1.35.6"
+        },
+        "clusterClaims": [
+          {
+            "name": "apiserverurl.openshift.io",
+            "value": "https://api.site2.example.com:6443"
+          },
+          {
+            "name": "consoleurl.cluster.open-cluster-management.io",
+            "value": "https://console-openshift-console.apps.site2.example.com"
+          },
+          {
+            "name": "controlplanetopology.openshift.io",
+            "value": "HighlyAvailable"
+          },
+          {
+            "name": "id.k8s.io",
+            "value": "5e1c0a00-0002-4b2c-9d3e-4f5a6b7c8d9e"
+          },
+          {
+            "name": "id.openshift.io",
+            "value": "5e1c0a00-0002-4b2c-9d3e-4f5a6b7c8d9e"
+          },
+          {
+            "name": "infrastructure.openshift.io",
+            "value": "{\"infraName\": \"site2-5e1c0\"}"
+          },
+          {
+            "name": "kubeversion.open-cluster-management.io",
+            "value": "v1.35.6"
+          },
+          {
+            "name": "oauthredirecturis.openshift.io",
+            "value": "https://oauth.site2.example.com:6443/oauth/token/implicit"
+          },
+          {
+            "name": "platform.open-cluster-management.io",
+            "value": "BareMetal"
+          },
+          {
+            "name": "product.open-cluster-management.io",
+            "value": "OpenShift"
+          },
+          {
+            "name": "schedulable.open-cluster-management.io",
+            "value": "true"
+          },
+          {
+            "name": "version.openshift.io",
+            "value": "4.22.15"
+          }
+        ]
+      }
+    },
+    {
+      "kind": "ManagedCluster",
+      "apiVersion": "cluster.open-cluster-management.io/v1",
+      "metadata": {
+        "name": "site3",
+        "uid": "9a8b7c6d-0003-4e5f-8a1b-2c3d4e5f6a7b",
+        "resourceVersion": "48811302",
+        "generation": 3,
+        "creationTimestamp": "2026-10-01T09:00:00Z",
+        "labels": {
+          "ai-grid/enabled": "true",
+          "ai-grid/provisioned": "true",
+          "ai-grid/region": "europe-west",
+          "ai-grid/site": "brussels",
+          "cloud": "BareMetal",
+          "cluster.open-cluster-management.io/clusterset": "default",
+          "clusterID": "5e1c0a00-0003-4b2c-9d3e-4f5a6b7c8d9e",
+          "feature.open-cluster-management.io/addon-application-manager": "available",
+          "feature.open-cluster-management.io/addon-cert-policy-controller": "available",
+          "feature.open-cluster-management.io/addon-cluster-proxy": "available",
+          "feature.open-cluster-management.io/addon-config-policy-controller": "available",
+          "feature.open-cluster-management.io/addon-governance-policy-framework": "available",
+          "feature.open-cluster-management.io/addon-managed-serviceaccount": "available",
+          "feature.open-cluster-management.io/addon-work-manager": "available",
+          "location": "site3",
+          "name": "site3",
+          "openshiftVersion": "4.22.15",
+          "openshiftVersion-major": "4",
+          "openshiftVersion-major-minor": "4.22",
+          "vendor": "OpenShift"
+        },
+        "annotations": {
+          "ai-grid/latitude": "50.8503",
+          "ai-grid/longitude": "4.3517",
+          "ai-grid/site-name": "Brussels",
+          "installer.multicluster.openshift.io/release-version": "2.17.3",
+          "open-cluster-management/created-via": "other"
+        },
+        "finalizers": [
+          "managedcluster-import-controller.open-cluster-management.io/cleanup",
+          "managedclusterinfo.finalizers.open-cluster-management.io",
+          "cluster.open-cluster-management.io/resource-cleanup",
+          "open-cluster-management.io/managedclusterrole",
+          "managedcluster-import-controller.open-cluster-management.io/manifestwork-cleanup",
+          "cluster.open-cluster-management.io/api-resource-cleanup"
+        ]
+      },
+      "spec": {
+        "managedClusterClientConfigs": [
+          {
+            "url": "https://api.site3.example.com:6443"
+          }
+        ],
+        "hubAcceptsClient": true,
+        "leaseDurationSeconds": 60
+      },
+      "status": {
+        "conditions": [
+          {
+            "type": "ManagedClusterImportSucceeded",
+            "status": "True",
+            "lastTransitionTime": "2026-10-01T09:00:12Z",
+            "reason": "ManagedClusterImported",
+            "message": "Import succeeded"
+          },
+          {
+            "type": "HubAcceptedManagedCluster",
+            "status": "True",
+            "lastTransitionTime": "2026-10-01T09:00:02Z",
+            "reason": "HubClusterAdminAccepted",
+            "message": "Accepted by hub cluster admin"
+          },
+          {
+            "type": "ManagedClusterJoined",
+            "status": "True",
+            "lastTransitionTime": "2026-10-01T09:00:08Z",
+            "reason": "ManagedClusterJoined",
+            "message": "Managed cluster joined"
+          },
+          {
+            "type": "ManagedClusterConditionAvailable",
+            "status": "True",
+            "lastTransitionTime": "2026-10-01T09:00:08Z",
+            "reason": "ManagedClusterAvailable",
+            "message": "Managed cluster is available"
+          },
+          {
+            "type": "ManagedClusterConditionClockSynced",
+            "status": "True",
+            "lastTransitionTime": "2026-10-01T09:00:08Z",
+            "reason": "ManagedClusterClockSynced",
+            "message": "The clock of the managed cluster is synced with the hub."
+          }
+        ],
+        "capacity": {
+          "core_worker": "128",
+          "cpu": "192",
+          "ephemeral-storage": "3600Gi",
+          "hugepages-1Gi": "0",
+          "hugepages-2Mi": "0",
+          "memory": "1572864Mi",
+          "nvidia.com/gpu": "16",
+          "pods": "1000",
+          "socket_worker": "8"
+        },
+        "allocatable": {
+          "cpu": "186",
+          "ephemeral-storage": "3300Gi",
+          "hugepages-1Gi": "0",
+          "hugepages-2Mi": "0",
+          "memory": "1540000Mi",
+          "nvidia.com/gpu": "16",
+          "pods": "1000"
+        },
+        "version": {
+          "kubernetes": "v1.35.6"
+        },
+        "clusterClaims": [
+          {
+            "name": "apiserverurl.openshift.io",
+            "value": "https://api.site3.example.com:6443"
+          },
+          {
+            "name": "consoleurl.cluster.open-cluster-management.io",
+            "value": "https://console-openshift-console.apps.site3.example.com"
+          },
+          {
+            "name": "controlplanetopology.openshift.io",
+            "value": "HighlyAvailable"
+          },
+          {
+            "name": "id.k8s.io",
+            "value": "5e1c0a00-0003-4b2c-9d3e-4f5a6b7c8d9e"
+          },
+          {
+            "name": "id.openshift.io",
+            "value": "5e1c0a00-0003-4b2c-9d3e-4f5a6b7c8d9e"
+          },
+          {
+            "name": "infrastructure.openshift.io",
+            "value": "{\"infraName\": \"site3-5e1c0\"}"
+          },
+          {
+            "name": "kubeversion.open-cluster-management.io",
+            "value": "v1.35.6"
+          },
+          {
+            "name": "oauthredirecturis.openshift.io",
+            "value": "https://oauth.site3.example.com:6443/oauth/token/implicit"
+          },
+          {
+            "name": "platform.open-cluster-management.io",
+            "value": "BareMetal"
+          },
+          {
+            "name": "product.open-cluster-management.io",
+            "value": "OpenShift"
+          },
+          {
+            "name": "schedulable.open-cluster-management.io",
+            "value": "true"
+          },
+          {
+            "name": "version.openshift.io",
+            "value": "4.22.15"
+          }
+        ]
+      }
+    },
+    {
+      "kind": "ManagedCluster",
+      "apiVersion": "cluster.open-cluster-management.io/v1",
+      "metadata": {
+        "name": "site4",
+        "uid": "9a8b7c6d-0004-4e5f-8a1b-2c3d4e5f6a7b",
+        "resourceVersion": "48811303",
+        "generation": 3,
+        "creationTimestamp": "2026-10-01T09:00:00Z",
+        "labels": {
+          "ai-grid/provisioned": "false",
+          "ai-grid/region": "asia-pacific",
+          "ai-grid/site": "sydney",
+          "cloud": "BareMetal",
+          "cluster.open-cluster-management.io/clusterset": "default",
+          "clusterID": "5e1c0a00-0004-4b2c-9d3e-4f5a6b7c8d9e",
+          "feature.open-cluster-management.io/addon-application-manager": "available",
+          "feature.open-cluster-management.io/addon-cert-policy-controller": "available",
+          "feature.open-cluster-management.io/addon-cluster-proxy": "available",
+          "feature.open-cluster-management.io/addon-config-policy-controller": "available",
+          "feature.open-cluster-management.io/addon-governance-policy-framework": "available",
+          "feature.open-cluster-management.io/addon-managed-serviceaccount": "available",
+          "feature.open-cluster-management.io/addon-work-manager": "available",
+          "location": "site4",
+          "name": "site4",
+          "openshiftVersion": "4.22.15",
+          "openshiftVersion-major": "4",
+          "openshiftVersion-major-minor": "4.22",
+          "vendor": "OpenShift"
+        },
+        "annotations": {
+          "ai-grid/latitude": "-33.8688",
+          "ai-grid/longitude": "151.2093",
+          "ai-grid/site-name": "Sydney",
+          "installer.multicluster.openshift.io/release-version": "2.17.3",
+          "open-cluster-management/created-via": "other"
+        },
+        "finalizers": [
+          "managedcluster-import-controller.open-cluster-management.io/cleanup",
+          "managedclusterinfo.finalizers.open-cluster-management.io",
+          "cluster.open-cluster-management.io/resource-cleanup",
+          "open-cluster-management.io/managedclusterrole",
+          "managedcluster-import-controller.open-cluster-management.io/manifestwork-cleanup",
+          "cluster.open-cluster-management.io/api-resource-cleanup"
+        ]
+      },
+      "spec": {
+        "managedClusterClientConfigs": [
+          {
+            "url": "https://api.site4.example.com:6443"
+          }
+        ],
+        "hubAcceptsClient": true,
+        "leaseDurationSeconds": 60
+      },
+      "status": {
+        "conditions": [
+          {
+            "type": "ManagedClusterImportSucceeded",
+            "status": "True",
+            "lastTransitionTime": "2026-10-01T09:00:12Z",
+            "reason": "ManagedClusterImported",
+            "message": "Import succeeded"
+          },
+          {
+            "type": "HubAcceptedManagedCluster",
+            "status": "True",
+            "lastTransitionTime": "2026-10-01T09:00:02Z",
+            "reason": "HubClusterAdminAccepted",
+            "message": "Accepted by hub cluster admin"
+          },
+          {
+            "type": "ManagedClusterJoined",
+            "status": "True",
+            "lastTransitionTime": "2026-10-01T09:00:08Z",
+            "reason": "ManagedClusterJoined",
+            "message": "Managed cluster joined"
+          },
+          {
+            "type": "ManagedClusterConditionAvailable",
+            "status": "True",
+            "lastTransitionTime": "2026-10-01T09:00:08Z",
+            "reason": "ManagedClusterAvailable",
+            "message": "Managed cluster is available"
+          },
+          {
+            "type": "ManagedClusterConditionClockSynced",
+            "status": "True",
+            "lastTransitionTime": "2026-10-01T09:00:08Z",
+            "reason": "ManagedClusterClockSynced",
+            "message": "The clock of the managed cluster is synced with the hub."
+          }
+        ],
+        "capacity": {
+          "core_worker": "128",
+          "cpu": "192",
+          "ephemeral-storage": "3600Gi",
+          "hugepages-1Gi": "0",
+          "hugepages-2Mi": "0",
+          "memory": "1572864Mi",
+          "nvidia.com/gpu": "16",
+          "pods": "1000",
+          "socket_worker": "8"
+        },
+        "allocatable": {
+          "cpu": "186",
+          "ephemeral-storage": "3300Gi",
+          "hugepages-1Gi": "0",
+          "hugepages-2Mi": "0",
+          "memory": "1540000Mi",
+          "nvidia.com/gpu": "16",
+          "pods": "1000"
+        },
+        "version": {
+          "kubernetes": "v1.35.6"
+        },
+        "clusterClaims": [
+          {
+            "name": "apiserverurl.openshift.io",
+            "value": "https://api.site4.example.com:6443"
+          },
+          {
+            "name": "consoleurl.cluster.open-cluster-management.io",
+            "value": "https://console-openshift-console.apps.site4.example.com"
+          },
+          {
+            "name": "controlplanetopology.openshift.io",
+            "value": "HighlyAvailable"
+          },
+          {
+            "name": "id.k8s.io",
+            "value": "5e1c0a00-0004-4b2c-9d3e-4f5a6b7c8d9e"
+          },
+          {
+            "name": "id.openshift.io",
+            "value": "5e1c0a00-0004-4b2c-9d3e-4f5a6b7c8d9e"
+          },
+          {
+            "name": "infrastructure.openshift.io",
+            "value": "{\"infraName\": \"site4-5e1c0\"}"
+          },
+          {
+            "name": "kubeversion.open-cluster-management.io",
+            "value": "v1.35.6"
+          },
+          {
+            "name": "oauthredirecturis.openshift.io",
+            "value": "https://oauth.site4.example.com:6443/oauth/token/implicit"
+          },
+          {
+            "name": "platform.open-cluster-management.io",
+            "value": "BareMetal"
+          },
+          {
+            "name": "product.open-cluster-management.io",
+            "value": "OpenShift"
+          },
+          {
+            "name": "schedulable.open-cluster-management.io",
+            "value": "true"
+          },
+          {
+            "name": "version.openshift.io",
+            "value": "4.22.15"
+          }
+        ]
+      }
+    }
+  ]
+}

@@ -1,0 +1,42 @@
+[
+  {
+    "id": "3f1c9a72-5b6e-4d2a-8c01-2d3e4f5a6b7c",
+    "name": "acme-robotics",
+    "alias": "acme-robotics",
+    "enabled": true,
+    "attributes": {},
+    "domains": [
+      {
+        "name": "acme-robotics.example.com",
+        "verified": false,
+        "autoRedirect": false
+      },
+      {
+        "name": "acme.example.org",
+        "verified": false,
+        "autoRedirect": false
+      }
+    ]
+  },
+  {
+    "id": "8d2e7b31-0c4f-4a9d-b5e6-7f8a9b0c1d2e",
+    "name": "globex-research",
+    "alias": "globex-research",
+    "enabled": true,
+    "attributes": {},
+    "domains": [
+      {
+        "name": "globex.example.com",
+        "verified": false,
+        "autoRedirect": false
+      }
+    ]
+  },
+  {
+    "id": "c5a4d3e2-f1b0-4987-a6c5-d4e3f2a1b0c9",
+    "name": "initech-labs",
+    "alias": "initech-labs",
+    "enabled": true,
+    "attributes": {}
+  }
+]

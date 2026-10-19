@@ -1,0 +1,115 @@
+{
+  "_comment": "Timed transitions the fake hub applies to the ManagedCluster CRs relative to its start, divided by settings.json speed (speed 6 fires the 20s event after about 3s). Each event's condition, taint and label changes are documented, with the hub controller source lines, in internal/fakeinfra/hub/scenarios.go and acm.go; every event is one write with its own resourceVersion. spoke is what the agent publishes on join, in the CR's status shape. The import of site-berlin-1 follows the order observed on the hub (accepted, joined, imported, add-ons); site-madrid-1 recovers its lease; edge-lyon-2 finishes detaching and disappears. Converted from the console fixture directory's scenarios.json.",
+  "events": [
+    {
+      "cluster": "site-berlin-1",
+      "at": "20s",
+      "event": "joined",
+      "spoke": {
+        "version": {
+          "kubernetes": "v1.35.6"
+        },
+        "capacity": {
+          "core_worker": "48",
+          "cpu": "64",
+          "ephemeral-storage": "3600Gi",
+          "hugepages-1Gi": "0",
+          "hugepages-2Mi": "0",
+          "memory": "524288Mi",
+          "nvidia.com/gpu": "8",
+          "pods": "750",
+          "socket_worker": "2"
+        },
+        "allocatable": {
+          "cpu": "61",
+          "ephemeral-storage": "3300Gi",
+          "hugepages-1Gi": "0",
+          "hugepages-2Mi": "0",
+          "memory": "515000Mi",
+          "nvidia.com/gpu": "8",
+          "pods": "750"
+        },
+        "clusterClaims": [
+          {
+            "name": "apiserverurl.openshift.io",
+            "value": "https://api.site-berlin-1.example.com:6443"
+          },
+          {
+            "name": "consoleurl.cluster.open-cluster-management.io",
+            "value": "https://console-openshift-console.apps.site-berlin-1.example.com"
+          },
+          {
+            "name": "controlplanetopology.openshift.io",
+            "value": "HighlyAvailable"
+          },
+          {
+            "name": "id.k8s.io",
+            "value": "5e6f7a8b-9c0d-4e1f-a2b3-c4d5e6f7a8b9"
+          },
+          {
+            "name": "id.openshift.io",
+            "value": "5e6f7a8b-9c0d-4e1f-a2b3-c4d5e6f7a8b9"
+          },
+          {
+            "name": "infrastructure.openshift.io",
+            "value": "{\"infraName\": \"site-berlin-1-5e6f7\"}"
+          },
+          {
+            "name": "kubeversion.open-cluster-management.io",
+            "value": "v1.35.6"
+          },
+          {
+            "name": "oauthredirecturis.openshift.io",
+            "value": "https://oauth.site-berlin-1.example.com:6443/oauth/token/implicit"
+          },
+          {
+            "name": "platform.open-cluster-management.io",
+            "value": "BareMetal"
+          },
+          {
+            "name": "product.open-cluster-management.io",
+            "value": "OpenShift"
+          },
+          {
+            "name": "schedulable.open-cluster-management.io",
+            "value": "true"
+          },
+          {
+            "name": "version.openshift.io",
+            "value": "4.22.15"
+          }
+        ]
+      }
+    },
+    {
+      "cluster": "site-berlin-1",
+      "at": "1m10s",
+      "event": "imported"
+    },
+    {
+      "cluster": "site-berlin-1",
+      "at": "1m30s",
+      "event": "addons-available",
+      "addons": [
+        "work-manager",
+        "cluster-proxy",
+        "managed-serviceaccount"
+      ]
+    },
+    {
+      "cluster": "site-berlin-1",
+      "at": "2m10s",
+      "event": "addons-available"
+    },
+    {
+      "cluster": "site-madrid-1",
+      "at": "5m0s",
+      "event": "lease-recovered"
+    },
+    {
+      "cluster": "edge-lyon-2",
+      "at": "30s",
+      "event": "detached"
+    }
+  ]
+}
