@@ -376,6 +376,28 @@ func TestUpdateCluster(t *testing.T) {
 		}
 	})
 
+	t.Run("labels without spec or mask keep hubAcceptsClient", func(t *testing.T) {
+		t.Parallel()
+		server := mustClustersServer(t, newManagedClusterClient(
+			managedCluster("cluster-a", map[string]string{"environment": "production"}, true),
+		))
+		got, err := server.Update(context.Background(), &aigridv1.ClustersUpdateRequest{
+			Object: &aigridv1.ManagedCluster{
+				Id:       "cluster-a",
+				Metadata: &aigridv1.Metadata{Labels: map[string]string{"ai-grid/enabled": "true"}},
+			},
+		})
+		if err != nil {
+			t.Fatalf("Update() error = %v", err)
+		}
+		if got.GetObject().GetMetadata().GetLabels()["ai-grid/enabled"] != "true" {
+			t.Fatalf("labels = %v", got.GetObject().GetMetadata().GetLabels())
+		}
+		if !got.GetObject().GetSpec().GetHubAcceptsClient() {
+			t.Fatal("hubAcceptsClient = false, want true: a request without spec must not change it")
+		}
+	})
+
 	t.Run("not found", func(t *testing.T) {
 		t.Parallel()
 		server := mustClustersServer(t, newManagedClusterClient())
