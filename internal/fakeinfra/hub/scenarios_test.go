@@ -227,3 +227,29 @@ func TestReconcileLeavesSettledClustersAlone(t *testing.T) {
 		}
 	}
 }
+
+// TestScenarioSkipsARecreatedCluster: an event belongs to the fixture
+// object, not to whatever later carries its name.
+func TestScenarioSkipsARecreatedCluster(t *testing.T) {
+	fx := testFixtures()
+	fx.Clusters[1].Finalizers = nil // site-a, so DELETE removes it at once
+	fx.Scenarios = []ScenarioEvent{{Cluster: "site-a", At: Duration(10 * time.Second), Event: EventLeaseLost}}
+	th := startHub(t, fx)
+	client := th.client(t, testToken)
+	ctx := context.Background()
+	if err := client.Delete(ctx, "site-a", metav1.DeleteOptions{}); err != nil {
+		t.Fatalf("Delete() error = %v", err)
+	}
+	if _, err := client.Create(ctx, newObject("site-a", true, nil), metav1.CreateOptions{}); err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	before := getCluster(t, th, "site-a")
+	th.clock.Advance(time.Minute)
+	after := getCluster(t, th, "site-a")
+	if after.GetResourceVersion() != before.GetResourceVersion() {
+		t.Fatalf("recreated cluster written by the old cluster's event: rv %s -> %s", before.GetResourceVersion(), after.GetResourceVersion())
+	}
+	if _, found := conditionsOf(t, after)[CondAvailable]; found {
+		t.Fatal("recreated cluster got the old cluster's lease-lost event")
+	}
+}
