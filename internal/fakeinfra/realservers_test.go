@@ -1,0 +1,223 @@
+package fakeinfra_test
+
+// Real code, fake infrastructure: the backend's own servers.NewClustersServer
+// and servers.NewTenantsServer, with its own dynamic client and its own
+// keycloak.New client, against the fakes seeded from fixtures/default.
+
+import (
+	"context"
+	"crypto/tls"
+	"log/slog"
+	"net"
+	"net/http"
+	"net/http/httptest"
+	"path/filepath"
+	"slices"
+	"testing"
+
+	aigridv1 "github.com/osac-project/ai-grid-provider-backend/gen/ai_grid/v1"
+	"github.com/osac-project/ai-grid-provider-backend/internal/fakeinfra/devserve"
+	"github.com/osac-project/ai-grid-provider-backend/internal/fakeinfra/hub"
+	fakekeycloak "github.com/osac-project/ai-grid-provider-backend/internal/fakeinfra/keycloak"
+	"github.com/osac-project/ai-grid-provider-backend/internal/keycloak"
+	"github.com/osac-project/ai-grid-provider-backend/internal/servers"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/types/known/fieldmaskpb"
+	"k8s.io/client-go/dynamic"
+	"k8s.io/client-go/rest"
+	"k8s.io/client-go/tools/clientcmd"
+)
+
+var fixturesDir = filepath.Join("..", "..", "fixtures", "default")
+
+func startHub(t *testing.T) (*hub.Hub, *httptest.Server) {
+	t.Helper()
+	fx, err := hub.LoadFixtures(fixturesDir)
+	if err != nil {
+		t.Fatalf("hub.LoadFixtures() error = %v", err)
+	}
+	h, err := hub.New(fx, hub.WithLogger(slog.New(slog.DiscardHandler)))
+	if err != nil {
+		t.Fatalf("hub.New() error = %v", err)
+	}
+	srv := httptest.NewServer(h.Handler())
+	t.Cleanup(srv.Close)
+	return h, srv
+}
+
+func clustersServer(t *testing.T, cfg *rest.Config) *servers.ClustersServer {
+	t.Helper()
+	cfg.QPS, cfg.Burst = 1000, 1000
+	client, err := dynamic.NewForConfig(cfg)
+	if err != nil {
+		t.Fatalf("dynamic.NewForConfig() error = %v", err)
+	}
+	s, err := servers.NewClustersServer().SetLogger(slog.New(slog.DiscardHandler)).SetDynamicClient(client).Build()
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+	return s
+}
+
+func TestRealClustersServerOnFakeHub(t *testing.T) {
+	h, srv := startHub(t)
+	s := clustersServer(t, &rest.Config{Host: srv.URL, BearerToken: h.ServiceAccountToken()})
+	ctx := context.Background()
+
+	list, err := s.List(ctx, &aigridv1.ClustersListRequest{})
+	if err != nil {
+		t.Fatalf("List() error = %v", err)
+	}
+	var ids []string
+	for _, c := range list.GetItems() {
+		ids = append(ids, c.GetId())
+	}
+	want := []string{"edge-lyon-2", "local-cluster", "site-ashburn-1", "site-berlin-1", "site-dublin-1", "site-frankfurt-1", "site-lisbon-1", "site-madrid-1", "site-oslo-1", "site-paris-1"}
+	if list.GetTotal() != 10 || !slices.Equal(ids, want) {
+		t.Fatalf("List() = %d %v", list.GetTotal(), ids)
+	}
+
+	got, err := s.Get(ctx, &aigridv1.ClustersGetRequest{Id: "site-paris-1"})
+	if err != nil {
+		t.Fatalf("Get() error = %v", err)
+	}
+	paris := got.GetObject()
+	if !paris.GetStatus().GetAvailable() || paris.GetStatus().GetAvailableCondition() != "True" || !paris.GetSpec().GetHubAcceptsClient() ||
+		paris.GetMetadata().GetLabels()["location"] != "paris" || paris.GetMetadata().GetAnnotations()["ai-grid/site-name"] != "Paris DC1" {
+		t.Fatalf("Get(site-paris-1) = %v", paris)
+	}
+	madrid, _ := s.Get(ctx, &aigridv1.ClustersGetRequest{Id: "site-madrid-1"})
+	if madrid.GetObject().GetStatus().GetAvailableCondition() != "Unknown" {
+		t.Fatalf("site-madrid-1 status = %v", madrid.GetObject().GetStatus())
+	}
+	lyon, _ := s.Get(ctx, &aigridv1.ClustersGetRequest{Id: "edge-lyon-2"})
+	if lyon.GetObject().GetMetadata().GetDeletionTimestamp() == nil {
+		t.Fatal("edge-lyon-2 has no deletion timestamp")
+	}
+	if _, err := s.Get(ctx, &aigridv1.ClustersGetRequest{Id: "missing"}); status.Code(err) != codes.NotFound {
+		t.Fatalf("Get(missing) error = %v, want NotFound", err)
+	}
+
+	updated, err := s.Update(ctx, &aigridv1.ClustersUpdateRequest{
+		Object:     &aigridv1.ManagedCluster{Id: "site-oslo-1", Metadata: &aigridv1.Metadata{Labels: map[string]string{"ai-grid/enabled": "true"}}},
+		UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"metadata.labels"}},
+	})
+	if err != nil {
+		t.Fatalf("Update() error = %v", err)
+	}
+	labels := updated.GetObject().GetMetadata().GetLabels()
+	if labels["ai-grid/enabled"] != "true" || labels["name"] != "site-oslo-1" || labels["cluster.open-cluster-management.io/clusterset"] != "default" {
+		t.Fatalf("Update() labels = %v", labels)
+	}
+	again, _ := s.Get(ctx, &aigridv1.ClustersGetRequest{Id: "site-oslo-1"})
+	if again.GetObject().GetMetadata().GetLabels()["ai-grid/enabled"] != "true" {
+		t.Fatal("update not stored")
+	}
+	if _, err := s.Update(ctx, &aigridv1.ClustersUpdateRequest{Object: &aigridv1.ManagedCluster{Id: "missing"}}); status.Code(err) != codes.NotFound {
+		t.Fatalf("Update(missing) error = %v, want NotFound", err)
+	}
+
+	if _, err := s.Create(ctx, &aigridv1.ClustersCreateRequest{Object: &aigridv1.ManagedCluster{Id: "site-paris-1"}}); status.Code(err) != codes.AlreadyExists {
+		t.Fatalf("Create(existing) error = %v, want AlreadyExists", err)
+	}
+	created, err := s.Create(ctx, &aigridv1.ClustersCreateRequest{Object: &aigridv1.ManagedCluster{Id: "site-rome-1", Spec: &aigridv1.ManagedClusterSpec{HubAcceptsClient: true}}})
+	if err != nil || created.GetObject().GetMetadata().GetCreationTimestamp() == nil {
+		t.Fatalf("Create() = %v, %v", created, err)
+	}
+	// The hub's controllers keep a deleted cluster detaching for a while.
+	if _, err := s.Delete(ctx, &aigridv1.ClustersDeleteRequest{Id: "site-rome-1"}); err != nil {
+		t.Fatalf("Delete() error = %v", err)
+	}
+	rome, err := s.Get(ctx, &aigridv1.ClustersGetRequest{Id: "site-rome-1"})
+	if err != nil || rome.GetObject().GetMetadata().GetDeletionTimestamp() == nil {
+		t.Fatalf("Get(deleted) = %v, %v", rome, err)
+	}
+
+	// A token the hub rejects reaches the backend as PermissionDenied.
+	denied := clustersServer(t, &rest.Config{Host: srv.URL, BearerToken: "expired-token"})
+	if _, err := denied.Get(ctx, &aigridv1.ClustersGetRequest{Id: "site-paris-1"}); status.Code(err) != codes.PermissionDenied {
+		t.Fatalf("Get(expired token) error = %v, want PermissionDenied", err)
+	}
+}
+
+// TestRealClustersServerThroughKubeconfig goes the way cmd/ai-grid-provider-backend
+// goes: clientcmd.BuildConfigFromFlags on the kubeconfig ai-grid-fake-infra
+// writes, against the hub on its TLS-and-plain listener.
+func TestRealClustersServerThroughKubeconfig(t *testing.T) {
+	fx, err := hub.LoadFixtures(fixturesDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h, err := hub.New(fx, hub.WithLogger(slog.New(slog.DiscardHandler)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cert, caPEM, err := devserve.SelfSignedCert("127.0.0.1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	inner, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	l := devserve.NewDualListener(inner, &tls.Config{Certificates: []tls.Certificate{cert}, MinVersion: tls.VersionTLS12})
+	srv := &http.Server{Handler: h.Handler()}
+	go func() { _ = srv.Serve(l) }()
+	t.Cleanup(func() { _ = srv.Close() })
+
+	path := filepath.Join(t.TempDir(), "kubeconfig")
+	if err := devserve.WriteKubeconfig(path, "https://"+l.Addr().String(), caPEM, h.ServiceAccountToken()); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := clientcmd.BuildConfigFromFlags("", path)
+	if err != nil {
+		t.Fatalf("BuildConfigFromFlags() error = %v", err)
+	}
+	list, err := clustersServer(t, cfg).List(context.Background(), &aigridv1.ClustersListRequest{})
+	if err != nil || list.GetTotal() != 10 {
+		t.Fatalf("List() through kubeconfig = %v, %v", list, err)
+	}
+}
+
+func TestRealTenantsServerOnFakeKeycloak(t *testing.T) {
+	orgs, err := fakekeycloak.LoadFixtures(fixturesDir)
+	if err != nil {
+		t.Fatalf("keycloak.LoadFixtures() error = %v", err)
+	}
+	kc, err := fakekeycloak.New(fakekeycloak.Config{AdminRealm: "master", Realm: "ai-grid", Username: "admin", Password: "admin", Logger: slog.New(slog.DiscardHandler)}, orgs)
+	if err != nil {
+		t.Fatalf("keycloak fake New() error = %v", err)
+	}
+	srv := httptest.NewServer(kc.Handler())
+	t.Cleanup(srv.Close)
+
+	tenants := func(password string) *servers.TenantsServer {
+		s, err := servers.NewTenantsServer().SetLogger(slog.New(slog.DiscardHandler)).SetOrganizationLister(keycloak.New(keycloak.Config{
+			BaseURL: srv.URL, AdminRealm: "master", Realm: "ai-grid", Username: "admin", Password: password, HTTPClient: srv.Client(),
+		})).Build()
+		if err != nil {
+			t.Fatalf("Build() error = %v", err)
+		}
+		return s
+	}
+	list, err := tenants("admin").List(context.Background(), &aigridv1.TenantsListRequest{})
+	if err != nil {
+		t.Fatalf("List() error = %v", err)
+	}
+	var names []string
+	for _, tenant := range list.GetItems() {
+		names = append(names, tenant.GetMetadata().GetName())
+	}
+	want := []string{"acme-robotics", "globex-research", "initech-labs", "umbrella-biotech", "vandelay-industries", "wayne-aerospace"}
+	if list.GetTotal() != 6 || !slices.Equal(names, want) {
+		t.Fatalf("List() = %d %v", list.GetTotal(), names)
+	}
+	acme := list.GetItems()[0]
+	if acme.GetId() != "3f1c9a72-5b6e-4d2a-8c01-2d3e4f5a6b7c" || !slices.Equal(acme.GetSpec().GetDomains(), []string{"acme-robotics.example.com", "acme.example.org"}) {
+		t.Fatalf("acme-robotics = %v", acme)
+	}
+	if _, err := tenants("wrong").List(context.Background(), &aigridv1.TenantsListRequest{}); err == nil {
+		t.Fatal("List() with a wrong password succeeded")
+	}
+}
