@@ -1,0 +1,157 @@
+{
+  "_comment": "ai_grid.v1.Model in protojson: the PoC's three catalog models (src/services/subscriptions/fixtures.ts at 62319b8) with the PoC's display names and no description, as the PoC's Git backend lists them. Each is a CPU model on the hub (the CPU template preset), created in the past so it reads Ready at start, with no placement, so it shows no locations, as in the PoC. Deploying a model in the console adds one with locations. All values are fictional.",
+  "bindings": {
+    "ai-grid-models": [
+      "global"
+    ]
+  },
+  "models": [
+    {
+      "name": "granite-3-8b",
+      "metadata": {
+        "namespace": "ai-grid-models",
+        "uid": "b2c3d4e5-0001-4a5b-8c6d-0e1f2a3b4c5d",
+        "resourceVersion": "48700201",
+        "generation": "1",
+        "creationTimestamp": "2026-10-01T10:00:00Z",
+        "annotations": {
+          "openshift.io/display-name": "Granite 3.3 8B Instruct"
+        }
+      },
+      "spec": {
+        "model": {
+          "uri": "hf://example-org/granite-3-8b",
+          "name": "example-org/granite-3-8b"
+        },
+        "replicas": 1,
+        "baseRefs": [
+          "v3-6-0-kserve-config-llm-template-cpu"
+        ],
+        "router": {
+          "gatewayRefs": [
+            {
+              "name": "openshift-ai-inference",
+              "namespace": "openshift-ingress"
+            }
+          ],
+          "managedRoute": true,
+          "scheduler": true
+        },
+        "main": {
+          "requests": {
+            "cpu": "4",
+            "memory": "16Gi"
+          },
+          "limits": {
+            "cpu": "8",
+            "memory": "24Gi"
+          },
+          "env": [
+            {
+              "name": "VLLM_CPU_KVCACHE_SPACE",
+              "value": "8"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "llama-3-70b",
+      "metadata": {
+        "namespace": "ai-grid-models",
+        "uid": "b2c3d4e5-0002-4a5b-8c6d-0e1f2a3b4c5d",
+        "resourceVersion": "48700202",
+        "generation": "1",
+        "creationTimestamp": "2026-10-01T10:00:00Z",
+        "annotations": {
+          "openshift.io/display-name": "Llama 3.3 70B Instruct"
+        }
+      },
+      "spec": {
+        "model": {
+          "uri": "hf://example-org/llama-3-70b",
+          "name": "example-org/llama-3-70b"
+        },
+        "replicas": 1,
+        "baseRefs": [
+          "v3-6-0-kserve-config-llm-template-cpu"
+        ],
+        "router": {
+          "gatewayRefs": [
+            {
+              "name": "openshift-ai-inference",
+              "namespace": "openshift-ingress"
+            }
+          ],
+          "managedRoute": true,
+          "scheduler": true
+        },
+        "main": {
+          "requests": {
+            "cpu": "4",
+            "memory": "16Gi"
+          },
+          "limits": {
+            "cpu": "8",
+            "memory": "24Gi"
+          },
+          "env": [
+            {
+              "name": "VLLM_CPU_KVCACHE_SPACE",
+              "value": "8"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "granite-research",
+      "metadata": {
+        "namespace": "ai-grid-models",
+        "uid": "b2c3d4e5-0003-4a5b-8c6d-0e1f2a3b4c5d",
+        "resourceVersion": "48700203",
+        "generation": "1",
+        "creationTimestamp": "2026-10-01T10:00:00Z",
+        "annotations": {
+          "openshift.io/display-name": "Granite research endpoint"
+        }
+      },
+      "spec": {
+        "model": {
+          "uri": "hf://example-org/granite-research",
+          "name": "example-org/granite-research"
+        },
+        "replicas": 1,
+        "baseRefs": [
+          "v3-6-0-kserve-config-llm-template-cpu"
+        ],
+        "router": {
+          "gatewayRefs": [
+            {
+              "name": "openshift-ai-inference",
+              "namespace": "openshift-ingress"
+            }
+          ],
+          "managedRoute": true,
+          "scheduler": true
+        },
+        "main": {
+          "requests": {
+            "cpu": "4",
+            "memory": "16Gi"
+          },
+          "limits": {
+            "cpu": "8",
+            "memory": "24Gi"
+          },
+          "env": [
+            {
+              "name": "VLLM_CPU_KVCACHE_SPACE",
+              "value": "8"
+            }
+          ]
+        }
+      }
+    }
+  ]
+}

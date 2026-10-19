@@ -1,0 +1,182 @@
+{
+  "_comment": "ai_grid.v1.Model in protojson: the subset of a KServe LLMInferenceService (serving.kserve.io/v1alpha2) the console writes, plus an optional placement (an ACM Placement and ManifestWorkReplicaSet named model-<name>, labelled ai-grid/model=<name>; generated works are named model-<name><5 characters>, no separator). Shapes follow the hub instance in mock/research/models-maas.md 2.1 (baseRefs, model.uri/name, replicas, router with the product-default openshift-ai-inference Gateway, a managed route and the scheduler, a main container with resources and env). status is derived by the server on every read and must not be written here: the LLMInferenceService conditions from the creation time and the lifecycle in bff/internal/fakebackend/kserve.go, the Placement decisions from the current clusters, the works from the rollout. A model without creationTimestamp is created when the fake starts, so its rollout can be watched live. Five fictional models: tiny-llm, a Ready CPU model on the hub; granite-8b-instruct, placed (All) on the enrolled and provisioned sites with the rollout complete on site-paris-1 at start; site-madrid-1 joins when its lease recovers at 300s (scenarios.json), the model reads pending until madrid's work is Ready at 345s and is then Ready on two sites; mistral-7b-instruct, a live Progressive rollout one OpenShift spoke at a time (maxConcurrency 1, minSuccessTime 30s) in cluster-name order: site-frankfurt-1 at start (Ready at 45s, its slot frees at 75s), site-berlin-1 (joins at 20s) at 75s, site-paris-1 at 150s, Ready at 195s, then site-madrid-1 at 300s, which sends it back to pending until 345s; llama-3-70b, failed on a preset this hub does not have (ConfigNotFound); codellama-13b, whose placement selects no cluster (NoManagedClusterMatched, PlacementVerified and ManifestworkApplied PlacementDecisionEmpty, PlacementRolledOut Complete for the empty decision). bindings names the ManagedClusterSets bound into each model namespace; a namespace not listed is bound to global, an empty list is a namespace without a ManagedClusterSetBinding (PlacementSatisfied=False/NoManagedClusterSetBindings). All values are fictional.",
+  "bindings": {
+    "ai-grid-models": ["global"],
+    "unbound-models": []
+  },
+  "models": [
+    {
+      "name": "tiny-llm",
+      "metadata": {
+        "namespace": "ai-grid-models",
+        "uid": "a1b2c3d4-0001-4a5b-8c6d-0e1f2a3b4c5d",
+        "resourceVersion": "48700101",
+        "generation": "1",
+        "creationTimestamp": "2026-10-01T10:00:00Z",
+        "labels": { "ai-grid/family": "tiny" },
+        "annotations": {
+          "openshift.io/display-name": "Tiny LLM (CPU)",
+          "openshift.io/description": "Small CPU-only model served on the hub itself for smoke tests."
+        }
+      },
+      "spec": {
+        "model": { "uri": "hf://example-org/tiny-llm", "name": "example-org/tiny-llm" },
+        "replicas": 1,
+        "baseRefs": ["v3-6-0-kserve-config-llm-template-cpu"],
+        "router": {
+          "gatewayRefs": [{ "name": "openshift-ai-inference", "namespace": "openshift-ingress" }],
+          "managedRoute": true,
+          "scheduler": true
+        },
+        "main": {
+          "requests": { "cpu": "4", "memory": "16Gi" },
+          "limits": { "cpu": "8", "memory": "24Gi" },
+          "env": [{ "name": "VLLM_CPU_KVCACHE_SPACE", "value": "8" }]
+        }
+      }
+    },
+    {
+      "name": "granite-8b-instruct",
+      "metadata": {
+        "namespace": "ai-grid-models",
+        "uid": "a1b2c3d4-0002-4a5b-8c6d-0e1f2a3b4c5d",
+        "resourceVersion": "48760230",
+        "generation": "1",
+        "creationTimestamp": "2026-10-10T08:00:00Z",
+        "labels": { "ai-grid/family": "granite" },
+        "annotations": {
+          "openshift.io/display-name": "Granite 8B Instruct",
+          "openshift.io/description": "Served on every enrolled and provisioned site."
+        }
+      },
+      "spec": {
+        "model": { "uri": "hf://example-org/granite-8b-instruct", "name": "example-org/granite-8b-instruct" },
+        "replicas": 1,
+        "baseRefs": ["v3-6-0-kserve-config-llm-template"],
+        "router": {
+          "gatewayRefs": [{ "name": "openshift-ai-inference", "namespace": "openshift-ingress" }],
+          "managedRoute": true,
+          "scheduler": true
+        },
+        "main": {
+          "image": "quay.io/example/vllm-cuda:v0.11.0",
+          "requests": { "cpu": "8", "memory": "32Gi", "nvidia.com/gpu": "1" },
+          "limits": { "nvidia.com/gpu": "1" }
+        },
+        "placement": {
+          "clusterSets": ["global"],
+          "labelSelector": { "matchLabels": { "ai-grid/enabled": "true", "ai-grid/provisioned": "true" } }
+        },
+        "rollout": { "strategy": "ROLLOUT_STRATEGY_ALL", "progressDeadline": "15m" }
+      }
+    },
+    {
+      "name": "mistral-7b-instruct",
+      "metadata": {
+        "namespace": "ai-grid-models",
+        "uid": "a1b2c3d4-0003-4a5b-8c6d-0e1f2a3b4c5d",
+        "labels": { "ai-grid/family": "mistral" },
+        "annotations": {
+          "openshift.io/display-name": "Mistral 7B Instruct",
+          "openshift.io/description": "Rolled out to every OpenShift spoke one site at a time."
+        }
+      },
+      "spec": {
+        "model": { "uri": "oci://registry.example.com/models/mistral-7b-instruct:v0.3", "name": "example-org/mistral-7b-instruct" },
+        "replicas": 2,
+        "baseRefs": ["v3-6-0-kserve-config-llm-template"],
+        "router": {
+          "gatewayRefs": [{ "name": "openshift-ai-inference", "namespace": "openshift-ingress" }],
+          "managedRoute": true,
+          "scheduler": true
+        },
+        "main": {
+          "image": "quay.io/example/vllm-cuda:v0.11.0",
+          "requests": { "cpu": "8", "memory": "32Gi", "nvidia.com/gpu": "1" },
+          "limits": { "nvidia.com/gpu": "1" }
+        },
+        "placement": {
+          "clusterSets": ["global"],
+          "labelSelector": {
+            "matchLabels": { "vendor": "OpenShift" },
+            "matchExpressions": [{ "key": "local-cluster", "operator": "NotIn", "values": ["true"] }]
+          }
+        },
+        "rollout": {
+          "strategy": "ROLLOUT_STRATEGY_PROGRESSIVE",
+          "maxConcurrency": "1",
+          "maxFailures": "0",
+          "progressDeadline": "15m",
+          "minSuccessTime": "30s"
+        }
+      }
+    },
+    {
+      "name": "llama-3-70b",
+      "metadata": {
+        "namespace": "ai-grid-models",
+        "uid": "a1b2c3d4-0004-4a5b-8c6d-0e1f2a3b4c5d",
+        "resourceVersion": "48790412",
+        "generation": "1",
+        "creationTimestamp": "2026-10-12T16:30:00Z",
+        "labels": { "ai-grid/family": "llama" },
+        "annotations": {
+          "openshift.io/display-name": "Llama 3 70B",
+          "openshift.io/description": "References a TPU preset this hub does not have."
+        }
+      },
+      "spec": {
+        "model": { "uri": "hf://example-org/llama-3-70b", "name": "example-org/llama-3-70b" },
+        "replicas": 1,
+        "baseRefs": ["v3-6-0-kserve-config-llm-template-tpu"],
+        "router": {
+          "gatewayRefs": [{ "name": "openshift-ai-inference", "namespace": "openshift-ingress" }],
+          "managedRoute": true,
+          "scheduler": true
+        },
+        "main": {
+          "requests": { "cpu": "16", "memory": "160Gi", "nvidia.com/gpu": "4" },
+          "limits": { "nvidia.com/gpu": "4" }
+        }
+      }
+    },
+    {
+      "name": "codellama-13b",
+      "metadata": {
+        "namespace": "ai-grid-models",
+        "uid": "a1b2c3d4-0005-4a5b-8c6d-0e1f2a3b4c5d",
+        "resourceVersion": "48801577",
+        "generation": "1",
+        "creationTimestamp": "2026-10-14T09:00:00Z",
+        "labels": { "ai-grid/family": "codellama" },
+        "annotations": {
+          "openshift.io/display-name": "Code Llama 13B",
+          "openshift.io/description": "Placed in a region with no enrolled site yet."
+        }
+      },
+      "spec": {
+        "model": { "uri": "s3://models-example/codellama-13b/", "name": "example-org/codellama-13b" },
+        "replicas": 1,
+        "baseRefs": ["v3-6-0-kserve-config-llm-template"],
+        "router": {
+          "gatewayRefs": [{ "name": "openshift-ai-inference", "namespace": "openshift-ingress" }],
+          "managedRoute": true,
+          "scheduler": true
+        },
+        "main": {
+          "image": "quay.io/example/vllm-cuda:v0.11.0",
+          "requests": { "cpu": "8", "memory": "48Gi", "nvidia.com/gpu": "2" },
+          "limits": { "nvidia.com/gpu": "2" }
+        },
+        "placement": {
+          "clusterSets": ["global"],
+          "labelSelector": {
+            "matchLabels": { "ai-grid/enabled": "true" },
+            "matchExpressions": [{ "key": "ai-grid/region", "operator": "In", "values": ["asia-east"] }]
+          }
+        },
+        "rollout": { "strategy": "ROLLOUT_STRATEGY_ALL" }
+      }
+    }
+  ]
+}

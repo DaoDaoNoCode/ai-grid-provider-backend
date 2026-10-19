@@ -1,0 +1,175 @@
+{
+  "_comment": "ai_grid.v1.Subscription and AuthPolicy in protojson: the PoC's subscriptions and authorization policies (src/services/subscriptions/fixtures.ts at 62319b8), on PR 12's fixture models. engineering belongs to the fixture organization acme-robotics instead of the PoC's osac. No fixture stores a phase or conditions: the fake derives them on every read from the creation time, the scenario clock and the models (mock/research/models-maas.md 3.5, 8.2). engineering (granite-8b-instruct) reads Active; data-science (granite-8b-instruct and the missing retired-llm) reads Degraded; research (retired-llm only) reads Failed; onboarding has no createTime, so it is created when the fake starts and plays no phase (before the first reconcile), Degraded (its TokenRateLimitPolicy not yet accepted), then Active. A model reference's namespace defaults to ai-grid-models, an auth policy's as well. While a subscription or policy references a model, DeleteModel refuses it. The policies were not created by the Subscriptions service, so deleting a subscription leaves its policy, as in the PoC.",
+  "subscriptions": [
+    {
+      "name": "engineering",
+      "displayName": "Engineering",
+      "description": "Production models for the engineering team.",
+      "priority": 100,
+      "owner": {
+        "groups": [
+          "engineering"
+        ]
+      },
+      "modelRefs": [
+        {
+          "name": "granite-8b-instruct",
+          "namespace": "ai-grid-models",
+          "displayName": "Granite 8B Instruct",
+          "description": "Enterprise language model",
+          "tokenRateLimits": [
+            {
+              "limit": "100000",
+              "window": "1h"
+            },
+            {
+              "limit": "10000",
+              "window": "1m"
+            }
+          ],
+          "billingRatePerToken": "0.000002"
+        }
+      ],
+      "tokenMetadata": {
+        "organizationId": "3f1c9a72-5b6e-4d2a-8c01-2d3e4f5a6b7c",
+        "costCenter": "engineering",
+        "labels": {
+          "environment": "production"
+        }
+      },
+      "resourceVersion": "1",
+      "createTime": "2026-09-01T09:00:00Z"
+    },
+    {
+      "name": "data-science",
+      "displayName": "Data science",
+      "description": "Shared model access for data scientists.",
+      "priority": 10,
+      "owner": {
+        "groups": [
+          "data-scientists",
+          "platform-admins"
+        ]
+      },
+      "modelRefs": [
+        {
+          "name": "granite-8b-instruct",
+          "namespace": "ai-grid-models",
+          "displayName": "Granite 8B Instruct",
+          "description": "Enterprise language model",
+          "tokenRateLimits": [
+            {
+              "limit": "50000",
+              "window": "1h"
+            }
+          ]
+        },
+        {
+          "name": "retired-llm",
+          "displayName": "Retired LLM",
+          "description": "A model that was deleted",
+          "tokenRateLimits": [
+            {
+              "limit": "50000",
+              "window": "1h"
+            }
+          ]
+        }
+      ],
+      "resourceVersion": "1",
+      "createTime": "2026-09-02T09:00:00Z"
+    },
+    {
+      "name": "research",
+      "displayName": "Research",
+      "description": "Experimental endpoint access.",
+      "priority": 0,
+      "owner": {
+        "groups": [
+          "research"
+        ]
+      },
+      "modelRefs": [
+        {
+          "name": "retired-llm",
+          "displayName": "Retired LLM",
+          "tokenRateLimits": [
+            {
+              "limit": "1000",
+              "window": "1h"
+            }
+          ]
+        }
+      ],
+      "resourceVersion": "1",
+      "createTime": "2026-09-03T09:00:00Z"
+    },
+    {
+      "name": "onboarding",
+      "displayName": "Onboarding",
+      "description": "Trial access for new teams.",
+      "priority": 1,
+      "owner": {
+        "groups": [
+          "onboarding"
+        ]
+      },
+      "modelRefs": [
+        {
+          "name": "tiny-llm",
+          "displayName": "Tiny LLM (CPU)",
+          "description": "Small CPU model for notebooks",
+          "tokenRateLimits": [
+            {
+              "limit": "1000",
+              "window": "1m"
+            }
+          ]
+        }
+      ],
+      "resourceVersion": "1"
+    }
+  ],
+  "authPolicies": [
+    {
+      "name": "engineering-policy",
+      "displayName": "Engineering policy",
+      "modelRefs": [
+        {
+          "name": "granite-8b-instruct"
+        }
+      ],
+      "subjectGroups": [
+        "engineering"
+      ]
+    },
+    {
+      "name": "data-science-policy",
+      "displayName": "Data science policy",
+      "modelRefs": [
+        {
+          "name": "granite-8b-instruct"
+        },
+        {
+          "name": "retired-llm"
+        }
+      ],
+      "subjectGroups": [
+        "data-scientists",
+        "platform-admins"
+      ]
+    },
+    {
+      "name": "research-policy",
+      "displayName": "Research policy",
+      "modelRefs": [
+        {
+          "name": "retired-llm"
+        }
+      ],
+      "subjectGroups": [
+        "research"
+      ]
+    }
+  ]
+}
