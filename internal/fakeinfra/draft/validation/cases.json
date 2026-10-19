@@ -1,0 +1,2206 @@
+{
+  "_comment": "Validation cases shared by the fake backend (Go) and the frontend (zod). Each case names a schema, an input in the BFF's JSON shape, and the field errors expected (empty when valid): the last message per path, as the PoC keeps (Object.fromEntries over the zod issues). Messages are the PoC's (shared/*-validation.mjs at 62319b8), with 'tenant' read as 'organization'.",
+  "cases": [
+    {
+      "schema": "organization",
+      "name": "every identity provider field",
+      "input": {
+        "name": "acme-robotics",
+        "domains": [
+          "acme-robotics.example.com",
+          "acme.example.org"
+        ],
+        "identityProvider": {
+          "title": "Acme SSO",
+          "description": "Acme employees sign in here.",
+          "enabled": true,
+          "config": {
+            "clientId": "ai-grid",
+            "clientSecretSecret": {
+              "name": "acme-oidc-client"
+            },
+            "issuer": "https://sso.acme-robotics.example.com/realms/acme",
+            "authorizationUrl": "https://sso.acme-robotics.example.com/realms/acme/protocol/openid-connect/auth",
+            "tokenUrl": "https://sso.acme-robotics.example.com/realms/acme/protocol/openid-connect/token",
+            "defaultScopes": "openid profile email",
+            "userInfoUrl": "https://sso.acme-robotics.example.com/realms/acme/protocol/openid-connect/userinfo",
+            "jwksUrl": "https://sso.acme-robotics.example.com/realms/acme/protocol/openid-connect/certs",
+            "logoutUrl": "https://sso.acme-robotics.example.com/realms/acme/protocol/openid-connect/logout",
+            "validateSignature": true
+          }
+        }
+      },
+      "fieldErrors": {}
+    },
+    {
+      "schema": "organization",
+      "name": "name with capitals",
+      "input": {
+        "name": "Acme",
+        "domains": [
+          "acme-robotics.example.com",
+          "acme.example.org"
+        ],
+        "identityProvider": {
+          "title": "Acme SSO",
+          "description": "Acme employees sign in here.",
+          "enabled": true,
+          "config": {
+            "clientId": "ai-grid",
+            "clientSecretSecret": {
+              "name": "acme-oidc-client"
+            },
+            "issuer": "https://sso.acme-robotics.example.com/realms/acme",
+            "authorizationUrl": "https://sso.acme-robotics.example.com/realms/acme/protocol/openid-connect/auth",
+            "tokenUrl": "https://sso.acme-robotics.example.com/realms/acme/protocol/openid-connect/token",
+            "defaultScopes": "openid profile email",
+            "userInfoUrl": "https://sso.acme-robotics.example.com/realms/acme/protocol/openid-connect/userinfo",
+            "jwksUrl": "https://sso.acme-robotics.example.com/realms/acme/protocol/openid-connect/certs",
+            "logoutUrl": "https://sso.acme-robotics.example.com/realms/acme/protocol/openid-connect/logout",
+            "validateSignature": true
+          }
+        }
+      },
+      "fieldErrors": {
+        "name": "Use lowercase letters, numbers, and hyphens."
+      }
+    },
+    {
+      "schema": "organization",
+      "name": "empty name",
+      "input": {
+        "name": "",
+        "domains": [
+          "acme-robotics.example.com",
+          "acme.example.org"
+        ],
+        "identityProvider": {
+          "title": "Acme SSO",
+          "description": "Acme employees sign in here.",
+          "enabled": true,
+          "config": {
+            "clientId": "ai-grid",
+            "clientSecretSecret": {
+              "name": "acme-oidc-client"
+            },
+            "issuer": "https://sso.acme-robotics.example.com/realms/acme",
+            "authorizationUrl": "https://sso.acme-robotics.example.com/realms/acme/protocol/openid-connect/auth",
+            "tokenUrl": "https://sso.acme-robotics.example.com/realms/acme/protocol/openid-connect/token",
+            "defaultScopes": "openid profile email",
+            "userInfoUrl": "https://sso.acme-robotics.example.com/realms/acme/protocol/openid-connect/userinfo",
+            "jwksUrl": "https://sso.acme-robotics.example.com/realms/acme/protocol/openid-connect/certs",
+            "logoutUrl": "https://sso.acme-robotics.example.com/realms/acme/protocol/openid-connect/logout",
+            "validateSignature": true
+          }
+        }
+      },
+      "fieldErrors": {
+        "name": "Use lowercase letters, numbers, and hyphens."
+      }
+    },
+    {
+      "schema": "organization",
+      "name": "duplicate domain after trimming and lowercasing",
+      "input": {
+        "name": "acme-robotics",
+        "domains": [
+          "a.example.com",
+          "A.example.com "
+        ],
+        "identityProvider": {
+          "title": "Acme SSO",
+          "description": "Acme employees sign in here.",
+          "enabled": true,
+          "config": {
+            "clientId": "ai-grid",
+            "clientSecretSecret": {
+              "name": "acme-oidc-client"
+            },
+            "issuer": "https://sso.acme-robotics.example.com/realms/acme",
+            "authorizationUrl": "https://sso.acme-robotics.example.com/realms/acme/protocol/openid-connect/auth",
+            "tokenUrl": "https://sso.acme-robotics.example.com/realms/acme/protocol/openid-connect/token",
+            "defaultScopes": "openid profile email",
+            "userInfoUrl": "https://sso.acme-robotics.example.com/realms/acme/protocol/openid-connect/userinfo",
+            "jwksUrl": "https://sso.acme-robotics.example.com/realms/acme/protocol/openid-connect/certs",
+            "logoutUrl": "https://sso.acme-robotics.example.com/realms/acme/protocol/openid-connect/logout",
+            "validateSignature": true
+          }
+        }
+      },
+      "fieldErrors": {
+        "domains": "Domains must be unique."
+      }
+    },
+    {
+      "schema": "organization",
+      "name": "one-label domain",
+      "input": {
+        "name": "acme-robotics",
+        "domains": [
+          "localhost"
+        ],
+        "identityProvider": {
+          "title": "Acme SSO",
+          "description": "Acme employees sign in here.",
+          "enabled": true,
+          "config": {
+            "clientId": "ai-grid",
+            "clientSecretSecret": {
+              "name": "acme-oidc-client"
+            },
+            "issuer": "https://sso.acme-robotics.example.com/realms/acme",
+            "authorizationUrl": "https://sso.acme-robotics.example.com/realms/acme/protocol/openid-connect/auth",
+            "tokenUrl": "https://sso.acme-robotics.example.com/realms/acme/protocol/openid-connect/token",
+            "defaultScopes": "openid profile email",
+            "userInfoUrl": "https://sso.acme-robotics.example.com/realms/acme/protocol/openid-connect/userinfo",
+            "jwksUrl": "https://sso.acme-robotics.example.com/realms/acme/protocol/openid-connect/certs",
+            "logoutUrl": "https://sso.acme-robotics.example.com/realms/acme/protocol/openid-connect/logout",
+            "validateSignature": true
+          }
+        }
+      },
+      "fieldErrors": {
+        "domains.0": "Enter a valid domain, for example example.com."
+      }
+    },
+    {
+      "schema": "organization",
+      "name": "no domains",
+      "input": {
+        "name": "acme-robotics",
+        "domains": [],
+        "identityProvider": {
+          "title": "Acme SSO",
+          "description": "Acme employees sign in here.",
+          "enabled": true,
+          "config": {
+            "clientId": "ai-grid",
+            "clientSecretSecret": {
+              "name": "acme-oidc-client"
+            },
+            "issuer": "https://sso.acme-robotics.example.com/realms/acme",
+            "authorizationUrl": "https://sso.acme-robotics.example.com/realms/acme/protocol/openid-connect/auth",
+            "tokenUrl": "https://sso.acme-robotics.example.com/realms/acme/protocol/openid-connect/token",
+            "defaultScopes": "openid profile email",
+            "userInfoUrl": "https://sso.acme-robotics.example.com/realms/acme/protocol/openid-connect/userinfo",
+            "jwksUrl": "https://sso.acme-robotics.example.com/realms/acme/protocol/openid-connect/certs",
+            "logoutUrl": "https://sso.acme-robotics.example.com/realms/acme/protocol/openid-connect/logout",
+            "validateSignature": true
+          }
+        }
+      },
+      "fieldErrors": {}
+    },
+    {
+      "schema": "organization",
+      "name": "missing client ID",
+      "input": {
+        "name": "acme-robotics",
+        "domains": [
+          "acme-robotics.example.com",
+          "acme.example.org"
+        ],
+        "identityProvider": {
+          "title": "Acme SSO",
+          "description": "Acme employees sign in here.",
+          "enabled": true,
+          "config": {
+            "clientId": "  ",
+            "clientSecretSecret": {
+              "name": "acme-oidc-client"
+            },
+            "issuer": "https://sso.acme-robotics.example.com/realms/acme",
+            "authorizationUrl": "https://sso.acme-robotics.example.com/realms/acme/protocol/openid-connect/auth",
+            "tokenUrl": "https://sso.acme-robotics.example.com/realms/acme/protocol/openid-connect/token",
+            "defaultScopes": "openid profile email",
+            "userInfoUrl": "https://sso.acme-robotics.example.com/realms/acme/protocol/openid-connect/userinfo",
+            "jwksUrl": "https://sso.acme-robotics.example.com/realms/acme/protocol/openid-connect/certs",
+            "logoutUrl": "https://sso.acme-robotics.example.com/realms/acme/protocol/openid-connect/logout",
+            "validateSignature": true
+          }
+        }
+      },
+      "fieldErrors": {
+        "identityProvider.config.clientId": "Client ID is required."
+      }
+    },
+    {
+      "schema": "organization",
+      "name": "ftp issuer",
+      "input": {
+        "name": "acme-robotics",
+        "domains": [
+          "acme-robotics.example.com",
+          "acme.example.org"
+        ],
+        "identityProvider": {
+          "title": "Acme SSO",
+          "description": "Acme employees sign in here.",
+          "enabled": true,
+          "config": {
+            "clientId": "ai-grid",
+            "clientSecretSecret": {
+              "name": "acme-oidc-client"
+            },
+            "issuer": "ftp://sso.example.com",
+            "authorizationUrl": "https://sso.acme-robotics.example.com/realms/acme/protocol/openid-connect/auth",
+            "tokenUrl": "https://sso.acme-robotics.example.com/realms/acme/protocol/openid-connect/token",
+            "defaultScopes": "openid profile email",
+            "userInfoUrl": "https://sso.acme-robotics.example.com/realms/acme/protocol/openid-connect/userinfo",
+            "jwksUrl": "https://sso.acme-robotics.example.com/realms/acme/protocol/openid-connect/certs",
+            "logoutUrl": "https://sso.acme-robotics.example.com/realms/acme/protocol/openid-connect/logout",
+            "validateSignature": true
+          }
+        }
+      },
+      "fieldErrors": {
+        "identityProvider.config.issuer": "Use HTTP or HTTPS."
+      }
+    },
+    {
+      "schema": "organization",
+      "name": "issuer that is not a URL",
+      "input": {
+        "name": "acme-robotics",
+        "domains": [
+          "acme-robotics.example.com",
+          "acme.example.org"
+        ],
+        "identityProvider": {
+          "title": "Acme SSO",
+          "description": "Acme employees sign in here.",
+          "enabled": true,
+          "config": {
+            "clientId": "ai-grid",
+            "clientSecretSecret": {
+              "name": "acme-oidc-client"
+            },
+            "issuer": "sso.example.com",
+            "authorizationUrl": "https://sso.acme-robotics.example.com/realms/acme/protocol/openid-connect/auth",
+            "tokenUrl": "https://sso.acme-robotics.example.com/realms/acme/protocol/openid-connect/token",
+            "defaultScopes": "openid profile email",
+            "userInfoUrl": "https://sso.acme-robotics.example.com/realms/acme/protocol/openid-connect/userinfo",
+            "jwksUrl": "https://sso.acme-robotics.example.com/realms/acme/protocol/openid-connect/certs",
+            "logoutUrl": "https://sso.acme-robotics.example.com/realms/acme/protocol/openid-connect/logout",
+            "validateSignature": true
+          }
+        }
+      },
+      "fieldErrors": {
+        "identityProvider.config.issuer": "Use HTTP or HTTPS."
+      }
+    },
+    {
+      "schema": "organization",
+      "name": "empty token URL",
+      "input": {
+        "name": "acme-robotics",
+        "domains": [
+          "acme-robotics.example.com",
+          "acme.example.org"
+        ],
+        "identityProvider": {
+          "title": "Acme SSO",
+          "description": "Acme employees sign in here.",
+          "enabled": true,
+          "config": {
+            "clientId": "ai-grid",
+            "clientSecretSecret": {
+              "name": "acme-oidc-client"
+            },
+            "issuer": "https://sso.acme-robotics.example.com/realms/acme",
+            "authorizationUrl": "https://sso.acme-robotics.example.com/realms/acme/protocol/openid-connect/auth",
+            "tokenUrl": "",
+            "defaultScopes": "openid profile email",
+            "userInfoUrl": "https://sso.acme-robotics.example.com/realms/acme/protocol/openid-connect/userinfo",
+            "jwksUrl": "https://sso.acme-robotics.example.com/realms/acme/protocol/openid-connect/certs",
+            "logoutUrl": "https://sso.acme-robotics.example.com/realms/acme/protocol/openid-connect/logout",
+            "validateSignature": true
+          }
+        }
+      },
+      "fieldErrors": {
+        "identityProvider.config.tokenUrl": "Use HTTP or HTTPS."
+      }
+    },
+    {
+      "schema": "organization",
+      "name": "invalid secret reference name",
+      "input": {
+        "name": "acme-robotics",
+        "domains": [
+          "acme-robotics.example.com",
+          "acme.example.org"
+        ],
+        "identityProvider": {
+          "title": "Acme SSO",
+          "description": "Acme employees sign in here.",
+          "enabled": true,
+          "config": {
+            "clientId": "ai-grid",
+            "clientSecretSecret": {
+              "name": "Acme_Secret"
+            },
+            "issuer": "https://sso.acme-robotics.example.com/realms/acme",
+            "authorizationUrl": "https://sso.acme-robotics.example.com/realms/acme/protocol/openid-connect/auth",
+            "tokenUrl": "https://sso.acme-robotics.example.com/realms/acme/protocol/openid-connect/token",
+            "defaultScopes": "openid profile email",
+            "userInfoUrl": "https://sso.acme-robotics.example.com/realms/acme/protocol/openid-connect/userinfo",
+            "jwksUrl": "https://sso.acme-robotics.example.com/realms/acme/protocol/openid-connect/certs",
+            "logoutUrl": "https://sso.acme-robotics.example.com/realms/acme/protocol/openid-connect/logout",
+            "validateSignature": true
+          }
+        }
+      },
+      "fieldErrors": {
+        "identityProvider.config.clientSecretSecret.name": "Enter a valid secret reference name."
+      }
+    },
+    {
+      "schema": "organization",
+      "name": "empty secret reference",
+      "input": {
+        "name": "acme-robotics",
+        "domains": [
+          "acme-robotics.example.com",
+          "acme.example.org"
+        ],
+        "identityProvider": {
+          "title": "Acme SSO",
+          "description": "Acme employees sign in here.",
+          "enabled": true,
+          "config": {
+            "clientId": "ai-grid",
+            "clientSecretSecret": {
+              "name": ""
+            },
+            "issuer": "https://sso.acme-robotics.example.com/realms/acme",
+            "authorizationUrl": "https://sso.acme-robotics.example.com/realms/acme/protocol/openid-connect/auth",
+            "tokenUrl": "https://sso.acme-robotics.example.com/realms/acme/protocol/openid-connect/token",
+            "defaultScopes": "openid profile email",
+            "userInfoUrl": "https://sso.acme-robotics.example.com/realms/acme/protocol/openid-connect/userinfo",
+            "jwksUrl": "https://sso.acme-robotics.example.com/realms/acme/protocol/openid-connect/certs",
+            "logoutUrl": "https://sso.acme-robotics.example.com/realms/acme/protocol/openid-connect/logout",
+            "validateSignature": true
+          }
+        }
+      },
+      "fieldErrors": {
+        "identityProvider.config.clientSecretSecret.name": "Enter a valid secret reference name."
+      }
+    },
+    {
+      "schema": "organization",
+      "name": "empty userInfoUrl is valid",
+      "input": {
+        "name": "acme-robotics",
+        "domains": [
+          "acme-robotics.example.com",
+          "acme.example.org"
+        ],
+        "identityProvider": {
+          "title": "Acme SSO",
+          "description": "Acme employees sign in here.",
+          "enabled": true,
+          "config": {
+            "clientId": "ai-grid",
+            "clientSecretSecret": {
+              "name": "acme-oidc-client"
+            },
+            "issuer": "https://sso.acme-robotics.example.com/realms/acme",
+            "authorizationUrl": "https://sso.acme-robotics.example.com/realms/acme/protocol/openid-connect/auth",
+            "tokenUrl": "https://sso.acme-robotics.example.com/realms/acme/protocol/openid-connect/token",
+            "defaultScopes": "openid profile email",
+            "userInfoUrl": "",
+            "jwksUrl": "",
+            "logoutUrl": "",
+            "validateSignature": true
+          }
+        }
+      },
+      "fieldErrors": {}
+    },
+    {
+      "schema": "organization",
+      "name": "optional fields take their defaults",
+      "input": {
+        "name": "acme-robotics",
+        "domains": [
+          "acme-robotics.example.com",
+          "acme.example.org"
+        ],
+        "identityProvider": {
+          "description": "Acme employees sign in here.",
+          "config": {
+            "clientId": "ai-grid",
+            "clientSecretSecret": {
+              "name": "acme-oidc-client"
+            },
+            "issuer": "https://sso.acme-robotics.example.com/realms/acme",
+            "authorizationUrl": "https://sso.acme-robotics.example.com/realms/acme/protocol/openid-connect/auth",
+            "tokenUrl": "https://sso.acme-robotics.example.com/realms/acme/protocol/openid-connect/token",
+            "userInfoUrl": "https://sso.acme-robotics.example.com/realms/acme/protocol/openid-connect/userinfo",
+            "jwksUrl": "https://sso.acme-robotics.example.com/realms/acme/protocol/openid-connect/certs",
+            "logoutUrl": "https://sso.acme-robotics.example.com/realms/acme/protocol/openid-connect/logout"
+          }
+        }
+      },
+      "fieldErrors": {}
+    },
+    {
+      "schema": "organization",
+      "name": "disabled identity provider",
+      "input": {
+        "name": "acme-robotics",
+        "domains": [
+          "acme-robotics.example.com",
+          "acme.example.org"
+        ],
+        "identityProvider": {
+          "title": "Acme SSO",
+          "description": "Acme employees sign in here.",
+          "enabled": false,
+          "config": {
+            "clientId": "ai-grid",
+            "clientSecretSecret": {
+              "name": "acme-oidc-client"
+            },
+            "issuer": "https://sso.acme-robotics.example.com/realms/acme",
+            "authorizationUrl": "https://sso.acme-robotics.example.com/realms/acme/protocol/openid-connect/auth",
+            "tokenUrl": "https://sso.acme-robotics.example.com/realms/acme/protocol/openid-connect/token",
+            "defaultScopes": "openid profile email",
+            "userInfoUrl": "https://sso.acme-robotics.example.com/realms/acme/protocol/openid-connect/userinfo",
+            "jwksUrl": "https://sso.acme-robotics.example.com/realms/acme/protocol/openid-connect/certs",
+            "logoutUrl": "https://sso.acme-robotics.example.com/realms/acme/protocol/openid-connect/logout",
+            "validateSignature": true
+          }
+        }
+      },
+      "fieldErrors": {
+        "identityProvider.enabled": "Invalid literal value, expected true"
+      }
+    },
+    {
+      "schema": "organization",
+      "name": "a client secret value is rejected",
+      "input": {
+        "name": "acme-robotics",
+        "domains": [
+          "acme-robotics.example.com",
+          "acme.example.org"
+        ],
+        "identityProvider": {
+          "title": "Acme SSO",
+          "description": "Acme employees sign in here.",
+          "enabled": true,
+          "config": {
+            "clientId": "ai-grid",
+            "clientSecretSecret": {
+              "name": "acme-oidc-client"
+            },
+            "issuer": "https://sso.acme-robotics.example.com/realms/acme",
+            "authorizationUrl": "https://sso.acme-robotics.example.com/realms/acme/protocol/openid-connect/auth",
+            "tokenUrl": "https://sso.acme-robotics.example.com/realms/acme/protocol/openid-connect/token",
+            "defaultScopes": "openid profile email",
+            "userInfoUrl": "https://sso.acme-robotics.example.com/realms/acme/protocol/openid-connect/userinfo",
+            "jwksUrl": "https://sso.acme-robotics.example.com/realms/acme/protocol/openid-connect/certs",
+            "logoutUrl": "https://sso.acme-robotics.example.com/realms/acme/protocol/openid-connect/logout",
+            "validateSignature": true,
+            "clientSecret": "s3cr3t"
+          }
+        }
+      },
+      "fieldErrors": {
+        "identityProvider.config": "Unrecognized key(s) in object: 'clientSecret'"
+      }
+    },
+    {
+      "schema": "organization",
+      "name": "missing identity provider",
+      "input": {
+        "name": "acme-robotics",
+        "domains": [
+          "acme-robotics.example.com",
+          "acme.example.org"
+        ]
+      },
+      "fieldErrors": {
+        "identityProvider": "Required"
+      }
+    },
+    {
+      "schema": "model",
+      "name": "valid model",
+      "input": {
+        "name": "granite-3-8b",
+        "displayName": "Granite 3.3 8B Instruct",
+        "description": "Enterprise language model",
+        "modelUri": "hf://example-org/granite-8b-instruct",
+        "modelName": "example-org/granite-8b-instruct",
+        "runtimeImage": "registry.example.com/vllm/vllm-openai:v0.11.0",
+        "replicas": 1,
+        "cpu": "2",
+        "memory": "4Gi",
+        "gpuCount": 1,
+        "runtimeArgs": [
+          "--max-model-len=8192"
+        ],
+        "locations": [
+          "site1",
+          "site2"
+        ]
+      },
+      "fieldErrors": {}
+    },
+    {
+      "schema": "model",
+      "name": "bad URI scheme",
+      "input": {
+        "name": "granite-3-8b",
+        "displayName": "Granite 3.3 8B Instruct",
+        "description": "Enterprise language model",
+        "modelUri": "ftp://models.example.com/granite",
+        "modelName": "example-org/granite-8b-instruct",
+        "runtimeImage": "registry.example.com/vllm/vllm-openai:v0.11.0",
+        "replicas": 1,
+        "cpu": "2",
+        "memory": "4Gi",
+        "gpuCount": 1,
+        "runtimeArgs": [
+          "--max-model-len=8192"
+        ],
+        "locations": [
+          "site1",
+          "site2"
+        ]
+      },
+      "fieldErrors": {
+        "modelUri": "Enter a model URI using hf, oci, s3 or pvc."
+      }
+    },
+    {
+      "schema": "model",
+      "name": "runtime image with a space",
+      "input": {
+        "name": "granite-3-8b",
+        "displayName": "Granite 3.3 8B Instruct",
+        "description": "Enterprise language model",
+        "modelUri": "hf://example-org/granite-8b-instruct",
+        "modelName": "example-org/granite-8b-instruct",
+        "runtimeImage": "registry.example.com/vllm openai:v1",
+        "replicas": 1,
+        "cpu": "2",
+        "memory": "4Gi",
+        "gpuCount": 1,
+        "runtimeArgs": [
+          "--max-model-len=8192"
+        ],
+        "locations": [
+          "site1",
+          "site2"
+        ]
+      },
+      "fieldErrors": {
+        "runtimeImage": "Enter a container image without spaces."
+      }
+    },
+    {
+      "schema": "model",
+      "name": "CPU 0",
+      "input": {
+        "name": "granite-3-8b",
+        "displayName": "Granite 3.3 8B Instruct",
+        "description": "Enterprise language model",
+        "modelUri": "hf://example-org/granite-8b-instruct",
+        "modelName": "example-org/granite-8b-instruct",
+        "runtimeImage": "registry.example.com/vllm/vllm-openai:v0.11.0",
+        "replicas": 1,
+        "cpu": "0",
+        "memory": "4Gi",
+        "gpuCount": 1,
+        "runtimeArgs": [
+          "--max-model-len=8192"
+        ],
+        "locations": [
+          "site1",
+          "site2"
+        ]
+      },
+      "fieldErrors": {
+        "cpu": "Enter positive CPU cores or millicores, for example 2 or 500m."
+      }
+    },
+    {
+      "schema": "model",
+      "name": "CPU 500m",
+      "input": {
+        "name": "granite-3-8b",
+        "displayName": "Granite 3.3 8B Instruct",
+        "description": "Enterprise language model",
+        "modelUri": "hf://example-org/granite-8b-instruct",
+        "modelName": "example-org/granite-8b-instruct",
+        "runtimeImage": "registry.example.com/vllm/vllm-openai:v0.11.0",
+        "replicas": 1,
+        "cpu": "500m",
+        "memory": "4Gi",
+        "gpuCount": 1,
+        "runtimeArgs": [
+          "--max-model-len=8192"
+        ],
+        "locations": [
+          "site1",
+          "site2"
+        ]
+      },
+      "fieldErrors": {}
+    },
+    {
+      "schema": "model",
+      "name": "CPU 1.5",
+      "input": {
+        "name": "granite-3-8b",
+        "displayName": "Granite 3.3 8B Instruct",
+        "description": "Enterprise language model",
+        "modelUri": "hf://example-org/granite-8b-instruct",
+        "modelName": "example-org/granite-8b-instruct",
+        "runtimeImage": "registry.example.com/vllm/vllm-openai:v0.11.0",
+        "replicas": 1,
+        "cpu": "1.5",
+        "memory": "4Gi",
+        "gpuCount": 1,
+        "runtimeArgs": [
+          "--max-model-len=8192"
+        ],
+        "locations": [
+          "site1",
+          "site2"
+        ]
+      },
+      "fieldErrors": {}
+    },
+    {
+      "schema": "model",
+      "name": "memory 4G",
+      "input": {
+        "name": "granite-3-8b",
+        "displayName": "Granite 3.3 8B Instruct",
+        "description": "Enterprise language model",
+        "modelUri": "hf://example-org/granite-8b-instruct",
+        "modelName": "example-org/granite-8b-instruct",
+        "runtimeImage": "registry.example.com/vllm/vllm-openai:v0.11.0",
+        "replicas": 1,
+        "cpu": "2",
+        "memory": "4G",
+        "gpuCount": 1,
+        "runtimeArgs": [
+          "--max-model-len=8192"
+        ],
+        "locations": [
+          "site1",
+          "site2"
+        ]
+      },
+      "fieldErrors": {
+        "memory": "Enter memory such as 4Gi or 512Mi."
+      }
+    },
+    {
+      "schema": "model",
+      "name": "replicas 0",
+      "input": {
+        "name": "granite-3-8b",
+        "displayName": "Granite 3.3 8B Instruct",
+        "description": "Enterprise language model",
+        "modelUri": "hf://example-org/granite-8b-instruct",
+        "modelName": "example-org/granite-8b-instruct",
+        "runtimeImage": "registry.example.com/vllm/vllm-openai:v0.11.0",
+        "replicas": 0,
+        "cpu": "2",
+        "memory": "4Gi",
+        "gpuCount": 1,
+        "runtimeArgs": [
+          "--max-model-len=8192"
+        ],
+        "locations": [
+          "site1",
+          "site2"
+        ]
+      },
+      "fieldErrors": {
+        "replicas": "Number must be greater than or equal to 1"
+      }
+    },
+    {
+      "schema": "model",
+      "name": "replicas 100",
+      "input": {
+        "name": "granite-3-8b",
+        "displayName": "Granite 3.3 8B Instruct",
+        "description": "Enterprise language model",
+        "modelUri": "hf://example-org/granite-8b-instruct",
+        "modelName": "example-org/granite-8b-instruct",
+        "runtimeImage": "registry.example.com/vllm/vllm-openai:v0.11.0",
+        "replicas": 100,
+        "cpu": "2",
+        "memory": "4Gi",
+        "gpuCount": 1,
+        "runtimeArgs": [
+          "--max-model-len=8192"
+        ],
+        "locations": [
+          "site1",
+          "site2"
+        ]
+      },
+      "fieldErrors": {
+        "replicas": "Number must be less than or equal to 99"
+      }
+    },
+    {
+      "schema": "model",
+      "name": "GPUs 65",
+      "input": {
+        "name": "granite-3-8b",
+        "displayName": "Granite 3.3 8B Instruct",
+        "description": "Enterprise language model",
+        "modelUri": "hf://example-org/granite-8b-instruct",
+        "modelName": "example-org/granite-8b-instruct",
+        "runtimeImage": "registry.example.com/vllm/vllm-openai:v0.11.0",
+        "replicas": 1,
+        "cpu": "2",
+        "memory": "4Gi",
+        "gpuCount": 65,
+        "runtimeArgs": [
+          "--max-model-len=8192"
+        ],
+        "locations": [
+          "site1",
+          "site2"
+        ]
+      },
+      "fieldErrors": {
+        "gpuCount": "Number must be less than or equal to 64"
+      }
+    },
+    {
+      "schema": "model",
+      "name": "no locations",
+      "input": {
+        "name": "granite-3-8b",
+        "displayName": "Granite 3.3 8B Instruct",
+        "description": "Enterprise language model",
+        "modelUri": "hf://example-org/granite-8b-instruct",
+        "modelName": "example-org/granite-8b-instruct",
+        "runtimeImage": "registry.example.com/vllm/vllm-openai:v0.11.0",
+        "replicas": 1,
+        "cpu": "2",
+        "memory": "4Gi",
+        "gpuCount": 1,
+        "runtimeArgs": [
+          "--max-model-len=8192"
+        ],
+        "locations": []
+      },
+      "fieldErrors": {
+        "locations": "Select at least one location."
+      }
+    },
+    {
+      "schema": "model",
+      "name": "location with a space",
+      "input": {
+        "name": "granite-3-8b",
+        "displayName": "Granite 3.3 8B Instruct",
+        "description": "Enterprise language model",
+        "modelUri": "hf://example-org/granite-8b-instruct",
+        "modelName": "example-org/granite-8b-instruct",
+        "runtimeImage": "registry.example.com/vllm/vllm-openai:v0.11.0",
+        "replicas": 1,
+        "cpu": "2",
+        "memory": "4Gi",
+        "gpuCount": 1,
+        "runtimeArgs": [
+          "--max-model-len=8192"
+        ],
+        "locations": [
+          "bad location"
+        ]
+      },
+      "fieldErrors": {
+        "locations.0": "Use a Kubernetes label value for the location."
+      }
+    },
+    {
+      "schema": "model",
+      "name": "duplicate locations",
+      "input": {
+        "name": "granite-3-8b",
+        "displayName": "Granite 3.3 8B Instruct",
+        "description": "Enterprise language model",
+        "modelUri": "hf://example-org/granite-8b-instruct",
+        "modelName": "example-org/granite-8b-instruct",
+        "runtimeImage": "registry.example.com/vllm/vllm-openai:v0.11.0",
+        "replicas": 1,
+        "cpu": "2",
+        "memory": "4Gi",
+        "gpuCount": 1,
+        "runtimeArgs": [
+          "--max-model-len=8192"
+        ],
+        "locations": [
+          "site1",
+          "site1"
+        ]
+      },
+      "fieldErrors": {
+        "locations": "Locations must be unique."
+      }
+    },
+    {
+      "schema": "model",
+      "name": "resource name with uppercase",
+      "input": {
+        "name": "Granite",
+        "displayName": "Granite 3.3 8B Instruct",
+        "description": "Enterprise language model",
+        "modelUri": "hf://example-org/granite-8b-instruct",
+        "modelName": "example-org/granite-8b-instruct",
+        "runtimeImage": "registry.example.com/vllm/vllm-openai:v0.11.0",
+        "replicas": 1,
+        "cpu": "2",
+        "memory": "4Gi",
+        "gpuCount": 1,
+        "runtimeArgs": [
+          "--max-model-len=8192"
+        ],
+        "locations": [
+          "site1",
+          "site2"
+        ]
+      },
+      "fieldErrors": {
+        "name": "Invalid"
+      }
+    },
+    {
+      "schema": "model",
+      "name": "replicas as a string",
+      "input": {
+        "name": "granite-3-8b",
+        "displayName": "Granite 3.3 8B Instruct",
+        "description": "Enterprise language model",
+        "modelUri": "hf://example-org/granite-8b-instruct",
+        "modelName": "example-org/granite-8b-instruct",
+        "runtimeImage": "registry.example.com/vllm/vllm-openai:v0.11.0",
+        "replicas": "1",
+        "cpu": "2",
+        "memory": "4Gi",
+        "gpuCount": 1,
+        "runtimeArgs": [
+          "--max-model-len=8192"
+        ],
+        "locations": [
+          "site1",
+          "site2"
+        ]
+      },
+      "fieldErrors": {
+        "replicas": "Expected number, received string"
+      }
+    },
+    {
+      "schema": "model",
+      "name": "namespace is not accepted",
+      "input": {
+        "name": "granite-3-8b",
+        "displayName": "Granite 3.3 8B Instruct",
+        "description": "Enterprise language model",
+        "modelUri": "hf://example-org/granite-8b-instruct",
+        "modelName": "example-org/granite-8b-instruct",
+        "runtimeImage": "registry.example.com/vllm/vllm-openai:v0.11.0",
+        "replicas": 1,
+        "cpu": "2",
+        "memory": "4Gi",
+        "gpuCount": 1,
+        "runtimeArgs": [
+          "--max-model-len=8192"
+        ],
+        "locations": [
+          "site1",
+          "site2"
+        ],
+        "namespace": "maas"
+      },
+      "fieldErrors": {
+        "": "Unrecognized key(s) in object: 'namespace'"
+      }
+    },
+    {
+      "schema": "model",
+      "name": "blank display name and model name",
+      "input": {
+        "name": "granite-3-8b",
+        "displayName": "  ",
+        "description": "Enterprise language model",
+        "modelUri": "hf://example-org/granite-8b-instruct",
+        "modelName": "",
+        "runtimeImage": "registry.example.com/vllm/vllm-openai:v0.11.0",
+        "replicas": 1,
+        "cpu": "2",
+        "memory": "4Gi",
+        "gpuCount": 1,
+        "runtimeArgs": [
+          "--max-model-len=8192"
+        ],
+        "locations": [
+          "site1",
+          "site2"
+        ]
+      },
+      "fieldErrors": {
+        "displayName": "String must contain at least 1 character(s)",
+        "modelName": "String must contain at least 1 character(s)"
+      }
+    },
+    {
+      "schema": "model",
+      "name": "missing fields",
+      "input": {
+        "name": "widget"
+      },
+      "fieldErrors": {
+        "displayName": "Required",
+        "modelUri": "Required",
+        "modelName": "Required",
+        "runtimeImage": "Required",
+        "replicas": "Required",
+        "cpu": "Required",
+        "memory": "Required",
+        "gpuCount": "Required",
+        "runtimeArgs": "Required",
+        "locations": "Required"
+      }
+    },
+    {
+      "schema": "model",
+      "name": "empty runtime image",
+      "input": {
+        "name": "granite-3-8b",
+        "displayName": "Granite 3.3 8B Instruct",
+        "description": "Enterprise language model",
+        "modelUri": "hf://example-org/granite-8b-instruct",
+        "modelName": "example-org/granite-8b-instruct",
+        "runtimeImage": "",
+        "replicas": 1,
+        "cpu": "2",
+        "memory": "4Gi",
+        "gpuCount": 1,
+        "runtimeArgs": [
+          "--max-model-len=8192"
+        ],
+        "locations": [
+          "site1",
+          "site2"
+        ]
+      },
+      "fieldErrors": {
+        "runtimeImage": "Enter a container image without spaces."
+      }
+    },
+    {
+      "schema": "model",
+      "name": "fractional replicas below the minimum",
+      "input": {
+        "name": "granite-3-8b",
+        "displayName": "Granite 3.3 8B Instruct",
+        "description": "Enterprise language model",
+        "modelUri": "hf://example-org/granite-8b-instruct",
+        "modelName": "example-org/granite-8b-instruct",
+        "runtimeImage": "registry.example.com/vllm/vllm-openai:v0.11.0",
+        "replicas": 0.5,
+        "cpu": "2",
+        "memory": "4Gi",
+        "gpuCount": 1,
+        "runtimeArgs": [
+          "--max-model-len=8192"
+        ],
+        "locations": [
+          "site1",
+          "site2"
+        ]
+      },
+      "fieldErrors": {
+        "replicas": "Number must be greater than or equal to 1"
+      }
+    },
+    {
+      "schema": "model",
+      "name": "invalid duplicate locations",
+      "input": {
+        "name": "granite-3-8b",
+        "displayName": "Granite 3.3 8B Instruct",
+        "description": "Enterprise language model",
+        "modelUri": "hf://example-org/granite-8b-instruct",
+        "modelName": "example-org/granite-8b-instruct",
+        "runtimeImage": "registry.example.com/vllm/vllm-openai:v0.11.0",
+        "replicas": 1,
+        "cpu": "2",
+        "memory": "4Gi",
+        "gpuCount": 1,
+        "runtimeArgs": [
+          "--max-model-len=8192"
+        ],
+        "locations": [
+          "bad location",
+          "bad location"
+        ]
+      },
+      "fieldErrors": {
+        "locations.0": "Use a Kubernetes label value for the location.",
+        "locations.1": "Use a Kubernetes label value for the location.",
+        "locations": "Locations must be unique."
+      }
+    },
+    {
+      "schema": "model",
+      "name": "a location that is not a string skips the list rules",
+      "input": {
+        "name": "granite-3-8b",
+        "displayName": "Granite 3.3 8B Instruct",
+        "description": "Enterprise language model",
+        "modelUri": "hf://example-org/granite-8b-instruct",
+        "modelName": "example-org/granite-8b-instruct",
+        "runtimeImage": "registry.example.com/vllm/vllm-openai:v0.11.0",
+        "replicas": 1,
+        "cpu": "2",
+        "memory": "4Gi",
+        "gpuCount": 1,
+        "runtimeArgs": [
+          "--max-model-len=8192"
+        ],
+        "locations": [
+          1,
+          1
+        ]
+      },
+      "fieldErrors": {
+        "locations.0": "Expected string, received number",
+        "locations.1": "Expected string, received number"
+      }
+    },
+    {
+      "schema": "model",
+      "name": "resource name over 63 characters",
+      "input": {
+        "name": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "displayName": "Granite 3.3 8B Instruct",
+        "description": "Enterprise language model",
+        "modelUri": "hf://example-org/granite-8b-instruct",
+        "modelName": "example-org/granite-8b-instruct",
+        "runtimeImage": "registry.example.com/vllm/vllm-openai:v0.11.0",
+        "replicas": 1,
+        "cpu": "2",
+        "memory": "4Gi",
+        "gpuCount": 1,
+        "runtimeArgs": [
+          "--max-model-len=8192"
+        ],
+        "locations": [
+          "site1",
+          "site2"
+        ]
+      },
+      "fieldErrors": {
+        "name": "String must contain at most 63 character(s)"
+      }
+    },
+    {
+      "schema": "model",
+      "name": "too many runtime arguments",
+      "input": {
+        "name": "granite-3-8b",
+        "displayName": "Granite 3.3 8B Instruct",
+        "description": "Enterprise language model",
+        "modelUri": "hf://example-org/granite-8b-instruct",
+        "modelName": "example-org/granite-8b-instruct",
+        "runtimeImage": "registry.example.com/vllm/vllm-openai:v0.11.0",
+        "replicas": 1,
+        "cpu": "2",
+        "memory": "4Gi",
+        "gpuCount": 1,
+        "runtimeArgs": [
+          "--arg0",
+          "--arg1",
+          "--arg2",
+          "--arg3",
+          "--arg4",
+          "--arg5",
+          "--arg6",
+          "--arg7",
+          "--arg8",
+          "--arg9",
+          "--arg10",
+          "--arg11",
+          "--arg12",
+          "--arg13",
+          "--arg14",
+          "--arg15",
+          "--arg16",
+          "--arg17",
+          "--arg18",
+          "--arg19",
+          "--arg20",
+          "--arg21",
+          "--arg22",
+          "--arg23",
+          "--arg24",
+          "--arg25",
+          "--arg26",
+          "--arg27",
+          "--arg28",
+          "--arg29",
+          "--arg30",
+          "--arg31",
+          "--arg32",
+          "--arg33",
+          "--arg34",
+          "--arg35",
+          "--arg36",
+          "--arg37",
+          "--arg38",
+          "--arg39",
+          "--arg40",
+          "--arg41",
+          "--arg42",
+          "--arg43",
+          "--arg44",
+          "--arg45",
+          "--arg46",
+          "--arg47",
+          "--arg48",
+          "--arg49",
+          "--arg50",
+          "--arg51",
+          "--arg52",
+          "--arg53",
+          "--arg54",
+          "--arg55",
+          "--arg56",
+          "--arg57",
+          "--arg58",
+          "--arg59",
+          "--arg60",
+          "--arg61",
+          "--arg62",
+          "--arg63",
+          "--arg64"
+        ],
+        "locations": [
+          "site1",
+          "site2"
+        ]
+      },
+      "fieldErrors": {
+        "runtimeArgs": "Array must contain at most 64 element(s)"
+      }
+    },
+    {
+      "schema": "createSubscription",
+      "name": "valid",
+      "input": {
+        "name": "team-a",
+        "displayName": "Team A",
+        "description": "Models for team A.",
+        "priority": 10,
+        "owner": {
+          "groups": [
+            {
+              "name": "engineering"
+            }
+          ]
+        },
+        "modelRefs": [
+          {
+            "name": "granite-3-8b",
+            "tokenRateLimits": [
+              {
+                "limit": 1000,
+                "window": "1h"
+              }
+            ]
+          }
+        ],
+        "tokenMetadata": {
+          "organizationId": "3f1c9a72-5b6e-4d2a-8c01-2d3e4f5a6b7c"
+        },
+        "createAuthPolicy": true
+      },
+      "fieldErrors": {}
+    },
+    {
+      "schema": "updateSubscription",
+      "name": "valid, with the fields the form keeps but does not edit",
+      "input": {
+        "displayName": "Engineering",
+        "description": "Production models for the engineering team.",
+        "priority": 100,
+        "owner": {
+          "users": [
+            "alice"
+          ],
+          "groups": [
+            {
+              "name": "engineering"
+            }
+          ]
+        },
+        "modelRefs": [
+          {
+            "name": "granite-3-8b",
+            "displayName": "Granite 3.3 8B Instruct",
+            "tokenRateLimits": [
+              {
+                "limit": 100000,
+                "window": "1h"
+              },
+              {
+                "limit": 10000,
+                "window": "1m"
+              }
+            ],
+            "billingRate": {
+              "perToken": "0.000002"
+            },
+            "guardrails": [
+              {
+                "ref": {
+                  "name": "model-safety"
+                },
+                "checks": [
+                  "pii"
+                ]
+              }
+            ]
+          },
+          {
+            "name": "llama-3-70b",
+            "unlimited": true,
+            "tokenRateLimits": []
+          }
+        ],
+        "tokenMetadata": {
+          "organizationId": "3f1c9a72-5b6e-4d2a-8c01-2d3e4f5a6b7c",
+          "costCenter": "engineering",
+          "labels": {
+            "environment": "production"
+          }
+        },
+        "inferencePriority": -5,
+        "guardrails": [
+          {
+            "ref": {
+              "name": "safety"
+            }
+          }
+        ]
+      },
+      "fieldErrors": {}
+    },
+    {
+      "schema": "updateSubscription",
+      "name": "no organization on edit",
+      "input": {
+        "displayName": "Engineering",
+        "description": "Production models for the engineering team.",
+        "priority": 100,
+        "owner": {
+          "users": [
+            "alice"
+          ],
+          "groups": [
+            {
+              "name": "engineering"
+            }
+          ]
+        },
+        "modelRefs": [
+          {
+            "name": "granite-3-8b",
+            "displayName": "Granite 3.3 8B Instruct",
+            "tokenRateLimits": [
+              {
+                "limit": 100000,
+                "window": "1h"
+              },
+              {
+                "limit": 10000,
+                "window": "1m"
+              }
+            ],
+            "billingRate": {
+              "perToken": "0.000002"
+            },
+            "guardrails": [
+              {
+                "ref": {
+                  "name": "model-safety"
+                },
+                "checks": [
+                  "pii"
+                ]
+              }
+            ]
+          },
+          {
+            "name": "llama-3-70b",
+            "unlimited": true,
+            "tokenRateLimits": []
+          }
+        ],
+        "inferencePriority": -5,
+        "guardrails": [
+          {
+            "ref": {
+              "name": "safety"
+            }
+          }
+        ]
+      },
+      "fieldErrors": {}
+    },
+    {
+      "schema": "createSubscription",
+      "name": "priority 1000001",
+      "input": {
+        "name": "team-a",
+        "displayName": "Team A",
+        "description": "Models for team A.",
+        "priority": 1000001,
+        "owner": {
+          "groups": [
+            {
+              "name": "engineering"
+            }
+          ]
+        },
+        "modelRefs": [
+          {
+            "name": "granite-3-8b",
+            "tokenRateLimits": [
+              {
+                "limit": 1000,
+                "window": "1h"
+              }
+            ]
+          }
+        ],
+        "tokenMetadata": {
+          "organizationId": "3f1c9a72-5b6e-4d2a-8c01-2d3e4f5a6b7c"
+        },
+        "createAuthPolicy": true
+      },
+      "fieldErrors": {
+        "priority": "Number must be less than or equal to 1000000"
+      }
+    },
+    {
+      "schema": "createSubscription",
+      "name": "priority not a whole number",
+      "input": {
+        "name": "team-a",
+        "displayName": "Team A",
+        "description": "Models for team A.",
+        "priority": 1.5,
+        "owner": {
+          "groups": [
+            {
+              "name": "engineering"
+            }
+          ]
+        },
+        "modelRefs": [
+          {
+            "name": "granite-3-8b",
+            "tokenRateLimits": [
+              {
+                "limit": 1000,
+                "window": "1h"
+              }
+            ]
+          }
+        ],
+        "tokenMetadata": {
+          "organizationId": "3f1c9a72-5b6e-4d2a-8c01-2d3e4f5a6b7c"
+        },
+        "createAuthPolicy": true
+      },
+      "fieldErrors": {
+        "priority": "Expected integer, received float"
+      }
+    },
+    {
+      "schema": "createSubscription",
+      "name": "no groups",
+      "input": {
+        "name": "team-a",
+        "displayName": "Team A",
+        "description": "Models for team A.",
+        "priority": 10,
+        "owner": {
+          "groups": []
+        },
+        "modelRefs": [
+          {
+            "name": "granite-3-8b",
+            "tokenRateLimits": [
+              {
+                "limit": 1000,
+                "window": "1h"
+              }
+            ]
+          }
+        ],
+        "tokenMetadata": {
+          "organizationId": "3f1c9a72-5b6e-4d2a-8c01-2d3e4f5a6b7c"
+        },
+        "createAuthPolicy": true
+      },
+      "fieldErrors": {
+        "owner.groups": "Array must contain at least 1 element(s)"
+      }
+    },
+    {
+      "schema": "createSubscription",
+      "name": "blank group name",
+      "input": {
+        "name": "team-a",
+        "displayName": "Team A",
+        "description": "Models for team A.",
+        "priority": 10,
+        "owner": {
+          "groups": [
+            {
+              "name": "  "
+            }
+          ]
+        },
+        "modelRefs": [
+          {
+            "name": "granite-3-8b",
+            "tokenRateLimits": [
+              {
+                "limit": 1000,
+                "window": "1h"
+              }
+            ]
+          }
+        ],
+        "tokenMetadata": {
+          "organizationId": "3f1c9a72-5b6e-4d2a-8c01-2d3e4f5a6b7c"
+        },
+        "createAuthPolicy": true
+      },
+      "fieldErrors": {
+        "owner.groups.0.name": "String must contain at least 1 character(s)"
+      }
+    },
+    {
+      "schema": "createSubscription",
+      "name": "no models",
+      "input": {
+        "name": "team-a",
+        "displayName": "Team A",
+        "description": "Models for team A.",
+        "priority": 10,
+        "owner": {
+          "groups": [
+            {
+              "name": "engineering"
+            }
+          ]
+        },
+        "modelRefs": [],
+        "tokenMetadata": {
+          "organizationId": "3f1c9a72-5b6e-4d2a-8c01-2d3e4f5a6b7c"
+        },
+        "createAuthPolicy": true
+      },
+      "fieldErrors": {
+        "modelRefs": "Array must contain at least 1 element(s)"
+      }
+    },
+    {
+      "schema": "createSubscription",
+      "name": "a model with neither unlimited nor limits",
+      "input": {
+        "name": "team-a",
+        "displayName": "Team A",
+        "description": "Models for team A.",
+        "priority": 10,
+        "owner": {
+          "groups": [
+            {
+              "name": "engineering"
+            }
+          ]
+        },
+        "modelRefs": [
+          {
+            "name": "granite-3-8b",
+            "tokenRateLimits": []
+          }
+        ],
+        "tokenMetadata": {
+          "organizationId": "3f1c9a72-5b6e-4d2a-8c01-2d3e4f5a6b7c"
+        },
+        "createAuthPolicy": true
+      },
+      "fieldErrors": {
+        "modelRefs.0": "tokenRateLimits is required unless unlimited is true"
+      }
+    },
+    {
+      "schema": "createSubscription",
+      "name": "an unlimited model with limits",
+      "input": {
+        "name": "team-a",
+        "displayName": "Team A",
+        "description": "Models for team A.",
+        "priority": 10,
+        "owner": {
+          "groups": [
+            {
+              "name": "engineering"
+            }
+          ]
+        },
+        "modelRefs": [
+          {
+            "name": "granite-3-8b",
+            "tokenRateLimits": [
+              {
+                "limit": 1000,
+                "window": "1h"
+              }
+            ],
+            "unlimited": true
+          }
+        ],
+        "tokenMetadata": {
+          "organizationId": "3f1c9a72-5b6e-4d2a-8c01-2d3e4f5a6b7c"
+        },
+        "createAuthPolicy": true
+      },
+      "fieldErrors": {
+        "modelRefs.0": "tokenRateLimits must not be set when unlimited is true"
+      }
+    },
+    {
+      "schema": "createSubscription",
+      "name": "window 0h",
+      "input": {
+        "name": "team-a",
+        "displayName": "Team A",
+        "description": "Models for team A.",
+        "priority": 10,
+        "owner": {
+          "groups": [
+            {
+              "name": "engineering"
+            }
+          ]
+        },
+        "modelRefs": [
+          {
+            "name": "granite-3-8b",
+            "tokenRateLimits": [
+              {
+                "limit": 1000,
+                "window": "0h"
+              }
+            ]
+          }
+        ],
+        "tokenMetadata": {
+          "organizationId": "3f1c9a72-5b6e-4d2a-8c01-2d3e4f5a6b7c"
+        },
+        "createAuthPolicy": true
+      },
+      "fieldErrors": {
+        "modelRefs.0.tokenRateLimits.0.window": "should match '^[1-9]\\d{0,3}(s|m|h)$'"
+      }
+    },
+    {
+      "schema": "createSubscription",
+      "name": "window 10000m",
+      "input": {
+        "name": "team-a",
+        "displayName": "Team A",
+        "description": "Models for team A.",
+        "priority": 10,
+        "owner": {
+          "groups": [
+            {
+              "name": "engineering"
+            }
+          ]
+        },
+        "modelRefs": [
+          {
+            "name": "granite-3-8b",
+            "tokenRateLimits": [
+              {
+                "limit": 1000,
+                "window": "10000m"
+              }
+            ]
+          }
+        ],
+        "tokenMetadata": {
+          "organizationId": "3f1c9a72-5b6e-4d2a-8c01-2d3e4f5a6b7c"
+        },
+        "createAuthPolicy": true
+      },
+      "fieldErrors": {
+        "modelRefs.0.tokenRateLimits.0.window": "should match '^[1-9]\\d{0,3}(s|m|h)$'"
+      }
+    },
+    {
+      "schema": "createSubscription",
+      "name": "limit 0",
+      "input": {
+        "name": "team-a",
+        "displayName": "Team A",
+        "description": "Models for team A.",
+        "priority": 10,
+        "owner": {
+          "groups": [
+            {
+              "name": "engineering"
+            }
+          ]
+        },
+        "modelRefs": [
+          {
+            "name": "granite-3-8b",
+            "tokenRateLimits": [
+              {
+                "limit": 0,
+                "window": "1h"
+              }
+            ]
+          }
+        ],
+        "tokenMetadata": {
+          "organizationId": "3f1c9a72-5b6e-4d2a-8c01-2d3e4f5a6b7c"
+        },
+        "createAuthPolicy": true
+      },
+      "fieldErrors": {
+        "modelRefs.0.tokenRateLimits.0.limit": "should be greater than or equal to 1"
+      }
+    },
+    {
+      "schema": "createSubscription",
+      "name": "window 1d",
+      "input": {
+        "name": "team-a",
+        "displayName": "Team A",
+        "description": "Models for team A.",
+        "priority": 10,
+        "owner": {
+          "groups": [
+            {
+              "name": "engineering"
+            }
+          ]
+        },
+        "modelRefs": [
+          {
+            "name": "granite-3-8b",
+            "tokenRateLimits": [
+              {
+                "limit": 1000,
+                "window": "1d"
+              }
+            ]
+          }
+        ],
+        "tokenMetadata": {
+          "organizationId": "3f1c9a72-5b6e-4d2a-8c01-2d3e4f5a6b7c"
+        },
+        "createAuthPolicy": true
+      },
+      "fieldErrors": {
+        "modelRefs.0.tokenRateLimits.0.window": "should match '^[1-9]\\d{0,3}(s|m|h)$'"
+      }
+    },
+    {
+      "schema": "createSubscription",
+      "name": "limit 1000000001",
+      "input": {
+        "name": "team-a",
+        "displayName": "Team A",
+        "description": "Models for team A.",
+        "priority": 10,
+        "owner": {
+          "groups": [
+            {
+              "name": "engineering"
+            }
+          ]
+        },
+        "modelRefs": [
+          {
+            "name": "granite-3-8b",
+            "tokenRateLimits": [
+              {
+                "limit": 1000000001,
+                "window": "1h"
+              }
+            ]
+          }
+        ],
+        "tokenMetadata": {
+          "organizationId": "3f1c9a72-5b6e-4d2a-8c01-2d3e4f5a6b7c"
+        },
+        "createAuthPolicy": true
+      },
+      "fieldErrors": {
+        "modelRefs.0.tokenRateLimits.0.limit": "should be less than or equal to 1000000000"
+      }
+    },
+    {
+      "schema": "createSubscription",
+      "name": "a model reference with a namespace",
+      "input": {
+        "name": "team-a",
+        "displayName": "Team A",
+        "description": "Models for team A.",
+        "priority": 10,
+        "owner": {
+          "groups": [
+            {
+              "name": "engineering"
+            }
+          ]
+        },
+        "modelRefs": [
+          {
+            "name": "granite-3-8b",
+            "tokenRateLimits": [
+              {
+                "limit": 1000,
+                "window": "1h"
+              }
+            ],
+            "namespace": "ai-grid-models"
+          }
+        ],
+        "tokenMetadata": {
+          "organizationId": "3f1c9a72-5b6e-4d2a-8c01-2d3e4f5a6b7c"
+        },
+        "createAuthPolicy": true
+      },
+      "fieldErrors": {}
+    },
+    {
+      "schema": "createSubscription",
+      "name": "duplicate models",
+      "input": {
+        "name": "team-a",
+        "displayName": "Team A",
+        "description": "Models for team A.",
+        "priority": 10,
+        "owner": {
+          "groups": [
+            {
+              "name": "engineering"
+            }
+          ]
+        },
+        "modelRefs": [
+          {
+            "name": "granite-3-8b",
+            "tokenRateLimits": [
+              {
+                "limit": 1000,
+                "window": "1h"
+              }
+            ]
+          },
+          {
+            "name": "granite-3-8b",
+            "tokenRateLimits": [
+              {
+                "limit": 1000,
+                "window": "1h"
+              }
+            ]
+          }
+        ],
+        "tokenMetadata": {
+          "organizationId": "3f1c9a72-5b6e-4d2a-8c01-2d3e4f5a6b7c"
+        },
+        "createAuthPolicy": true
+      },
+      "fieldErrors": {
+        "modelRefs": "Models must be unique"
+      }
+    },
+    {
+      "schema": "createSubscription",
+      "name": "name Bad_Name",
+      "input": {
+        "name": "Bad_Name",
+        "displayName": "Team A",
+        "description": "Models for team A.",
+        "priority": 10,
+        "owner": {
+          "groups": [
+            {
+              "name": "engineering"
+            }
+          ]
+        },
+        "modelRefs": [
+          {
+            "name": "granite-3-8b",
+            "tokenRateLimits": [
+              {
+                "limit": 1000,
+                "window": "1h"
+              }
+            ]
+          }
+        ],
+        "tokenMetadata": {
+          "organizationId": "3f1c9a72-5b6e-4d2a-8c01-2d3e4f5a6b7c"
+        },
+        "createAuthPolicy": true
+      },
+      "fieldErrors": {
+        "name": "Invalid"
+      }
+    },
+    {
+      "schema": "createSubscription",
+      "name": "no organization on create",
+      "input": {
+        "name": "team-a",
+        "displayName": "Team A",
+        "description": "Models for team A.",
+        "priority": 10,
+        "owner": {
+          "groups": [
+            {
+              "name": "engineering"
+            }
+          ]
+        },
+        "modelRefs": [
+          {
+            "name": "granite-3-8b",
+            "tokenRateLimits": [
+              {
+                "limit": 1000,
+                "window": "1h"
+              }
+            ]
+          }
+        ],
+        "createAuthPolicy": true
+      },
+      "fieldErrors": {
+        "tokenMetadata.organizationId": "Select an organization"
+      }
+    },
+    {
+      "schema": "createSubscription",
+      "name": "an empty organization on create",
+      "input": {
+        "name": "team-a",
+        "displayName": "Team A",
+        "description": "Models for team A.",
+        "priority": 10,
+        "owner": {
+          "groups": [
+            {
+              "name": "engineering"
+            }
+          ]
+        },
+        "modelRefs": [
+          {
+            "name": "granite-3-8b",
+            "tokenRateLimits": [
+              {
+                "limit": 1000,
+                "window": "1h"
+              }
+            ]
+          }
+        ],
+        "tokenMetadata": {
+          "organizationId": ""
+        },
+        "createAuthPolicy": true
+      },
+      "fieldErrors": {
+        "tokenMetadata.organizationId": "Select an organization"
+      }
+    },
+    {
+      "schema": "createSubscription",
+      "name": "a namespace",
+      "input": {
+        "name": "team-a",
+        "displayName": "Team A",
+        "description": "Models for team A.",
+        "priority": 10,
+        "owner": {
+          "groups": [
+            {
+              "name": "engineering"
+            }
+          ]
+        },
+        "modelRefs": [
+          {
+            "name": "granite-3-8b",
+            "tokenRateLimits": [
+              {
+                "limit": 1000,
+                "window": "1h"
+              }
+            ]
+          }
+        ],
+        "tokenMetadata": {
+          "organizationId": "3f1c9a72-5b6e-4d2a-8c01-2d3e4f5a6b7c"
+        },
+        "createAuthPolicy": true,
+        "namespace": "maas"
+      },
+      "fieldErrors": {
+        "namespace": "Expected never, received string"
+      }
+    },
+    {
+      "schema": "updateSubscription",
+      "name": "a guardrail with an unknown key and a bad name",
+      "input": {
+        "displayName": "Engineering",
+        "description": "Production models for the engineering team.",
+        "priority": 100,
+        "owner": {
+          "users": [
+            "alice"
+          ],
+          "groups": [
+            {
+              "name": "engineering"
+            }
+          ]
+        },
+        "modelRefs": [
+          {
+            "name": "granite-3-8b",
+            "displayName": "Granite 3.3 8B Instruct",
+            "tokenRateLimits": [
+              {
+                "limit": 100000,
+                "window": "1h"
+              },
+              {
+                "limit": 10000,
+                "window": "1m"
+              }
+            ],
+            "billingRate": {
+              "perToken": "0.000002"
+            },
+            "guardrails": [
+              {
+                "ref": {
+                  "name": "model-safety"
+                },
+                "checks": [
+                  "pii"
+                ]
+              }
+            ]
+          },
+          {
+            "name": "llama-3-70b",
+            "unlimited": true,
+            "tokenRateLimits": []
+          }
+        ],
+        "tokenMetadata": {
+          "organizationId": "3f1c9a72-5b6e-4d2a-8c01-2d3e4f5a6b7c",
+          "costCenter": "engineering",
+          "labels": {
+            "environment": "production"
+          }
+        },
+        "inferencePriority": -5,
+        "guardrails": [
+          {
+            "ref": {
+              "name": "Bad",
+              "kind": "x"
+            }
+          }
+        ]
+      },
+      "fieldErrors": {
+        "guardrails.0.ref": "Unrecognized key(s) in object: 'kind'",
+        "guardrails.0.ref.name": "Invalid"
+      }
+    },
+    {
+      "schema": "updateSubscription",
+      "name": "inference priority beyond int32",
+      "input": {
+        "displayName": "Engineering",
+        "description": "Production models for the engineering team.",
+        "priority": 100,
+        "owner": {
+          "users": [
+            "alice"
+          ],
+          "groups": [
+            {
+              "name": "engineering"
+            }
+          ]
+        },
+        "modelRefs": [
+          {
+            "name": "granite-3-8b",
+            "displayName": "Granite 3.3 8B Instruct",
+            "tokenRateLimits": [
+              {
+                "limit": 100000,
+                "window": "1h"
+              },
+              {
+                "limit": 10000,
+                "window": "1m"
+              }
+            ],
+            "billingRate": {
+              "perToken": "0.000002"
+            },
+            "guardrails": [
+              {
+                "ref": {
+                  "name": "model-safety"
+                },
+                "checks": [
+                  "pii"
+                ]
+              }
+            ]
+          },
+          {
+            "name": "llama-3-70b",
+            "unlimited": true,
+            "tokenRateLimits": []
+          }
+        ],
+        "tokenMetadata": {
+          "organizationId": "3f1c9a72-5b6e-4d2a-8c01-2d3e4f5a6b7c",
+          "costCenter": "engineering",
+          "labels": {
+            "environment": "production"
+          }
+        },
+        "inferencePriority": 2147483648,
+        "guardrails": [
+          {
+            "ref": {
+              "name": "safety"
+            }
+          }
+        ]
+      },
+      "fieldErrors": {
+        "inferencePriority": "Number must be less than or equal to 2147483647"
+      }
+    },
+    {
+      "schema": "updateSubscription",
+      "name": "an empty user and a non-string label",
+      "input": {
+        "displayName": "Engineering",
+        "description": "Production models for the engineering team.",
+        "priority": 100,
+        "owner": {
+          "users": [
+            ""
+          ],
+          "groups": [
+            {
+              "name": "engineering"
+            }
+          ]
+        },
+        "modelRefs": [
+          {
+            "name": "granite-3-8b",
+            "displayName": "Granite 3.3 8B Instruct",
+            "tokenRateLimits": [
+              {
+                "limit": 100000,
+                "window": "1h"
+              },
+              {
+                "limit": 10000,
+                "window": "1m"
+              }
+            ],
+            "billingRate": {
+              "perToken": "0.000002"
+            },
+            "guardrails": [
+              {
+                "ref": {
+                  "name": "model-safety"
+                },
+                "checks": [
+                  "pii"
+                ]
+              }
+            ]
+          },
+          {
+            "name": "llama-3-70b",
+            "unlimited": true,
+            "tokenRateLimits": []
+          }
+        ],
+        "tokenMetadata": {
+          "organizationId": "3f1c9a72-5b6e-4d2a-8c01-2d3e4f5a6b7c",
+          "costCenter": "engineering",
+          "labels": {
+            "environment": 1
+          }
+        },
+        "inferencePriority": -5,
+        "guardrails": [
+          {
+            "ref": {
+              "name": "safety"
+            }
+          }
+        ]
+      },
+      "fieldErrors": {
+        "owner.users.0": "String must contain at least 1 character(s)",
+        "tokenMetadata.labels.environment": "Expected string, received number"
+      }
+    }
+  ]
+}
