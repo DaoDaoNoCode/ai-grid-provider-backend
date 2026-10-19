@@ -56,7 +56,10 @@ func managedClusterStatusFromUnstructured(item unstructured.Unstructured) *aigri
 			if strings.EqualFold(condStatus, "True") {
 				status.Available = true
 			}
-		case "ManagedClusterConditionJoined", "Joined":
+		// The hub writes "ManagedClusterJoined": OCM's constant is named
+		// ManagedClusterConditionJoined but its value is "ManagedClusterJoined"
+		// (open-cluster-management-io/api cluster/v1/types.go).
+		case "ManagedClusterJoined", "Joined":
 			if strings.EqualFold(condStatus, "True") {
 				status.Joined = true
 			}
