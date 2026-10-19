@@ -1,0 +1,99 @@
+[
+  {
+    "id": "3f1c9a72-5b6e-4d2a-8c01-2d3e4f5a6b7c",
+    "name": "acme-robotics",
+    "alias": "acme-robotics",
+    "enabled": true,
+    "description": "Acme Robotics, EU region",
+    "attributes": {
+      "ai-grid/region": [
+        "europe-west"
+      ],
+      "billing-account": [
+        "ACME-0042"
+      ]
+    },
+    "domains": [
+      {
+        "name": "acme-robotics.example.com",
+        "verified": true,
+        "autoRedirect": true
+      },
+      {
+        "name": "acme.example.org",
+        "verified": false,
+        "autoRedirect": false
+      }
+    ]
+  },
+  {
+    "id": "8d2e7b31-0c4f-4a9d-b5e6-7f8a9b0c1d2e",
+    "name": "globex-research",
+    "alias": "globex",
+    "enabled": true,
+    "description": "Globex Research division",
+    "attributes": {},
+    "domains": [
+      {
+        "name": "globex.example.com",
+        "verified": true,
+        "autoRedirect": false
+      }
+    ]
+  },
+  {
+    "id": "c5a4d3e2-f1b0-4987-a6c5-d4e3f2a1b0c9",
+    "name": "initech-labs",
+    "alias": "initech-labs",
+    "enabled": true,
+    "attributes": {}
+  },
+  {
+    "id": "0b7e5c1d-9a2f-4e3b-8d6c-1f2a3b4c5d6e",
+    "name": "umbrella-biotech",
+    "alias": "umbrella-biotech",
+    "enabled": false,
+    "description": "Suspended pending contract renewal",
+    "attributes": {},
+    "domains": [
+      {
+        "name": "umbrella.example.net",
+        "verified": false,
+        "autoRedirect": false
+      }
+    ]
+  },
+  {
+    "id": "d4c3b2a1-6e5f-4a7b-9c8d-2e1f0a9b8c7d",
+    "name": "vandelay-industries",
+    "alias": "vandelay-industries",
+    "enabled": true,
+    "attributes": {
+      "ai-grid/region": [
+        "us-east"
+      ]
+    },
+    "domains": [
+      {
+        "name": "*.vandelay.example.com",
+        "verified": true,
+        "autoRedirect": false
+      }
+    ]
+  },
+  {
+    "id": "7a8b9c0d-1e2f-4a3b-8c4d-5e6f7a8b9c0d",
+    "name": "wayne-aerospace",
+    "alias": "wayne-aerospace",
+    "enabled": true,
+    "description": "Wayne Aerospace research cluster tenant",
+    "attributes": {},
+    "domains": [
+      {
+        "name": "wayne-aero.example.com",
+        "verified": true,
+        "autoRedirect": false
+      }
+    ]
+  }
+]

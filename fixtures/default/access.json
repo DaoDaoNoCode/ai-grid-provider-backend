@@ -1,0 +1,14 @@
+{
+  "_comment": "Who the fake hub accepts. A request without a bearer token or with one of rejectedTokens is 401 Unauthorized, like an expired or revoked token on the hub. Every other token is a user: one of deniedTokens gets allowed: false from SelfSubjectAccessReview and 403 Forbidden on managedclusters; any other token is allowed while defaultAllowed is true. serviceAccount is the identity bin/fake-kubeconfig gives the backend; it is allowed even when defaultAllowed is false. The console BFF sends its AUTH_TOKEN to the SelfSubjectAccessReview endpoint, so pick a token from this file to see the console as that kind of user. Converted from the console fixture directory's access.json; serviceAccount is added here.",
+  "defaultAllowed": true,
+  "deniedTokens": [
+    "viewer-token"
+  ],
+  "rejectedTokens": [
+    "expired-token"
+  ],
+  "serviceAccount": {
+    "token": "fake-ai-grid-provider-backend-sa-token",
+    "username": "system:serviceaccount:ai-grid:ai-grid-provider-backend"
+  }
+}
