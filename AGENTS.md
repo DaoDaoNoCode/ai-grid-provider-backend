@@ -36,6 +36,16 @@ The OSAC fulfillment-service standards are the reference architecture. Apply the
 - Prefer in-cluster Kubernetes ServiceAccount credentials. Use `--kubeconfig` only for local, out-of-cluster development.
 - Prefer Podman for local container and Kind workflows.
 
+## The console's draft API
+
+- `ai_grid.draft.v1` (`proto/ai_grid/draft/v1`, `gen/ai_grid/draft/v1`) is the console's proposal for APIs this backend does not implement yet, and `internal/fakeinfra/draft` is its in-memory fake, served by `make dev-fake` on `:9094`. See [`docs/draft/README.md`](docs/draft/README.md).
+- The draft is not this backend's API: never import `gen/ai_grid/draft/v1` from `cmd/ai-grid-provider-backend`, `internal/servers`, `internal/restgateway` or `client`, and never give it HTTP annotations or OpenAPI output.
+- When an area is implemented for real in `ai_grid.v1`, delete that area's draft proto, generated code, fake code and tests, fixtures and `docs/draft/areas` page (`docs/draft/README.md`, "When an area moves to the real backend").
+- For real services, fake only infrastructure (`internal/fakeinfra/hub`, `internal/fakeinfra/keycloak`); never fake a real server.
+- The draft proto keeps the console's messages, fields, numbers and comments; only its package, `go_package` and imports differ. Keep it passing `buf lint`. The API invariants above govern `ai_grid.v1`; the draft keeps the console's shapes (for example the flat `ManagedCluster`) until an area is implemented for real.
+- `fixtures/draft/` is the console's protojson, not converted: edit it with `go test ./internal/fakeinfra/draft/...` running, not with `hack/convert-console-fixtures`.
+- `internal/fakeinfra/draft/validation/cases.json` is a copy of the console's `mock/validation/cases.json`; keep the two in sync until the console stops needing it.
+
 ## Repository map
 
 ```text
@@ -57,6 +67,11 @@ hack/                           development, smoke, and deployment helpers
 cmd/ai-grid-fake-infra/         fake hub API and fake Keycloak for make dev-fake
 internal/fakeinfra/             fakes of the hub API (hub/) and Keycloak (keycloak/); TLS and kubeconfig (devserve/)
 fixtures/                       fake infrastructure fixtures (default/, poc/), converted; see fixtures/README.md
+proto/ai_grid/draft/v1/         the console's draft proto (ai_grid.draft.v1); proto/buf.gen.draft.yaml generates it
+gen/ai_grid/draft/v1/           generated draft protobuf and gRPC code (no gateway, no OpenAPI)
+internal/fakeinfra/draft/       fake of the draft API, served on --draft-address (make dev-fake :9094)
+fixtures/draft/                 the draft fake's fixtures (default/, poc/), the console's verbatim
+docs/draft/                     the draft's docs, research and per-area pages
 ```
 
 Go module: `github.com/osac-project/ai-grid-provider-backend`.
@@ -88,6 +103,7 @@ make generate
 Commit the protobuf sources and regenerated outputs in:
 
 - `gen/ai_grid/v1/`
+- `gen/ai_grid/draft/v1/` (the draft, from `proto/buf.gen.draft.yaml`)
 - `docs/openapi/`
 - `internal/restgateway/openapi/`
 
@@ -176,8 +192,8 @@ Run this for changes affecting Kubernetes behavior, OCM/RHACM resources, Keycloa
 ### Local development without a cluster
 
 ```bash
-make dev-fake         # real backend on the fake hub (:9091) and fake Keycloak (:9093); gRPC :9090, REST :9092
-make dev-fake-poc     # the same on fixtures/poc; override ports with DEV_*_PORT=...
+make dev-fake         # real backend on the fake hub (:9091) and fake Keycloak (:9093); gRPC :9090, REST :9092; draft fake :9094
+make dev-fake-poc     # the same on fixtures/poc and fixtures/draft/poc; override ports with DEV_*_PORT=...
 ```
 
 `make dev-fake` runs the unmodified backend against `internal/fakeinfra` (README.md, "Dev mode with fake infrastructure"). With the console, run `make -j2 dev-bff-fake dev-frontend-fake` in the console repo in a second terminal. It is a development aid, not a substitute for `make kind-test`.

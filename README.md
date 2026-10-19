@@ -32,7 +32,9 @@ REST and Swagger UI are also exposed on HTTP `:8081`:
 the `google.api.http` annotations off the descriptors at runtime, so there is
 no generated gateway code. The same routes answer on `:8080` as well.
 
-Regenerate protobuf, RPC stubs and OpenAPI with `make generate` (requires [buf](https://buf.build)).
+Regenerate protobuf, RPC stubs and OpenAPI with `make generate` (requires [buf](https://buf.build);
+without it, `make generate BUF='go run github.com/bufbuild/buf/cmd/buf@v1.57.2'`). It also
+generates the console's draft API (see [The console's draft API](#the-consoles-draft-api-ai_griddraftv1)).
 
 ManagedCluster RPCs use the Kubernetes dynamic client against:
 
@@ -303,10 +305,11 @@ terminal; Ctrl-C stops both.
 
 ```text
 make dev-fake
-├── bin/ai-grid-fake-infra --fixtures fixtures/default
+├── bin/ai-grid-fake-infra --fixtures fixtures/default --draft-fixtures fixtures/draft/default
 │   ├── fake hub API   127.0.0.1:9091  ManagedClusters + SelfSubjectAccessReview
 │   │                                  (TLS for the backend, plain HTTP for the console BFF)
-│   └── fake Keycloak  127.0.0.1:9093  token endpoint + Organizations Admin API
+│   ├── fake Keycloak  127.0.0.1:9093  token endpoint + Organizations Admin API
+│   └── draft fake     127.0.0.1:9094  gRPC ai_grid.draft.v1, the console's draft API (own state)
 └── bin/ai-grid-provider-backend --kubeconfig bin/fake-kubeconfig
     ├── gRPC           127.0.0.1:9090  (what the console BFF dials by default)
     └── REST + Swagger 127.0.0.1:9092  (/api/v1/clusters, /api/v1/tenants, /docs/)
@@ -325,7 +328,8 @@ preset contains and where it comes from.
 make dev-fake                         # fixtures/default: ten clusters in every ACM state, six organizations,
                                       # and a timeline (a cluster joins at 20s, one detaches at 30s, ...)
 make dev-fake-poc                     # fixtures/poc: the PoC's four sites and three organizations, static
-make dev-fake DEV_GRPC_PORT=19090 DEV_HUB_PORT=19091 DEV_HTTP_PORT=19092 DEV_KEYCLOAK_PORT=19093
+                                      # (and fixtures/draft/poc for the draft fake)
+make dev-fake DEV_GRPC_PORT=19090 DEV_HUB_PORT=19091 DEV_HTTP_PORT=19092 DEV_KEYCLOAK_PORT=19093 DEV_DRAFT_PORT=19094
                                       # when the default ports are taken
 
 curl -s http://127.0.0.1:9092/api/v1/clusters
@@ -351,7 +355,7 @@ To see the console as a non-admin or with a rejected token, use the tokens in
 Two terminals:
 
 ```sh
-# terminal 1, this repository: fake hub + fake Keycloak + real backend
+# terminal 1, this repository: fake hub + fake Keycloak + real backend + draft fake
 make dev-fake
 
 # terminal 2, ai-grid-provider-console: its BFF (dials 127.0.0.1:9090 and sends its
@@ -370,7 +374,30 @@ at console commit `537df38`), so until the two protos converge the gRPC calls
 it makes for clusters and tenants answer `Unimplemented` and those pages show
 "not available on this backend". The sign-in and provider-admin check
 (SelfSubjectAccessReview on the fake hub) work as with the console's own
-fake.
+fake. The draft fake on 9094 serves the console's draft services
+(`ai_grid.draft.v1`); pointing the console's BFF at it is the console's side of
+the move.
+
+## The console's draft API (ai_grid.draft.v1)
+
+The console needs more API than this backend implements yet. Its proposal for
+the missing APIs is the **draft**, package `ai_grid.draft.v1`
+(`proto/ai_grid/draft/v1`, generated into `gen/ai_grid/draft/v1`), with a fake
+that implements it in memory (`internal/fakeinfra/draft`, fixtures in
+`fixtures/draft/`). `make dev-fake` serves it on `127.0.0.1:9094`
+(`DEV_DRAFT_PORT`). Both moved here from the console repository at `ac80c25`
+so the proposal lives next to the real API; [docs/draft/README.md](docs/draft/README.md)
+has the details, the research behind it and a page per area.
+
+- The draft is not this backend's API: no real server, client or REST route
+  uses it, it has no OpenAPI, and its package is separate from `ai_grid.v1`
+  so the two can be linked into one binary.
+- When the backend implements an area in `ai_grid.v1`, that area's draft proto,
+  fake code, fixtures and docs are deleted in the same change or the next one.
+- For the real services, `make dev-fake` fakes only infrastructure (the hub
+  and Keycloak); the draft fake exists only for areas without a real server.
+- The draft fake keeps its own state and does not read the fake hub's clusters
+  or the fake Keycloak's organizations yet; that integration is a later step.
 
 ## Clean up
 
@@ -510,9 +537,13 @@ hack/check-prereqs.sh            local toolchain and runtime preflight
 hack/smoke-apis.sh               gRPC + REST smoke for Ping/Clusters/Tenants (make smoke)
 hack/test-kind.sh                end-to-end integration test
 integration/kind_test.go         typed gRPC integration test
-cmd/ai-grid-fake-infra/          fake hub API + fake Keycloak for make dev-fake
+cmd/ai-grid-fake-infra/          fake hub API + fake Keycloak + draft fake for make dev-fake
 internal/fakeinfra/              the fakes (hub, keycloak, devserve) and their tests
-fixtures/                        fake infrastructure fixtures (default, poc)
+internal/fakeinfra/draft/        fake of the console's draft API (ai_grid.draft.v1)
+proto/ai_grid/draft/v1/          the console's draft proto (ai_grid.draft.v1)
+gen/ai_grid/draft/v1/            generated draft protobuf and gRPC code
+fixtures/                        fake infrastructure fixtures (default, poc; draft/ for the draft fake)
+docs/draft/                      the draft's docs, research and per-area pages
 hack/dev-fake.sh                 runs the fakes and the backend for make dev-fake
 hack/convert-console-fixtures/   regenerates fixtures/ from the console's fixtures
 Makefile                         build, test, lint, generate, Kind, OpenShift, ACM targets
