@@ -161,12 +161,28 @@ func (h *Hub) authenticate(w http.ResponseWriter, r *http.Request) (string, bool
 		writeStatus(w, apierrors.NewUnauthorized("Unauthorized"))
 		return "", false
 	}
+	return h.username(token), true
+}
+
+// username is the user a token stands for: the ServiceAccount's name for its
+// token, "dev-user" for any other (the console fake's SelfSubjectAccessReview
+// names every console user so; the fake hub has no other user database).
+func (h *Hub) username(token string) string {
 	if token == h.access.ServiceAccount.Token {
-		return h.access.ServiceAccount.Username, true
+		return h.access.ServiceAccount.Username
 	}
-	// The console fake's SelfSubjectAccessReview names every console user
-	// "dev-user"; the fake hub has no other user database.
-	return "dev-user", true
+	return "dev-user"
+}
+
+// allowed is the one RBAC decision of the fake hub, used both by
+// SelfSubjectAccessReview and by the managedclusters authorizer, so the two
+// always agree: a denied token is refused, the ServiceAccount is allowed,
+// every other token follows defaultAllowed. Verb and resource do not matter.
+func (h *Hub) allowed(token string) bool {
+	if slices.Contains(h.access.DeniedTokens, token) {
+		return false
+	}
+	return h.access.DefaultAllowed || token == h.access.ServiceAccount.Token
 }
 
 // authorize is RBAC for managedclusters as access.json decides it: denied
@@ -177,8 +193,7 @@ func (h *Hub) authorize(w http.ResponseWriter, r *http.Request, verb, name strin
 		return false
 	}
 	token := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
-	allowed := (h.access.DefaultAllowed || token == h.access.ServiceAccount.Token) && !slices.Contains(h.access.DeniedTokens, token)
-	if !allowed {
+	if !h.allowed(token) {
 		writeStatus(w, apierrors.NewForbidden(groupResource, name,
 			verbatim(fmt.Sprintf("User %q cannot %s resource %q in API group %q at the cluster scope", user, verb, Resource, Group))))
 		return false

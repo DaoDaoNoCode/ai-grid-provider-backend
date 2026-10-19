@@ -1,9 +1,12 @@
 package hub
 
-// Ported unchanged in behaviour from the console's fake hub
-// (ai-grid-cloud/ai-grid-provider-console 537df38, bff/internal/fakebackend/hub.go),
-// so the console BFF's isProviderAdmin check gets the same answers from this
-// hub as from the console's own fake.
+// Ported from the console's fake hub (ai-grid-cloud/ai-grid-provider-console
+// 537df38, bff/internal/fakebackend/hub.go), so the console BFF's
+// isProviderAdmin check gets the same answers from this hub as from the
+// console's own fake. One difference: the decision is Hub.allowed, shared
+// with the managedclusters authorizer, so the backend's ServiceAccount is
+// allowed here too when defaultAllowed is false, and the review names the
+// ServiceAccount as the user for its token.
 
 import (
 	"encoding/json"
@@ -40,11 +43,11 @@ func (h *Hub) selfSubjectAccessReview(w http.ResponseWriter, r *http.Request) {
 		writeConsoleStatus(w, http.StatusBadRequest, "BadRequest", err.Error())
 		return
 	}
-	allowed := h.access.DefaultAllowed && !slices.Contains(h.access.DeniedTokens, token)
+	allowed := h.allowed(token)
 	review.Status.Allowed = allowed
 	attrs := review.Spec.ResourceAttributes
 	if allowed {
-		review.Status.Reason = fmt.Sprintf("RBAC: allowed by ClusterRoleBinding %q of ClusterRole %q to User %q", "ai-grid-provider-admins", "ai-grid-provider-admin", "dev-user")
+		review.Status.Reason = fmt.Sprintf("RBAC: allowed by ClusterRoleBinding %q of ClusterRole %q to User %q", "ai-grid-provider-admins", "ai-grid-provider-admin", h.username(token))
 	}
 	h.logger.Info("access review", "verb", attrs["verb"], "resource", attrs["resource"], "group", attrs["group"], "allowed", allowed)
 	w.Header().Set("Content-Type", "application/json")

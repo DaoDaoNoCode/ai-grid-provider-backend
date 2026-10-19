@@ -620,3 +620,26 @@ func TestDetachKeepsForeignFinalizers(t *testing.T) {
 		t.Fatalf("Get after last finalizer = %v, want NotFound", err)
 	}
 }
+
+// TestAccessReviewAndRBACAgree: SelfSubjectAccessReview and the
+// managedclusters authorizer give every token the same answer.
+func TestAccessReviewAndRBACAgree(t *testing.T) {
+	fx := testFixtures()
+	fx.Access.DefaultAllowed = false
+	th := startHub(t, fx)
+	review := `{"apiVersion":"authorization.k8s.io/v1","kind":"SelfSubjectAccessReview","spec":{"resourceAttributes":{"verb":"list","resource":"managedclusters","group":"cluster.open-cluster-management.io"}}}`
+	for token, want := range map[string]bool{testToken: true, "someone": false, "viewer-token": false} {
+		code, body := th.do(t, http.MethodPost, ssarPath, token, "application/json", review)
+		if code != http.StatusCreated || body["status"].(map[string]any)["allowed"] != want {
+			t.Errorf("%s: review = %d %v, want allowed %v", token, code, body, want)
+		}
+		_, err := th.client(t, token).List(context.Background(), metav1.ListOptions{})
+		if want && err != nil || !want && !apierrors.IsForbidden(err) {
+			t.Errorf("%s: List() error = %v, want allowed %v", token, err, want)
+		}
+	}
+	_, body := th.do(t, http.MethodPost, ssarPath, testToken, "application/json", review)
+	if reason := body["status"].(map[string]any)["reason"]; !strings.Contains(reason.(string), `to User "`+DefaultServiceAccountUsername+`"`) {
+		t.Errorf("service account review reason = %v", reason)
+	}
+}
