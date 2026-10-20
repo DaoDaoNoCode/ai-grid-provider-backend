@@ -1,10 +1,11 @@
 # AI Grid Provider Backend
 
-Go 1.26.3 service exposing gRPC APIs and a grpc-gateway REST surface for AI Grid
-provider operations. It currently manages OCM/RHACM `ManagedCluster` resources
-and Tenants as Keycloak Organizations in a shared platform realm
-(`KEYCLOAK_REALM`, default `ai-grid`) — not one Keycloak realm per tenant.
-Local integration uses Kind and Podman; OpenShift deployment is supported.
+Go 1.26.3 service built on connect-go: one set of handlers answers the Connect, gRPC and
+gRPC-Web protocols, and vanguard transcodes the `google.api.http` annotations into the REST
+surface. It manages OCM/RHACM `ManagedCluster` resources and Tenants as Keycloak
+Organizations in a shared platform realm (`KEYCLOAK_REALM`, default `ai-grid`) — not one
+Keycloak realm per tenant. Local integration uses Kind and Podman; OpenShift deployment is
+supported.
 
 ## Instruction precedence
 
@@ -41,13 +42,13 @@ The OSAC fulfillment-service standards are the reference architecture. Apply the
 cmd/ai-grid-provider-backend/   service entrypoint
 client/                         reusable gRPC client
 proto/                          protobuf sources and buf configuration
-gen/ai_grid/v1/                 generated protobuf, gRPC, and gateway code
+gen/ai_grid/v1/                 generated protobuf, gRPC, and Connect code
 docs/API.md                     authoritative API/service standards for this repo
 docs/UI_API_REFERENCE.md        UI-facing REST payload handout
 docs/openapi/                   generated OpenAPI snapshot
-internal/servers/               per-resource gRPC implementations
+internal/servers/               per-resource connect-go handlers
 internal/keycloak/              Keycloak Admin API client (Tenants = Orgs in KEYCLOAK_REALM)
-internal/restgateway/           REST gateway and Swagger UI
+internal/restgateway/           REST surface (vanguard) and Swagger UI
 integration/                    Kind-backed integration tests
 deploy/kind/                    Kind manifests
 deploy/openshift/               OpenShift manifests

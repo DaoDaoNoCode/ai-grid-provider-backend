@@ -10,10 +10,9 @@ import (
 	"sync"
 	"testing"
 
+	connect "connectrpc.com/connect/v2"
 	aigridv1 "github.com/osac-project/ai-grid-provider-backend/gen/ai_grid/v1"
 	"github.com/osac-project/ai-grid-provider-backend/internal/keycloak"
-	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -202,7 +201,7 @@ func TestGetCluster(t *testing.T) {
 		reqID   string
 		wantEnv string
 		wantHub bool
-		wantErr codes.Code
+		wantErr connect.Code
 	}{
 		{
 			name:    "found",
@@ -215,13 +214,13 @@ func TestGetCluster(t *testing.T) {
 			name:    "not found",
 			objects: []runtime.Object{},
 			reqID:   "missing",
-			wantErr: codes.NotFound,
+			wantErr: connect.CodeNotFound,
 		},
 		{
 			name:    "invalid id",
 			objects: []runtime.Object{},
 			reqID:   "INVALID_NAME",
-			wantErr: codes.InvalidArgument,
+			wantErr: connect.CodeInvalidArgument,
 		},
 	}
 
@@ -230,8 +229,8 @@ func TestGetCluster(t *testing.T) {
 			t.Parallel()
 			server := mustClustersServer(t, newManagedClusterClient(tc.objects...))
 			got, err := server.Get(context.Background(), &aigridv1.ClustersGetRequest{Id: tc.reqID})
-			if tc.wantErr != codes.OK {
-				assertGRPCCode(t, err, tc.wantErr)
+			if tc.wantErr != 0 {
+				assertConnectCode(t, err, tc.wantErr)
 				return
 			}
 			if err != nil {
@@ -322,14 +321,14 @@ func TestCreateCluster(t *testing.T) {
 				Spec: &aigridv1.ManagedClusterSpec{HubAcceptsClient: true},
 			},
 		})
-		assertGRPCCode(t, err, codes.AlreadyExists)
+		assertConnectCode(t, err, connect.CodeAlreadyExists)
 	})
 
 	t.Run("nil object", func(t *testing.T) {
 		t.Parallel()
 		server := mustClustersServer(t, newManagedClusterClient())
 		_, err := server.Create(context.Background(), &aigridv1.ClustersCreateRequest{})
-		assertGRPCCode(t, err, codes.InvalidArgument)
+		assertConnectCode(t, err, connect.CodeInvalidArgument)
 	})
 }
 
@@ -456,7 +455,7 @@ func TestUpdateCluster(t *testing.T) {
 				Object:     &aigridv1.ManagedCluster{Id: "cluster-a", Metadata: tc.meta},
 				UpdateMask: tc.mask,
 			})
-			if status.Code(err) != codes.InvalidArgument {
+			if connect.CodeOf(err) != connect.CodeInvalidArgument {
 				t.Fatalf("%s: error = %v, want InvalidArgument", tc.name, err)
 			}
 		}
@@ -495,7 +494,7 @@ func TestUpdateCluster(t *testing.T) {
 			if tc.ok && err != nil {
 				t.Fatalf("%v: error = %v, want nil", tc.annotations, err)
 			}
-			if !tc.ok && status.Code(err) != codes.InvalidArgument {
+			if !tc.ok && connect.CodeOf(err) != connect.CodeInvalidArgument {
 				t.Fatalf("%v: error = %v, want InvalidArgument", tc.annotations, err)
 			}
 		}
@@ -549,7 +548,7 @@ func TestUpdateCluster(t *testing.T) {
 				Spec: &aigridv1.ManagedClusterSpec{HubAcceptsClient: true},
 			},
 		})
-		assertGRPCCode(t, err, codes.NotFound)
+		assertConnectCode(t, err, connect.CodeNotFound)
 	})
 }
 
@@ -564,14 +563,14 @@ func TestDeleteCluster(t *testing.T) {
 			t.Fatalf("Delete() error = %v", err)
 		}
 		_, err = server.Get(context.Background(), &aigridv1.ClustersGetRequest{Id: "cluster-a"})
-		assertGRPCCode(t, err, codes.NotFound)
+		assertConnectCode(t, err, connect.CodeNotFound)
 	})
 
 	t.Run("not found", func(t *testing.T) {
 		t.Parallel()
 		server := mustClustersServer(t, newManagedClusterClient())
 		_, err := server.Delete(context.Background(), &aigridv1.ClustersDeleteRequest{Id: "missing"})
-		assertGRPCCode(t, err, codes.NotFound)
+		assertConnectCode(t, err, connect.CodeNotFound)
 	})
 }
 
@@ -682,10 +681,10 @@ func TestGetTenant(t *testing.T) {
 	}
 
 	_, err = server.Get(context.Background(), &aigridv1.TenantsGetRequest{Id: "missing"})
-	assertGRPCCode(t, err, codes.NotFound)
+	assertConnectCode(t, err, connect.CodeNotFound)
 
 	_, err = server.Get(context.Background(), &aigridv1.TenantsGetRequest{})
-	assertGRPCCode(t, err, codes.InvalidArgument)
+	assertConnectCode(t, err, connect.CodeInvalidArgument)
 }
 
 func TestCreateTenant(t *testing.T) {
@@ -720,7 +719,7 @@ func TestCreateTenant(t *testing.T) {
 		_, err := server.Create(context.Background(), &aigridv1.TenantsCreateRequest{
 			Object: &aigridv1.Tenant{Metadata: &aigridv1.Metadata{Name: "acme"}},
 		})
-		assertGRPCCode(t, err, codes.AlreadyExists)
+		assertConnectCode(t, err, connect.CodeAlreadyExists)
 	})
 
 	t.Run("invalid name", func(t *testing.T) {
@@ -729,7 +728,7 @@ func TestCreateTenant(t *testing.T) {
 		_, err := server.Create(context.Background(), &aigridv1.TenantsCreateRequest{
 			Object: &aigridv1.Tenant{Metadata: &aigridv1.Metadata{Name: "INVALID"}},
 		})
-		assertGRPCCode(t, err, codes.InvalidArgument)
+		assertConnectCode(t, err, connect.CodeInvalidArgument)
 	})
 
 	t.Run("invalid domain single label", func(t *testing.T) {
@@ -741,7 +740,7 @@ func TestCreateTenant(t *testing.T) {
 				Spec:     &aigridv1.TenantSpec{Domains: []string{"localhost"}},
 			},
 		})
-		assertGRPCCode(t, err, codes.InvalidArgument)
+		assertConnectCode(t, err, connect.CodeInvalidArgument)
 	})
 
 	t.Run("invalid domain ip", func(t *testing.T) {
@@ -753,7 +752,7 @@ func TestCreateTenant(t *testing.T) {
 				Spec:     &aigridv1.TenantSpec{Domains: []string{"1.2.3.4"}},
 			},
 		})
-		assertGRPCCode(t, err, codes.InvalidArgument)
+		assertConnectCode(t, err, connect.CodeInvalidArgument)
 	})
 
 	t.Run("invalid domain uppercase", func(t *testing.T) {
@@ -765,7 +764,7 @@ func TestCreateTenant(t *testing.T) {
 				Spec:     &aigridv1.TenantSpec{Domains: []string{"Acme.Example.COM"}},
 			},
 		})
-		assertGRPCCode(t, err, codes.InvalidArgument)
+		assertConnectCode(t, err, connect.CodeInvalidArgument)
 	})
 
 	t.Run("duplicate domains", func(t *testing.T) {
@@ -777,7 +776,7 @@ func TestCreateTenant(t *testing.T) {
 				Spec:     &aigridv1.TenantSpec{Domains: []string{"acme.example.com", "acme.example.com"}},
 			},
 		})
-		assertGRPCCode(t, err, codes.InvalidArgument)
+		assertConnectCode(t, err, connect.CodeInvalidArgument)
 	})
 
 	t.Run("blank domain entry is rejected", func(t *testing.T) {
@@ -789,14 +788,14 @@ func TestCreateTenant(t *testing.T) {
 				Spec:     &aigridv1.TenantSpec{Domains: []string{" "}},
 			},
 		})
-		assertGRPCCode(t, err, codes.InvalidArgument)
+		assertConnectCode(t, err, connect.CodeInvalidArgument)
 	})
 
 	t.Run("nil object", func(t *testing.T) {
 		t.Parallel()
 		server := mustTenantsServer(t, newFakeOrganizationStore())
 		_, err := server.Create(context.Background(), &aigridv1.TenantsCreateRequest{})
-		assertGRPCCode(t, err, codes.InvalidArgument)
+		assertConnectCode(t, err, connect.CodeInvalidArgument)
 	})
 }
 
@@ -891,7 +890,7 @@ func TestUpdateTenant(t *testing.T) {
 			},
 			UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"metadata.labels"}},
 		})
-		assertGRPCCode(t, err, codes.InvalidArgument)
+		assertConnectCode(t, err, connect.CodeInvalidArgument)
 		stored, err := store.GetOrganization(context.Background(), "org-1")
 		if err != nil {
 			t.Fatalf("GetOrganization: %v", err)
@@ -938,7 +937,7 @@ func TestUpdateTenant(t *testing.T) {
 			},
 			UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"metadata.name"}},
 		})
-		assertGRPCCode(t, err, codes.InvalidArgument)
+		assertConnectCode(t, err, connect.CodeInvalidArgument)
 	})
 
 	t.Run("blank domain entry is rejected", func(t *testing.T) {
@@ -957,7 +956,7 @@ func TestUpdateTenant(t *testing.T) {
 			},
 			UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.domains"}},
 		})
-		assertGRPCCode(t, err, codes.InvalidArgument)
+		assertConnectCode(t, err, connect.CodeInvalidArgument)
 		stored, err := store.GetOrganization(context.Background(), "org-1")
 		if err != nil {
 			t.Fatalf("GetOrganization: %v", err)
@@ -1005,7 +1004,7 @@ func TestUpdateTenant(t *testing.T) {
 				Metadata: &aigridv1.Metadata{Name: "missing"},
 			},
 		})
-		assertGRPCCode(t, err, codes.NotFound)
+		assertConnectCode(t, err, connect.CodeNotFound)
 	})
 }
 
@@ -1038,14 +1037,14 @@ func TestListTenantMembers(t *testing.T) {
 		t.Parallel()
 		server := mustTenantsServer(t, newFakeOrganizationStore())
 		_, err := server.ListMembers(context.Background(), &aigridv1.TenantsListMembersRequest{Id: "missing"})
-		assertGRPCCode(t, err, codes.NotFound)
+		assertConnectCode(t, err, connect.CodeNotFound)
 	})
 
 	t.Run("requires id", func(t *testing.T) {
 		t.Parallel()
 		server := mustTenantsServer(t, newFakeOrganizationStore())
 		_, err := server.ListMembers(context.Background(), &aigridv1.TenantsListMembersRequest{})
-		assertGRPCCode(t, err, codes.InvalidArgument)
+		assertConnectCode(t, err, connect.CodeInvalidArgument)
 	})
 }
 
@@ -1062,14 +1061,14 @@ func TestDeleteTenant(t *testing.T) {
 			t.Fatalf("Delete() error = %v", err)
 		}
 		_, err = server.Get(context.Background(), &aigridv1.TenantsGetRequest{Id: "org-1"})
-		assertGRPCCode(t, err, codes.NotFound)
+		assertConnectCode(t, err, connect.CodeNotFound)
 	})
 
 	t.Run("not found", func(t *testing.T) {
 		t.Parallel()
 		server := mustTenantsServer(t, newFakeOrganizationStore())
 		_, err := server.Delete(context.Background(), &aigridv1.TenantsDeleteRequest{Id: "missing"})
-		assertGRPCCode(t, err, codes.NotFound)
+		assertConnectCode(t, err, connect.CodeNotFound)
 	})
 }
 
@@ -1214,17 +1213,20 @@ func managedCluster(name string, labels map[string]string, accepts bool) *unstru
 	}}
 }
 
-func assertGRPCCode(t *testing.T, err error, want codes.Code) {
+// assertConnectCode requires a *connect.Error, not just a matching code:
+// connect.CodeOf answers CodeUnknown for any uncoded error, so checking the
+// code alone would pass for a plain Go error.
+func assertConnectCode(t *testing.T, err error, want connect.Code) {
 	t.Helper()
 	if err == nil {
-		t.Fatalf("error = nil, want gRPC code %v", want)
+		t.Fatalf("error = nil, want connect code %v", want)
 	}
-	st, ok := status.FromError(err)
-	if !ok {
-		t.Fatalf("error = %v, want gRPC status %v", err, want)
+	var connectErr *connect.Error
+	if !errors.As(err, &connectErr) {
+		t.Fatalf("error = %v (%T), want *connect.Error with code %v", err, err, want)
 	}
-	if st.Code() != want {
-		t.Fatalf("gRPC code = %v, want %v (%v)", st.Code(), want, err)
+	if connectErr.Code() != want {
+		t.Fatalf("connect code = %v, want %v (%v)", connectErr.Code(), want, err)
 	}
 }
 

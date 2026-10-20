@@ -1,8 +1,11 @@
 package client_test
 
 import (
+	connect "connectrpc.com/connect/v2"
+	"connectrpc.com/connect/v2/connecthttp"
 	"context"
 	"errors"
+	"github.com/osac-project/ai-grid-provider-backend/gen/ai_grid/v1/aigridv1connect"
 	"net"
 	"net/http"
 	"testing"
@@ -11,7 +14,6 @@ import (
 	aigridv1 "github.com/osac-project/ai-grid-provider-backend/gen/ai_grid/v1"
 	"github.com/osac-project/ai-grid-provider-backend/internal/keycloak"
 	"github.com/osac-project/ai-grid-provider-backend/internal/servers"
-	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
@@ -356,12 +358,17 @@ func startTestClient(t *testing.T, objects []runtime.Object, orgs organizationCl
 	if err != nil {
 		t.Fatalf("listen: %v", err)
 	}
-	grpcServer := grpc.NewServer()
-	aigridv1.RegisterAiGridServer(grpcServer, aiGridServer)
-	aigridv1.RegisterClustersServer(grpcServer, clustersServer)
-	aigridv1.RegisterTenantsServer(grpcServer, tenantsServer)
+	// client/ is a grpc-go client; it reaches the connect handlers over plaintext
+	// HTTP/2, exactly as it reaches the deployed service.
+	server := connect.NewServer()
+	aigridv1connect.RegisterAiGridHandler(server, aiGridServer)
+	aigridv1connect.RegisterClustersHandler(server, clustersServer)
+	aigridv1connect.RegisterTenantsHandler(server, tenantsServer)
+	mux := http.NewServeMux()
+	connecthttp.Mount(mux, server)
+	apiServer := h2cServer(mux)
 	go func() {
-		_ = grpcServer.Serve(listener)
+		_ = apiServer.Serve(listener)
 	}()
 
 	client, err := clientpkg.NewBuilder().
@@ -369,14 +376,14 @@ func startTestClient(t *testing.T, objects []runtime.Object, orgs organizationCl
 		SetPlaintext(true).
 		Build(context.Background())
 	if err != nil {
-		grpcServer.Stop()
+		_ = apiServer.Close()
 		_ = listener.Close()
 		t.Fatalf("build client: %v", err)
 	}
 
 	cleanup := func() {
 		_ = client.Close()
-		grpcServer.Stop()
+		_ = apiServer.Close()
 		_ = listener.Close()
 	}
 	return client, cleanup
@@ -452,4 +459,13 @@ func managedClusterIDs(clusters []*aigridv1.ManagedCluster) []string {
 		ids = append(ids, cluster.GetId())
 	}
 	return ids
+}
+
+// h2cServer serves plaintext HTTP/2, which is what a gRPC client speaks and what
+// the deployed service listens for.
+func h2cServer(handler http.Handler) *http.Server {
+	protocols := new(http.Protocols)
+	protocols.SetHTTP1(true)
+	protocols.SetUnencryptedHTTP2(true)
+	return &http.Server{Handler: handler, Protocols: protocols}
 }

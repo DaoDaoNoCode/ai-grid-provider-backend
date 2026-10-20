@@ -7,6 +7,7 @@ import (
 	"log/slog"
 
 	aigridv1 "github.com/osac-project/ai-grid-provider-backend/gen/ai_grid/v1"
+	"github.com/osac-project/ai-grid-provider-backend/gen/ai_grid/v1/aigridv1connect"
 )
 
 // AiGridServerBuilder configures an AiGridServer.
@@ -16,11 +17,11 @@ type AiGridServerBuilder struct {
 
 // AiGridServer implements ai_grid.v1.AiGrid.
 type AiGridServer struct {
-	aigridv1.UnimplementedAiGridServer
+	aigridv1connect.UnimplementedAiGridHandler
 	logger *slog.Logger
 }
 
-var _ aigridv1.AiGridServer = (*AiGridServer)(nil)
+var _ aigridv1connect.AiGridHandler = (*AiGridServer)(nil)
 
 // NewAiGridServer creates a builder for AiGridServer.
 func NewAiGridServer() *AiGridServerBuilder {

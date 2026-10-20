@@ -1,6 +1,7 @@
 package servers
 
 import (
+	connect "connectrpc.com/connect/v2"
 	"context"
 	"errors"
 	"fmt"
@@ -9,9 +10,8 @@ import (
 	"strings"
 
 	aigridv1 "github.com/osac-project/ai-grid-provider-backend/gen/ai_grid/v1"
+	"github.com/osac-project/ai-grid-provider-backend/gen/ai_grid/v1/aigridv1connect"
 	"github.com/osac-project/ai-grid-provider-backend/internal/keycloak"
-	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
 )
 
@@ -43,12 +43,12 @@ type TenantsServerBuilder struct {
 
 // TenantsServer implements ai_grid.v1.Tenants.
 type TenantsServer struct {
-	aigridv1.UnimplementedTenantsServer
+	aigridv1connect.UnimplementedTenantsHandler
 	logger  *slog.Logger
 	tenants organizationClient
 }
 
-var _ aigridv1.TenantsServer = (*TenantsServer)(nil)
+var _ aigridv1connect.TenantsHandler = (*TenantsServer)(nil)
 
 // NewTenantsServer creates a builder for TenantsServer.
 func NewTenantsServer() *TenantsServerBuilder {
@@ -124,7 +124,7 @@ func (s *TenantsServer) Get(ctx context.Context, req *aigridv1.TenantsGetRequest
 func (s *TenantsServer) Create(ctx context.Context, req *aigridv1.TenantsCreateRequest) (*aigridv1.TenantsCreateResponse, error) {
 	object := req.GetObject()
 	if object == nil {
-		return nil, status.Error(codes.InvalidArgument, "object is required")
+		return nil, connect.Errorf(connect.CodeInvalidArgument, "object is required")
 	}
 	name := tenantDisplayName(object)
 	if err := validateTenantName(name); err != nil {
@@ -155,7 +155,7 @@ func (s *TenantsServer) Create(ctx context.Context, req *aigridv1.TenantsCreateR
 func (s *TenantsServer) Update(ctx context.Context, req *aigridv1.TenantsUpdateRequest) (*aigridv1.TenantsUpdateResponse, error) {
 	object := req.GetObject()
 	if object == nil {
-		return nil, status.Error(codes.InvalidArgument, "object is required")
+		return nil, connect.Errorf(connect.CodeInvalidArgument, "object is required")
 	}
 	id := object.GetId()
 	if err := validateTenantID(id); err != nil {
@@ -176,7 +176,7 @@ func (s *TenantsServer) Update(ctx context.Context, req *aigridv1.TenantsUpdateR
 		name := tenantDisplayName(object)
 		if name == "" {
 			if nameRequired {
-				return nil, status.Error(codes.InvalidArgument, "metadata.name is required")
+				return nil, connect.Errorf(connect.CodeInvalidArgument, "metadata.name is required")
 			}
 			name = current.Name
 		}
@@ -287,7 +287,7 @@ func domainsFromTenantSpec(spec *aigridv1.TenantSpec) ([]keycloak.OrganizationDo
 	for _, domain := range spec.GetDomains() {
 		trimmed := strings.TrimSpace(domain)
 		if trimmed == "" {
-			return nil, status.Error(codes.InvalidArgument, "spec.domains entries must be non-empty")
+			return nil, connect.Errorf(connect.CodeInvalidArgument, "spec.domains entries must be non-empty")
 		}
 		domains = append(domains, keycloak.OrganizationDomain{Name: trimmed})
 	}
@@ -314,7 +314,7 @@ func tenantUpdatePaths(mask *fieldmaskpb.FieldMask) (name, domains, nameRequired
 		case "spec", "spec.domains":
 			domains = true
 		default:
-			return false, false, false, status.Errorf(codes.InvalidArgument, "unsupported update_mask path %q", path)
+			return false, false, false, connect.Errorf(connect.CodeInvalidArgument, "unsupported update_mask path %q", path)
 		}
 	}
 	return name, domains, nameRequired, nil
@@ -322,17 +322,17 @@ func tenantUpdatePaths(mask *fieldmaskpb.FieldMask) (name, domains, nameRequired
 
 func validateTenantID(id string) error {
 	if strings.TrimSpace(id) == "" {
-		return status.Error(codes.InvalidArgument, "id is required")
+		return connect.Errorf(connect.CodeInvalidArgument, "id is required")
 	}
 	return nil
 }
 
 func validateTenantName(name string) error {
 	if name == "" {
-		return status.Error(codes.InvalidArgument, "metadata.name is required")
+		return connect.Errorf(connect.CodeInvalidArgument, "metadata.name is required")
 	}
 	if !tenantNameRE.MatchString(name) {
-		return status.Errorf(codes.InvalidArgument, "metadata.name %q is not a valid RFC 1123 DNS label", name)
+		return connect.Errorf(connect.CodeInvalidArgument, "metadata.name %q is not a valid RFC 1123 DNS label", name)
 	}
 	return nil
 }
@@ -345,25 +345,25 @@ func validateTenantDomains(domains []keycloak.OrganizationDomain) error {
 	for _, d := range domains {
 		name := strings.TrimSpace(d.Name)
 		if name == "" {
-			return status.Error(codes.InvalidArgument, "spec.domains entries must be non-empty")
+			return connect.Errorf(connect.CodeInvalidArgument, "spec.domains entries must be non-empty")
 		}
 		if len(name) > 253 {
-			return status.Errorf(codes.InvalidArgument, "spec.domains entry %q exceeds 253 characters", name)
+			return connect.Errorf(connect.CodeInvalidArgument, "spec.domains entry %q exceeds 253 characters", name)
 		}
 		if ipv4RE.MatchString(name) || ipv6LooseRE.MatchString(name) {
-			return status.Errorf(codes.InvalidArgument, "spec.domains entry %q must be a DNS hostname, not an IP address", name)
+			return connect.Errorf(connect.CodeInvalidArgument, "spec.domains entry %q must be a DNS hostname, not an IP address", name)
 		}
 		if !strings.Contains(name, ".") {
-			return status.Errorf(codes.InvalidArgument, "spec.domains entry %q must have at least two labels (e.g. example.com)", name)
+			return connect.Errorf(connect.CodeInvalidArgument, "spec.domains entry %q must have at least two labels (e.g. example.com)", name)
 		}
 		labels := strings.Split(name, ".")
 		for _, label := range labels {
 			if !tenantNameRE.MatchString(label) {
-				return status.Errorf(codes.InvalidArgument, "spec.domains entry %q has invalid DNS label %q (lowercase a-z/0-9/hyphen only)", name, label)
+				return connect.Errorf(connect.CodeInvalidArgument, "spec.domains entry %q has invalid DNS label %q (lowercase a-z/0-9/hyphen only)", name, label)
 			}
 		}
 		if _, ok := seen[name]; ok {
-			return status.Errorf(codes.InvalidArgument, "spec.domains contains duplicate %q", name)
+			return connect.Errorf(connect.CodeInvalidArgument, "spec.domains contains duplicate %q", name)
 		}
 		seen[name] = struct{}{}
 	}
@@ -374,18 +374,18 @@ func mapTenantKeycloakError(op, id string, err error) error {
 	switch {
 	case keycloak.IsNotFound(err):
 		if id == "" {
-			return status.Errorf(codes.NotFound, "tenant not found")
+			return connect.Errorf(connect.CodeNotFound, "tenant not found")
 		}
-		return status.Errorf(codes.NotFound, "tenant %q not found", id)
+		return connect.Errorf(connect.CodeNotFound, "tenant %q not found", id)
 	case keycloak.IsConflict(err):
 		if id == "" {
-			return status.Errorf(codes.AlreadyExists, "tenant already exists")
+			return connect.Errorf(connect.CodeAlreadyExists, "tenant already exists")
 		}
-		return status.Errorf(codes.AlreadyExists, "tenant %q already exists", id)
+		return connect.Errorf(connect.CodeAlreadyExists, "tenant %q already exists", id)
 	case keycloak.IsBadRequest(err):
-		return status.Errorf(codes.InvalidArgument, "%s tenant %q: %v", op, id, err)
+		return connect.Errorf(connect.CodeInvalidArgument, "%s tenant %q: %v", op, id, err)
 	case keycloak.IsForbidden(err):
-		return status.Errorf(codes.PermissionDenied, "%s tenant %q: %v", op, id, err)
+		return connect.Errorf(connect.CodePermissionDenied, "%s tenant %q: %v", op, id, err)
 	default:
 		if id == "" {
 			return fmt.Errorf("%s tenants: %w", op, err)

@@ -12,9 +12,9 @@ import (
 	"strconv"
 	"strings"
 
+	connect "connectrpc.com/connect/v2"
 	aigridv1 "github.com/osac-project/ai-grid-provider-backend/gen/ai_grid/v1"
-	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
+	"github.com/osac-project/ai-grid-provider-backend/gen/ai_grid/v1/aigridv1connect"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -48,14 +48,14 @@ type ClustersServerBuilder struct {
 
 // ClustersServer implements ai_grid.v1.Clusters against hub ManagedCluster CRs.
 type ClustersServer struct {
-	aigridv1.UnimplementedClustersServer
+	aigridv1connect.UnimplementedClustersHandler
 	logger               *slog.Logger
 	client               dynamic.Interface
 	readyPolicyNamespace string
 	readyPolicyName      string
 }
 
-var _ aigridv1.ClustersServer = (*ClustersServer)(nil)
+var _ aigridv1connect.ClustersHandler = (*ClustersServer)(nil)
 
 // NewClustersServer creates a builder for ClustersServer.
 func NewClustersServer() *ClustersServerBuilder {
@@ -141,7 +141,7 @@ func (s *ClustersServer) Get(ctx context.Context, req *aigridv1.ClustersGetReque
 func (s *ClustersServer) Create(ctx context.Context, req *aigridv1.ClustersCreateRequest) (*aigridv1.ClustersCreateResponse, error) {
 	object := req.GetObject()
 	if object == nil {
-		return nil, status.Error(codes.InvalidArgument, "object is required")
+		return nil, connect.Errorf(connect.CodeInvalidArgument, "object is required")
 	}
 	id := managedClusterID(object)
 	if err := validateManagedClusterID(id); err != nil {
@@ -186,7 +186,7 @@ func (s *ClustersServer) Create(ctx context.Context, req *aigridv1.ClustersCreat
 func (s *ClustersServer) Update(ctx context.Context, req *aigridv1.ClustersUpdateRequest) (*aigridv1.ClustersUpdateResponse, error) {
 	object := req.GetObject()
 	if object == nil {
-		return nil, status.Error(codes.InvalidArgument, "object is required")
+		return nil, connect.Errorf(connect.CodeInvalidArgument, "object is required")
 	}
 	id := managedClusterID(object)
 	if err := validateManagedClusterID(id); err != nil {
@@ -203,7 +203,7 @@ func (s *ClustersServer) Update(ctx context.Context, req *aigridv1.ClustersUpdat
 		version = object.GetMetadata().GetVersion()
 	}
 	if req.GetLock() && version == 0 {
-		return nil, status.Error(codes.InvalidArgument, "lock requires metadata.version")
+		return nil, connect.Errorf(connect.CodeInvalidArgument, "lock requires metadata.version")
 	}
 	// A stale version is Aborted before anything else is checked: a client
 	// sends back the labels it read, and ACM may have changed some since.
@@ -381,7 +381,7 @@ func checkConsoleKeys(kind string, current, requested map[string]string) error {
 	sort.Strings(keys)
 	for _, k := range keys {
 		if cur, ok := current[k]; !isConsoleManagedKey(kind, k) && (!ok || cur != requested[k]) {
-			return status.Errorf(codes.InvalidArgument, "%s %q cannot be changed through the console; only ai-grid/* labels and annotations and the location label can", kind, k)
+			return connect.Errorf(connect.CodeInvalidArgument, "%s %q cannot be changed through the console; only ai-grid/* labels and annotations and the location label can", kind, k)
 		}
 	}
 	return nil
@@ -401,7 +401,7 @@ func checkCoordinates(annotations map[string]string) error {
 		}
 		f, err := strconv.ParseFloat(v, 64)
 		if err != nil || math.IsNaN(f) || math.IsInf(f, 0) || f < -c.limit || f > c.limit {
-			return status.Errorf(codes.InvalidArgument, "annotation %q must be a number between %v and %v, got %q", c.key, -c.limit, c.limit, v)
+			return connect.Errorf(connect.CodeInvalidArgument, "annotation %q must be a number between %v and %v, got %q", c.key, -c.limit, c.limit, v)
 		}
 	}
 	return nil
@@ -430,32 +430,10 @@ func managedKeysPatch(kind string, current, requested map[string]string) map[str
 
 func validateManagedClusterID(id string) error {
 	if id == "" {
-		return status.Error(codes.InvalidArgument, "id is required")
+		return connect.Errorf(connect.CodeInvalidArgument, "id is required")
 	}
 	if !managedClusterNameRE.MatchString(id) {
-		return status.Errorf(codes.InvalidArgument, "id %q is not a valid RFC 1123 DNS label", id)
+		return connect.Errorf(connect.CodeInvalidArgument, "id %q is not a valid RFC 1123 DNS label", id)
 	}
 	return nil
-}
-
-// staleClusterError is the Aborted error for a write against an old version.
-func staleClusterError(op, id string) error {
-	return status.Errorf(codes.Aborted, "%s ManagedCluster %q: the cluster changed since it was read; reload and retry", op, id)
-}
-
-func mapManagedClusterAPIError(op, id string, err error) error {
-	switch {
-	case apierrors.IsNotFound(err):
-		return status.Errorf(codes.NotFound, "ManagedCluster %q not found", id)
-	case apierrors.IsAlreadyExists(err):
-		return status.Errorf(codes.AlreadyExists, "ManagedCluster %q already exists", id)
-	case apierrors.IsInvalid(err), apierrors.IsBadRequest(err):
-		return status.Errorf(codes.InvalidArgument, "%s ManagedCluster %q: %v", op, id, err)
-	case apierrors.IsConflict(err):
-		return staleClusterError(op, id)
-	case apierrors.IsForbidden(err), apierrors.IsUnauthorized(err):
-		return status.Errorf(codes.PermissionDenied, "%s ManagedCluster %q: %v", op, id, err)
-	default:
-		return fmt.Errorf("%s ManagedCluster %q: %w", op, id, err)
-	}
 }

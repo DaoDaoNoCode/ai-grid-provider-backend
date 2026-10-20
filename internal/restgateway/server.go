@@ -9,9 +9,10 @@ import (
 	"net"
 	"net/http"
 
-	"github.com/grpc-ecosystem/grpc-gateway/v2/runtime"
-	aigridv1 "github.com/osac-project/ai-grid-provider-backend/gen/ai_grid/v1"
-	"google.golang.org/protobuf/encoding/protojson"
+	connect "connectrpc.com/connect/v2"
+	"connectrpc.com/connect/v2/connecthttp"
+	"connectrpc.com/connect/v2/connectproto"
+	"connectrpc.com/vanguard"
 )
 
 //go:embed swagger.html
@@ -23,46 +24,23 @@ var openAPISpec []byte
 //go:embed openapi
 var openAPIFS embed.FS
 
-// Servers are the gRPC service implementations exposed over HTTP.
-type Servers struct {
-	AiGrid   aigridv1.AiGridServer
-	Clusters aigridv1.ClustersServer
-	Tenants  aigridv1.TenantsServer
-}
-
 // Server is the HTTP REST gateway + Swagger UI listener.
 type Server struct {
 	httpServer *http.Server
 	listener   net.Listener
 }
 
-// New builds an HTTP gateway that calls the in-process gRPC service impls
-// (OSAC-style grpc-gateway) and serves Swagger UI at /docs.
-func New(ctx context.Context, address string, servers Servers) (*Server, error) {
-	mux := runtime.NewServeMux(
-		runtime.WithMarshalerOption(runtime.MIMEWildcard, &runtime.JSONPb{
-			MarshalOptions: protojson.MarshalOptions{
-				UseProtoNames:   true,
-				EmitUnpopulated: true,
-			},
-			UnmarshalOptions: protojson.UnmarshalOptions{
-				DiscardUnknown: true,
-			},
-		}),
-	)
-
-	if err := aigridv1.RegisterAiGridHandlerServer(ctx, mux, servers.AiGrid); err != nil {
-		return nil, fmt.Errorf("register AiGrid HTTP handlers: %w", err)
-	}
-	if err := aigridv1.RegisterClustersHandlerServer(ctx, mux, servers.Clusters); err != nil {
-		return nil, fmt.Errorf("register Clusters HTTP handlers: %w", err)
-	}
-	if err := aigridv1.RegisterTenantsHandlerServer(ctx, mux, servers.Tenants); err != nil {
-		return nil, fmt.Errorf("register Tenants HTTP handlers: %w", err)
-	}
-
+// New builds an HTTP gateway that serves the registered services over REST and
+// Swagger UI at /docs. vanguard reads the google.api.http annotations off the
+// descriptors at runtime, so there is no generated gateway code.
+func New(address string, server *connect.Server) (*Server, error) {
 	root := http.NewServeMux()
-	root.Handle("/", mux)
+	// vanguard installs a catch-all "/" handler; the more specific patterns
+	// below still win, so the docs paths are unaffected.
+	if err := Mount(root, server); err != nil {
+		return nil, err
+	}
+
 	root.HandleFunc("/openapi.json", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write(openAPISpec)
@@ -105,4 +83,25 @@ func (s *Server) Serve() error {
 // Shutdown gracefully stops the HTTP server.
 func (s *Server) Shutdown(ctx context.Context) error {
 	return s.httpServer.Shutdown(ctx)
+}
+
+// Mount adds the REST surface to mux: vanguard derives it from the
+// google.api.http annotations on the services registered on server. Every
+// listener that offers REST goes through here, so they all answer the same
+// JSON.
+func Mount(mux connecthttp.ServeMux, server *connect.Server) error {
+	if err := vanguard.Mount(mux, server, vanguard.WithCodec(newRESTCodec)); err != nil {
+		return fmt.Errorf("mount REST handlers: %w", err)
+	}
+	return nil
+}
+
+// newRESTCodec keeps the JSON the REST surface has always answered with.
+// vanguard's default emits camelCase names; the grpc-gateway marshaler this
+// replaces was configured for proto names, and unpopulated fields are emitted
+// either way.
+func newRESTCodec(resolver connectproto.TypeResolver) vanguard.RESTCodec {
+	codec := vanguard.NewJSONCodec(resolver)
+	codec.MarshalOptions.UseProtoNames = true
+	return codec
 }

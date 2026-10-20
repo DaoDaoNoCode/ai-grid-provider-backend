@@ -13,14 +13,14 @@ import (
 	"syscall"
 	"time"
 
-	aigridv1 "github.com/osac-project/ai-grid-provider-backend/gen/ai_grid/v1"
+	connect "connectrpc.com/connect/v2"
+	"connectrpc.com/connect/v2/connecthttp"
+	grpchealth "connectrpc.com/grpchealth/v2"
+	grpcreflect "connectrpc.com/grpcreflect/v2"
+	"github.com/osac-project/ai-grid-provider-backend/gen/ai_grid/v1/aigridv1connect"
 	"github.com/osac-project/ai-grid-provider-backend/internal/keycloak"
 	"github.com/osac-project/ai-grid-provider-backend/internal/restgateway"
 	"github.com/osac-project/ai-grid-provider-backend/internal/servers"
-	"google.golang.org/grpc"
-	"google.golang.org/grpc/health"
-	healthv1 "google.golang.org/grpc/health/grpc_health_v1"
-	"google.golang.org/grpc/reflection"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
@@ -71,24 +71,40 @@ func main() {
 		os.Exit(1)
 	}
 
-	grpcServer := grpc.NewServer()
-	aigridv1.RegisterAiGridServer(grpcServer, aiGridServer)
-	aigridv1.RegisterClustersServer(grpcServer, clustersServer)
-	aigridv1.RegisterTenantsServer(grpcServer, tenantsServer)
+	// One *connect.Server holds every service. connecthttp serves Connect,
+	// gRPC and gRPC-Web from it; vanguard serves the google.api.http
+	// annotations as REST. Both transports dispatch the same handlers.
+	server := connect.NewServer()
+	aigridv1connect.RegisterAiGridHandler(server, aiGridServer)
+	aigridv1connect.RegisterClustersHandler(server, clustersServer)
+	aigridv1connect.RegisterTenantsHandler(server, tenantsServer)
 
-	healthServer := health.NewServer()
-	healthServer.SetServingStatus("", healthv1.HealthCheckResponse_SERVING)
-	healthv1.RegisterHealthServer(grpcServer, healthServer)
-	reflection.Register(grpcServer)
+	grpchealth.Register(server, grpchealth.NewStaticChecker(
+		aigridv1connect.AiGridName,
+		aigridv1connect.ClustersName,
+		aigridv1connect.TenantsName,
+	))
+	// Reflection reports whatever is registered on the server, health included.
+	grpcreflect.Register(server)
+
+	mux := http.NewServeMux()
+	connecthttp.Mount(mux, server)
+	if err := restgateway.Mount(mux, server); err != nil {
+		fmt.Fprintf(os.Stderr, "%v\n", err)
+		os.Exit(1)
+	}
+
+	// Plaintext HTTP/2 so gRPC clients (grpcurl, client/, integration/) reach
+	// the same address they always have, alongside HTTP/1.1 Connect callers.
+	protocols := new(http.Protocols)
+	protocols.SetHTTP1(true)
+	protocols.SetUnencryptedHTTP2(true)
+	apiServer := &http.Server{Handler: mux, Protocols: protocols}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	gateway, err := restgateway.New(ctx, *httpAddress, restgateway.Servers{
-		AiGrid:   aiGridServer,
-		Clusters: clustersServer,
-		Tenants:  tenantsServer,
-	})
+	gateway, err := restgateway.New(*httpAddress, server)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "REST gateway: %v\n", err)
 		os.Exit(1)
@@ -100,7 +116,7 @@ func main() {
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 		_ = gateway.Shutdown(shutdownCtx)
-		grpcServer.GracefulStop()
+		_ = apiServer.Shutdown(shutdownCtx)
 	}()
 
 	go func() {
@@ -111,8 +127,8 @@ func main() {
 	}()
 
 	slog.Info("ai-grid-provider-backend listening", "grpc", listener.Addr().String(), "http", gateway.Addr())
-	if err := grpcServer.Serve(listener); err != nil && !errors.Is(err, grpc.ErrServerStopped) {
-		fmt.Fprintf(os.Stderr, "gRPC server: %v\n", err)
+	if err := apiServer.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) {
+		fmt.Fprintf(os.Stderr, "RPC server: %v\n", err)
 		os.Exit(1)
 	}
 }
