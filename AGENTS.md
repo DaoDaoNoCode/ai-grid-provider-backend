@@ -196,6 +196,12 @@ Tags: `sha-<full sha>` on every publish (deploy this one), `latest` on `main`,
 and semver from `v*` tags. No repository secrets: the job pushes with
 `GITHUB_TOKEN` (`packages: write`).
 
+Pull requests also get an image: `publish-image.yml` builds it without
+credentials, `publish-pr-image.yml` pushes it as `pr-<number>` (never `sha-*`,
+`latest` or semver), `cleanup-pr-image.yml` deletes it when the PR closes, and
+`prune-images.yml` removes `pr-*` and untagged versions older than 30 days
+every Monday.
+
 ## Security
 
 ## Security and tenancy

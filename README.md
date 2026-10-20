@@ -360,6 +360,12 @@ ghcr.io: `sha-<full sha>` every time (pin deployments to it), `latest` on
 `main`, and semver from `v*` tags. It pushes with `GITHUB_TOKEN`; no repository
 secrets are needed.
 
+Pull requests also get an image: `publish-image.yml` builds it without
+credentials, `publish-pr-image.yml` pushes it as `pr-<number>` (never `sha-*`,
+`latest` or semver), `cleanup-pr-image.yml` deletes it when the PR closes, and
+`prune-images.yml` removes `pr-*` and untagged versions older than 30 days
+every Monday.
+
 Publish locally (login required once: `podman login ghcr.io`):
 
 ```sh
