@@ -3,6 +3,7 @@ package servers
 import (
 	"context"
 	"errors"
+	"maps"
 	"strings"
 	"testing"
 
@@ -302,13 +303,13 @@ func TestUpdateCluster(t *testing.T) {
 	t.Run("merges labels and sets hubAcceptsClient", func(t *testing.T) {
 		t.Parallel()
 		server := mustClustersServer(t, newManagedClusterClient(
-			managedCluster("cluster-a", map[string]string{"environment": "production", "keep": "yes"}, true),
+			managedCluster("cluster-a", map[string]string{"location": "us-east", "keep": "yes"}, true),
 		))
 		got, err := server.Update(context.Background(), &aigridv1.ClustersUpdateRequest{
 			Object: &aigridv1.ManagedCluster{
 				Id: "cluster-a",
 				Metadata: &aigridv1.Metadata{
-					Labels: map[string]string{"environment": "staging", "ai-grid/enabled": "true"},
+					Labels: map[string]string{"location": "eu-west", "ai-grid/enabled": "true"},
 				},
 				Spec: &aigridv1.ManagedClusterSpec{HubAcceptsClient: false},
 			},
@@ -317,8 +318,8 @@ func TestUpdateCluster(t *testing.T) {
 			t.Fatalf("Update() error = %v", err)
 		}
 		labels := got.GetObject().GetMetadata().GetLabels()
-		if labels["environment"] != "staging" {
-			t.Fatalf("environment = %q, want staging", labels["environment"])
+		if labels["location"] != "eu-west" {
+			t.Fatalf("location = %q, want eu-west", labels["location"])
 		}
 		if labels["keep"] != "yes" {
 			t.Fatalf("keep label missing: %v", labels)
@@ -334,13 +335,13 @@ func TestUpdateCluster(t *testing.T) {
 	t.Run("field mask labels only", func(t *testing.T) {
 		t.Parallel()
 		server := mustClustersServer(t, newManagedClusterClient(
-			managedCluster("cluster-a", map[string]string{"environment": "production"}, true),
+			managedCluster("cluster-a", map[string]string{"location": "us-east"}, true),
 		))
 		got, err := server.Update(context.Background(), &aigridv1.ClustersUpdateRequest{
 			Object: &aigridv1.ManagedCluster{
 				Id: "cluster-a",
 				Metadata: &aigridv1.Metadata{
-					Labels: map[string]string{"environment": "staging"},
+					Labels: map[string]string{"location": "eu-west"},
 				},
 				Spec: &aigridv1.ManagedClusterSpec{HubAcceptsClient: false},
 			},
@@ -349,7 +350,7 @@ func TestUpdateCluster(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Update() error = %v", err)
 		}
-		if got.GetObject().GetMetadata().GetLabels()["environment"] != "staging" {
+		if got.GetObject().GetMetadata().GetLabels()["location"] != "eu-west" {
 			t.Fatalf("labels = %v", got.GetObject().GetMetadata().GetLabels())
 		}
 		if !got.GetObject().GetSpec().GetHubAcceptsClient() {
@@ -395,6 +396,110 @@ func TestUpdateCluster(t *testing.T) {
 		}
 		if !got.GetObject().GetSpec().GetHubAcceptsClient() {
 			t.Fatal("hubAcceptsClient = false, want true: a request without spec must not change it")
+		}
+	})
+
+	t.Run("refuses changes to keys the console doesn't own", func(t *testing.T) {
+		t.Parallel()
+		cluster := managedCluster("cluster-a", map[string]string{"name": "cluster-a", "vendor": "OpenShift"}, true)
+		cluster.SetAnnotations(map[string]string{"open-cluster-management/created-via": "other"})
+		server := mustClustersServer(t, newManagedClusterClient(cluster))
+		labels := &fieldmaskpb.FieldMask{Paths: []string{"metadata.labels"}}
+		annotations := &fieldmaskpb.FieldMask{Paths: []string{"metadata.annotations"}}
+		for _, tc := range []struct {
+			name string
+			meta *aigridv1.Metadata
+			mask *fieldmaskpb.FieldMask
+		}{
+			{"changed label", &aigridv1.Metadata{Labels: map[string]string{"name": "cluster-a", "vendor": "Other"}}, labels},
+			{"new label", &aigridv1.Metadata{Labels: map[string]string{"cluster.open-cluster-management.io/clusterset": "other"}}, labels},
+			{"changed annotation", &aigridv1.Metadata{Annotations: map[string]string{"open-cluster-management/created-via": "console"}}, annotations},
+		} {
+			_, err := server.Update(context.Background(), &aigridv1.ClustersUpdateRequest{
+				Object:     &aigridv1.ManagedCluster{Id: "cluster-a", Metadata: tc.meta},
+				UpdateMask: tc.mask,
+			})
+			if status.Code(err) != codes.InvalidArgument {
+				t.Fatalf("%s: error = %v, want InvalidArgument", tc.name, err)
+			}
+		}
+		got, err := server.Update(context.Background(), &aigridv1.ClustersUpdateRequest{
+			Object: &aigridv1.ManagedCluster{Id: "cluster-a", Metadata: &aigridv1.Metadata{
+				Labels: map[string]string{"name": "cluster-a", "vendor": "OpenShift", "ai-grid/enabled": "true"},
+			}},
+			UpdateMask: labels,
+		})
+		if err != nil {
+			t.Fatalf("unchanged hub labels sent back: error = %v", err)
+		}
+		if got.GetObject().GetMetadata().GetLabels()["ai-grid/enabled"] != "true" {
+			t.Fatalf("labels = %v", got.GetObject().GetMetadata().GetLabels())
+		}
+	})
+
+	t.Run("checks coordinate annotations", func(t *testing.T) {
+		t.Parallel()
+		server := mustClustersServer(t, newManagedClusterClient(managedCluster("cluster-a", nil, true)))
+		for _, tc := range []struct {
+			annotations map[string]string
+			ok          bool
+		}{
+			{map[string]string{"ai-grid/latitude": "91"}, false},
+			{map[string]string{"ai-grid/latitude": "north"}, false},
+			{map[string]string{"ai-grid/latitude": "NaN"}, false},
+			{map[string]string{"ai-grid/longitude": "-180.5"}, false},
+			{map[string]string{"ai-grid/latitude": " 40.4 ", "ai-grid/longitude": "-180"}, true},
+			{map[string]string{"ai-grid/latitude": ""}, true},
+		} {
+			_, err := server.Update(context.Background(), &aigridv1.ClustersUpdateRequest{
+				Object:     &aigridv1.ManagedCluster{Id: "cluster-a", Metadata: &aigridv1.Metadata{Annotations: tc.annotations}},
+				UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"metadata.annotations"}},
+			})
+			if tc.ok && err != nil {
+				t.Fatalf("%v: error = %v, want nil", tc.annotations, err)
+			}
+			if !tc.ok && status.Code(err) != codes.InvalidArgument {
+				t.Fatalf("%v: error = %v, want InvalidArgument", tc.annotations, err)
+			}
+		}
+	})
+
+	t.Run("annotations are the whole console set", func(t *testing.T) {
+		t.Parallel()
+		cluster := managedCluster("cluster-a", nil, true)
+		cluster.SetAnnotations(map[string]string{
+			"ai-grid/latitude":                    "1",
+			"ai-grid/site-name":                   "Site A",
+			"open-cluster-management/created-via": "other",
+		})
+		server := mustClustersServer(t, newManagedClusterClient(cluster))
+		got, err := server.Update(context.Background(), &aigridv1.ClustersUpdateRequest{
+			Object:     &aigridv1.ManagedCluster{Id: "cluster-a", Metadata: &aigridv1.Metadata{Annotations: map[string]string{"ai-grid/latitude": "2"}}},
+			UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"metadata.annotations"}},
+		})
+		if err != nil {
+			t.Fatalf("Update() error = %v", err)
+		}
+		want := map[string]string{"ai-grid/latitude": "2", "open-cluster-management/created-via": "other"}
+		if got := got.GetObject().GetMetadata().GetAnnotations(); !maps.Equal(got, want) {
+			t.Fatalf("annotations = %v, want %v", got, want)
+		}
+	})
+
+	t.Run("an empty label set clears the last console label", func(t *testing.T) {
+		t.Parallel()
+		server := mustClustersServer(t, newManagedClusterClient(
+			managedCluster("cluster-a", map[string]string{"ai-grid/enabled": "true", "name": "cluster-a"}, true),
+		))
+		got, err := server.Update(context.Background(), &aigridv1.ClustersUpdateRequest{
+			Object:     &aigridv1.ManagedCluster{Id: "cluster-a", Metadata: &aigridv1.Metadata{}},
+			UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"metadata.labels"}},
+		})
+		if err != nil {
+			t.Fatalf("Update() error = %v", err)
+		}
+		if got, want := got.GetObject().GetMetadata().GetLabels(), map[string]string{"name": "cluster-a"}; !maps.Equal(got, want) {
+			t.Fatalf("labels = %v, want %v", got, want)
 		}
 	})
 

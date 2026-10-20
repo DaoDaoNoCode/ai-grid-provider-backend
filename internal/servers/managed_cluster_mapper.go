@@ -1,6 +1,7 @@
 package servers
 
 import (
+	"strconv"
 	"strings"
 
 	aigridv1 "github.com/osac-project/ai-grid-provider-backend/gen/ai_grid/v1"
@@ -16,6 +17,7 @@ func managedClusterFromUnstructured(item unstructured.Unstructured) *aigridv1.Ma
 		Name:        name,
 		Labels:      item.GetLabels(),
 		Annotations: item.GetAnnotations(),
+		Version:     resourceVersionToVersion(item.GetResourceVersion()),
 	}
 	if t := item.GetCreationTimestamp(); !t.IsZero() {
 		meta.CreationTimestamp = timestamppb.New(t.Time)
@@ -109,4 +111,15 @@ func applyListWindow[T any](items []T, offset, limit *int32) (page []T, total in
 		}
 	}
 	return items[start:end], total
+}
+
+// resourceVersionToVersion maps the hub's resourceVersion to metadata.version.
+// The API server's resourceVersions are decimal etcd revisions; one that does
+// not fit an int32 maps to 0, which turns the optimistic-lock check off.
+func resourceVersionToVersion(rv string) int32 {
+	v, err := strconv.ParseInt(rv, 10, 32)
+	if err != nil || v < 0 {
+		return 0
+	}
+	return int32(v)
 }
