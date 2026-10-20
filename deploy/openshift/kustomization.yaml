@@ -20,5 +20,5 @@ resources:
 
 images:
   - name: ai-grid-provider-backend
-    newName: quay.io/rh-ee-rjjohnso/ai-grid-provider-backend
+    newName: ghcr.io/ai-grid-cloud/ai-grid-provider-backend
     newTag: latest

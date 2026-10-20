@@ -18,7 +18,7 @@ DEV_KUBECONFIG ?= $(BIN_DIR)/fake-kubeconfig
 
 # Container image (Podman preferred). Override with IMAGE=... TAG=dev.
 # Default linux/amd64 so OpenShift nodes can run images built on Apple Silicon.
-IMAGE ?= quay.io/rh-ee-rjjohnso/ai-grid-provider-backend
+IMAGE ?= ghcr.io/ai-grid-cloud/ai-grid-provider-backend
 TAG ?= latest
 PLATFORM ?= linux/amd64
 CONTAINER_ENGINE ?= $(shell command -v podman 2>/dev/null || command -v docker)
@@ -109,7 +109,7 @@ generate: ## Regenerate protobuf, gateway stubs, and OpenAPI
 
 verify: build unit lint ## Build binary + unit tests + lint
 
-##@ Container image (Quay)
+##@ Container image (ghcr.io)
 
 # Build the container image with Podman (falls back to docker if podman is missing).
 # PLATFORM is os/arch (default linux/amd64). TARGETARCH is passed explicitly because
@@ -128,12 +128,12 @@ image: ## Build the container image ($(IMAGE):$(TAG))
 
 container: image ## Alias for image
 
-push: ## Push $(IMAGE):$(TAG) to Quay (podman login quay.io first)
+push: ## Push $(IMAGE):$(TAG) (podman login ghcr.io first)
 	@if [[ -z "$(CONTAINER_ENGINE)" ]]; then echo "podman or docker is required" >&2; exit 1; fi
 	@echo "pushing $(IMAGE):$(TAG)"
 	$(CONTAINER_ENGINE) push $(IMAGE):$(TAG)
 
-build-and-push: image push ## Build the image, then push to Quay
+build-and-push: image push ## Build the image, then push it
 
 ##@ Local API
 

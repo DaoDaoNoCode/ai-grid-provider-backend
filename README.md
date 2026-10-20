@@ -211,7 +211,7 @@ make lint             # gofmt check and go vet; uses golangci-lint when installe
 make verify           # build, unit, and lint
 make run              # run the API locally against your kubeconfig
 make image            # build container image (Podman); alias: container
-make push             # push container image to Quay
+make push             # push container image (ghcr.io)
 make build-and-push   # image + push
 make kind-test        # full Podman/Kind integration test
 make dev-fake         # real backend on fake hub + fake Keycloak (see below)
@@ -351,18 +351,19 @@ Kind-parity stack for a logged-in OpenShift cluster (`oc whoami`): backend,
 optional embedded Keycloak + Postgres, Routes for HTTP and gRPC, and sample
 ManagedClusters when the ACM/OCM CRD is present.
 
-Default image: [`quay.io/rh-ee-rjjohnso/ai-grid-provider-backend`](https://quay.io/repository/rh-ee-rjjohnso/ai-grid-provider-backend).
+Default image: [`ghcr.io/ai-grid-cloud/ai-grid-provider-backend`](https://github.com/ai-grid-cloud/ai-grid-provider-backend/pkgs/container/ai-grid-provider-backend).
 
 CI (`.github/workflows/ci.yaml`) runs the Check job on pull requests and on
-pushes to `main` / `development` (build, lint, unit tests, generated-file
-verify). Image build/push to Quay runs only on push (`latest` on `main`,
-`development` on `development`, plus `sha-*`). Set repository secrets
-`QUAY_USERNAME` and `QUAY_PASSWORD`.
+pushes to `main` and `v*` tags (build, lint, unit tests, generated-file
+verify). After Check passes, pushes, tags and manual runs publish the image to
+ghcr.io: `sha-<full sha>` every time (pin deployments to it), `latest` on
+`main`, and semver from `v*` tags. It pushes with `GITHUB_TOKEN`; no repository
+secrets are needed.
 
-Publish locally (Quay login required once: `podman login quay.io`):
+Publish locally (login required once: `podman login ghcr.io`):
 
 ```sh
-make image              # build linux/amd64 → quay.io/rh-ee-rjjohnso/ai-grid-provider-backend:latest
+make image              # build linux/amd64 → ghcr.io/ai-grid-cloud/ai-grid-provider-backend:latest
 make push               # push that tag
 make build-and-push     # image + push
 # TAG=dev make build-and-push
