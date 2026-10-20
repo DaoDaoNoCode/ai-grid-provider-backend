@@ -17,7 +17,10 @@ import (
 	"github.com/osac-project/ai-grid-provider-backend/gen/ai_grid/v1/aigridv1connect"
 	"github.com/osac-project/ai-grid-provider-backend/internal/restgateway"
 	"golang.org/x/net/http2"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+	k8stesting "k8s.io/client-go/testing"
 )
 
 // TestEveryProtocol drives one set of handlers over all four protocols the
@@ -156,4 +159,48 @@ func get(t *testing.T, client connecthttp.HTTPClient, url string) (string, int) 
 		t.Fatalf("read %s: %v", url, err)
 	}
 	return string(body), response.StatusCode
+}
+
+// An unmapped Kubernetes failure must still reach the caller with its message.
+//
+// connect-go v2 scrubs an uncoded handler error to "unknown" with an empty wire message,
+// where grpc-go serialized the text. mapManagedClusterAPIError's default therefore carries
+// CodeInternal: without it an etcd timeout or a dropped API server arrives in the console
+// blank, on exactly the path someone is debugging when something surprising breaks.
+func TestUnmappedKubernetesErrorKeepsItsMessage(t *testing.T) {
+	t.Parallel()
+
+	dynamicClient := newManagedClusterClient()
+	dynamicClient.PrependReactor("get", "managedclusters", func(k8stesting.Action) (bool, runtime.Object, error) {
+		return true, nil, apierrors.NewServerTimeout(
+			schema.GroupResource{Group: "cluster.open-cluster-management.io", Resource: "managedclusters"}, "get", 1)
+	})
+
+	server := connect.NewServer()
+	aigridv1connect.RegisterClustersHandler(server, mustClustersServer(t, dynamicClient))
+	mux := http.NewServeMux()
+	connecthttp.Mount(mux, server)
+
+	backend := httptest.NewUnstartedServer(mux)
+	backend.EnableHTTP2 = true
+	backend.Config.Protocols = new(http.Protocols)
+	backend.Config.Protocols.SetHTTP1(true)
+	backend.Config.Protocols.SetUnencryptedHTTP2(true)
+	backend.Start()
+	t.Cleanup(backend.Close)
+
+	client := aigridv1connect.NewClustersClient(
+		connect.NewClient(connecthttp.NewTransport(backend.Client(), backend.URL)))
+
+	_, err := client.Get(context.Background(), &aigridv1.ClustersGetRequest{Id: "cluster-a"})
+	if err == nil {
+		t.Fatal("Get() error = nil, want the server timeout to surface")
+	}
+	if got := connect.CodeOf(err); got != connect.CodeInternal {
+		t.Errorf("code = %v, want %v", got, connect.CodeInternal)
+	}
+	// The assertion that matters: an uncoded error would arrive empty here.
+	if !strings.Contains(err.Error(), "ManagedCluster") {
+		t.Errorf("error = %q, want it to name the resource; an uncoded error is scrubbed to an empty message", err)
+	}
 }

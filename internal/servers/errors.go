@@ -1,8 +1,6 @@
 package servers
 
 import (
-	"fmt"
-
 	connect "connectrpc.com/connect/v2"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 )
@@ -18,9 +16,16 @@ func staleClusterError(op, id string) *connect.Error {
 		"%s ManagedCluster %q: the cluster changed since it was read; reload and retry", op, id)
 }
 
-// mapManagedClusterAPIError translates a Kubernetes API error into the code
-// the caller sees. The default is deliberately uncoded: an unrecognized
-// failure is the service's own, not something the caller can act on.
+// mapManagedClusterAPIError translates a Kubernetes API error into the code the
+// caller sees.
+//
+// The default is Internal rather than uncoded. An unrecognized failure is the
+// service's own and not something the caller can act on, which argues for
+// leaving it uncoded — but connect-go v2 scrubs an uncoded error to "unknown"
+// with an empty wire message, where grpc-go serialized the text. That turns an
+// etcd timeout or a dropped API server into a blank error in the console, on
+// exactly the path someone is debugging when something surprising breaks.
+// Internal says the same thing about blame and keeps the message.
 func mapManagedClusterAPIError(op, id string, err error) error {
 	switch {
 	case apierrors.IsNotFound(err):
@@ -34,6 +39,6 @@ func mapManagedClusterAPIError(op, id string, err error) error {
 	case apierrors.IsForbidden(err), apierrors.IsUnauthorized(err):
 		return connect.Errorf(connect.CodePermissionDenied, "%s ManagedCluster %q: %v", op, id, err)
 	default:
-		return fmt.Errorf("%s ManagedCluster %q: %w", op, id, err)
+		return connect.Errorf(connect.CodeInternal, "%s ManagedCluster %q: %v", op, id, err)
 	}
 }

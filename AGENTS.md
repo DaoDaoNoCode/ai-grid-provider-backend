@@ -91,7 +91,14 @@ Commit the protobuf sources and regenerated outputs in:
 - `docs/openapi/`
 - `internal/restgateway/openapi/`
 
-After generation, rerun `make generate` and require `git diff --exit-code` to succeed. Generated files must be changed through their source and generator, never patched directly.
+After generation, rerun `make generate` and require `git status --porcelain` to print
+nothing. Use `git status`, not `git diff --exit-code`: `git diff` ignores the index, so a
+regenerated file that is already staged passes it silently, and untracked new output is
+invisible to it as well.
+
+Better still, run `make check-generated`. It generates into a temporary directory and
+compares, so it also catches a file the protobuf no longer produces — which neither
+command above can see, because an orphaned generated file is committed and unmodified.
 
 ## Validation
 
@@ -132,9 +139,9 @@ make acm-hub-down     # tear down ACM hub Helm release
 
 ```bash
 cd proto && buf lint
-cd proto && buf generate
 make generate
-git diff --exit-code
+git status --porcelain   # must print nothing
+make check-generated     # also catches output the protobuf no longer produces
 make verify
 ```
 
