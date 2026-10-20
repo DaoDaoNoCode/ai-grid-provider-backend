@@ -447,6 +447,10 @@
         "available_condition": {
           "type": "string",
           "description": "Raw Available condition status (\"True\", \"False\", \"Unknown\", …). Empty when absent.\nUsed by the Clusters presentation layer to derive Ready/Offline/Unknown."
+        },
+        "provisioning": {
+          "type": "string",
+          "description": "AI Grid provisioning, from the cluster's compliance with the hub's\nai-grid-ready Policy (by default ai-grid-policies/ai-grid-ready):\n\"Compliant\" (provisioned), \"NonCompliant\", or \"Pending\" (placed, no\nresult yet). Empty when the Policy doesn't cover the cluster, for\nexample because it isn't labelled ai-grid/enabled=true, or when the\nPolicy can't be read."
         }
       },
       "description": "Observed state of a hub ManagedCluster."

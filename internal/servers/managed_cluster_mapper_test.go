@@ -1,6 +1,7 @@
 package servers
 
 import (
+	"maps"
 	"testing"
 	"time"
 
@@ -195,4 +196,24 @@ func managedClusterUnstructured(
 		}
 	}
 	return &unstructured.Unstructured{Object: obj}
+}
+
+func TestProvisioningFromPolicy(t *testing.T) {
+	policy := unstructured.Unstructured{Object: map[string]interface{}{
+		"status": map[string]interface{}{"status": []interface{}{
+			map[string]interface{}{"clustername": "a", "compliant": "Compliant"},
+			map[string]interface{}{"clustername": "b", "compliant": "NonCompliant"},
+			map[string]interface{}{"clustername": "c"},
+			map[string]interface{}{"clustername": "d", "compliant": "Pending"},
+			map[string]interface{}{"compliant": "Compliant"},
+		}},
+	}}
+	got := provisioningFromPolicy(policy)
+	want := map[string]string{"a": "Compliant", "b": "NonCompliant", "c": "Pending", "d": "Pending"}
+	if !maps.Equal(got, want) {
+		t.Fatalf("provisioningFromPolicy() = %v, want %v", got, want)
+	}
+	if got := provisioningFromPolicy(unstructured.Unstructured{Object: map[string]interface{}{}}); len(got) != 0 {
+		t.Fatalf("no status: %v", got)
+	}
 }

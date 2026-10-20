@@ -6,6 +6,18 @@ rules:
   - apiGroups: ["cluster.open-cluster-management.io"]
     resources: ["managedclusters"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  # Clusters List/Get read each cluster's provisioning from the root
+  # ai-grid-ready Policy's status (AI_GRID_READY_POLICY, default
+  # ai-grid-policies/ai-grid-ready). get on that one name only: other
+  # Policies, and the per-cluster copies (named ai-grid-policies.ai-grid-ready)
+  # where ACM renders hub templates such as fromSecret, stay unreadable. A
+  # Role in ai-grid-policies would be narrower, but this kustomization's
+  # namespace: ai-grid would move it. Change the name here if you change
+  # AI_GRID_READY_POLICY.
+  - apiGroups: ["policy.open-cluster-management.io"]
+    resources: ["policies"]
+    resourceNames: ["ai-grid-ready"]
+    verbs: ["get"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding

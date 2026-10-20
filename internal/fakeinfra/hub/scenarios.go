@@ -235,6 +235,7 @@ func (h *Hub) completeDetach(c *ManagedCluster) {
 func (h *Hub) removeObject(c *ManagedCluster) {
 	delete(h.clusters, c.Name)
 	delete(h.detaches, c.Name)
+	delete(h.enabledAt, c.Name)
 	h.nextResourceVersion()
 }
 

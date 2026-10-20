@@ -31,17 +31,28 @@ var managedClustersResource = schema.GroupVersionResource{
 // RFC 1123 DNS label: 1–63 chars, lowercase alphanumeric, hyphens allowed inside.
 var managedClusterNameRE = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$`)
 
+var policiesResource = schema.GroupVersionResource{
+	Group: "policy.open-cluster-management.io", Version: "v1", Resource: "policies",
+}
+
+// DefaultReadyPolicy is the hub Policy, as namespace/name, whose compliance
+// for a cluster is its AI Grid provisioning state.
+const DefaultReadyPolicy = "ai-grid-policies/ai-grid-ready"
+
 // ClustersServerBuilder configures a ClustersServer.
 type ClustersServerBuilder struct {
-	logger *slog.Logger
-	client dynamic.Interface
+	logger      *slog.Logger
+	client      dynamic.Interface
+	readyPolicy string
 }
 
 // ClustersServer implements ai_grid.v1.Clusters against hub ManagedCluster CRs.
 type ClustersServer struct {
 	aigridv1.UnimplementedClustersServer
-	logger *slog.Logger
-	client dynamic.Interface
+	logger               *slog.Logger
+	client               dynamic.Interface
+	readyPolicyNamespace string
+	readyPolicyName      string
 }
 
 var _ aigridv1.ClustersServer = (*ClustersServer)(nil)
@@ -63,6 +74,13 @@ func (b *ClustersServerBuilder) SetDynamicClient(client dynamic.Interface) *Clus
 	return b
 }
 
+// SetReadyPolicy sets the hub Policy, as namespace/name, that reports each
+// cluster's provisioning. Optional; DefaultReadyPolicy when empty.
+func (b *ClustersServerBuilder) SetReadyPolicy(namespacedName string) *ClustersServerBuilder {
+	b.readyPolicy = namespacedName
+	return b
+}
+
 // Build creates the ClustersServer.
 func (b *ClustersServerBuilder) Build() (*ClustersServer, error) {
 	if b.client == nil {
@@ -72,7 +90,15 @@ func (b *ClustersServerBuilder) Build() (*ClustersServer, error) {
 	if logger == nil {
 		logger = slog.Default()
 	}
-	return &ClustersServer{logger: logger, client: b.client}, nil
+	readyPolicy := b.readyPolicy
+	if readyPolicy == "" {
+		readyPolicy = DefaultReadyPolicy
+	}
+	namespace, name, ok := strings.Cut(readyPolicy, "/")
+	if !ok || namespace == "" || name == "" {
+		return nil, fmt.Errorf("ready policy %q must be namespace/name", readyPolicy)
+	}
+	return &ClustersServer{logger: logger, client: b.client, readyPolicyNamespace: namespace, readyPolicyName: name}, nil
 }
 
 // List returns ManagedCluster objects from the Kubernetes API.
@@ -85,9 +111,10 @@ func (s *ClustersServer) List(ctx context.Context, req *aigridv1.ClustersListReq
 		return nil, fmt.Errorf("list ManagedCluster resources: %w", err)
 	}
 
+	provisioning := s.provisioning(ctx)
 	items := make([]*aigridv1.ManagedCluster, 0, len(list.Items))
 	for _, item := range list.Items {
-		items = append(items, managedClusterFromUnstructured(item))
+		items = append(items, s.withProvisioning(managedClusterFromUnstructured(item), provisioning))
 	}
 	page, total := applyListWindow(items, req.Offset, req.Limit)
 	return &aigridv1.ClustersListResponse{
@@ -107,7 +134,7 @@ func (s *ClustersServer) Get(ctx context.Context, req *aigridv1.ClustersGetReque
 	if err != nil {
 		return nil, mapManagedClusterAPIError("get", id, err)
 	}
-	return &aigridv1.ClustersGetResponse{Object: managedClusterFromUnstructured(*obj)}, nil
+	return &aigridv1.ClustersGetResponse{Object: s.withProvisioning(managedClusterFromUnstructured(*obj), s.provisioning(ctx))}, nil
 }
 
 // Create creates a hub-side ManagedCluster CR.
@@ -235,7 +262,7 @@ func (s *ClustersServer) Update(ctx context.Context, req *aigridv1.ClustersUpdat
 	if err != nil {
 		return nil, mapManagedClusterAPIError("update", id, err)
 	}
-	return &aigridv1.ClustersUpdateResponse{Object: managedClusterFromUnstructured(*updated)}, nil
+	return &aigridv1.ClustersUpdateResponse{Object: s.withProvisioning(managedClusterFromUnstructured(*updated), s.provisioning(ctx))}, nil
 }
 
 // Delete deletes a ManagedCluster by id.
@@ -253,6 +280,53 @@ func (s *ClustersServer) Delete(ctx context.Context, req *aigridv1.ClustersDelet
 
 type clusterUpdatePaths struct {
 	labels, annotations, hub bool
+}
+
+// provisioning reads the ready Policy's per-cluster compliance from the root
+// Policy's status.status. A missing or unreadable Policy gives an empty map,
+// so clusters show no provisioning state rather than failing the request.
+func (s *ClustersServer) provisioning(ctx context.Context) map[string]string {
+	policy, err := s.client.Resource(policiesResource).Namespace(s.readyPolicyNamespace).Get(ctx, s.readyPolicyName, metav1.GetOptions{})
+	if err != nil {
+		if !apierrors.IsNotFound(err) {
+			s.logger.Warn("read ready policy", "policy", s.readyPolicyNamespace+"/"+s.readyPolicyName, "error", err)
+		}
+		return map[string]string{}
+	}
+	return provisioningFromPolicy(*policy)
+}
+
+func (s *ClustersServer) withProvisioning(cluster *aigridv1.ManagedCluster, provisioning map[string]string) *aigridv1.ManagedCluster {
+	if cluster.Status == nil {
+		cluster.Status = &aigridv1.ManagedClusterStatus{}
+	}
+	cluster.Status.Provisioning = provisioning[cluster.GetId()]
+	return cluster
+}
+
+// provisioningFromPolicy maps each cluster in a root Policy's status.status
+// to "Compliant", "NonCompliant" or, while it has no result yet, "Pending".
+// ACM lists a cluster there once the Policy's placement selects it.
+func provisioningFromPolicy(policy unstructured.Unstructured) map[string]string {
+	out := map[string]string{}
+	entries, _, _ := unstructured.NestedSlice(policy.Object, "status", "status")
+	for _, raw := range entries {
+		entry, ok := raw.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		cluster, _ := entry["clustername"].(string)
+		if cluster == "" {
+			continue
+		}
+		switch compliant, _ := entry["compliant"].(string); compliant {
+		case "Compliant", "NonCompliant":
+			out[cluster] = compliant
+		default:
+			out[cluster] = "Pending"
+		}
+	}
+	return out
 }
 
 // updatePaths reports which mutable fields an Update changes. Without a mask

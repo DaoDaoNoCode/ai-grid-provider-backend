@@ -41,4 +41,12 @@ message ManagedClusterStatus {
   // Raw Available condition status ("True", "False", "Unknown", …). Empty when absent.
   // Used by the Clusters presentation layer to derive Ready/Offline/Unknown.
   string available_condition = 3;
+
+  // AI Grid provisioning, from the cluster's compliance with the hub's
+  // ai-grid-ready Policy (by default ai-grid-policies/ai-grid-ready):
+  // "Compliant" (provisioned), "NonCompliant", or "Pending" (placed, no
+  // result yet). Empty when the Policy doesn't cover the cluster, for
+  // example because it isn't labelled ai-grid/enabled=true, or when the
+  // Policy can't be read.
+  string provisioning = 4;
 }

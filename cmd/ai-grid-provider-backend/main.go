@@ -51,6 +51,7 @@ func main() {
 	}
 	clustersServer, err := servers.NewClustersServer().
 		SetDynamicClient(kubeClient).
+		SetReadyPolicy(getEnv("AI_GRID_READY_POLICY", servers.DefaultReadyPolicy)).
 		Build()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "build Clusters server: %v\n", err)

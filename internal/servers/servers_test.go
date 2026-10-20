@@ -247,6 +247,39 @@ func TestGetCluster(t *testing.T) {
 	}
 }
 
+// TestClusterProvisioningUnreadablePolicy: a ready Policy that is missing or
+// forbidden leaves provisioning empty instead of failing the request.
+func TestClusterProvisioningUnreadablePolicy(t *testing.T) {
+	t.Parallel()
+	for name, policyErr := range map[string]error{
+		"not found": apierrors.NewNotFound(policiesResource.GroupResource(), "ai-grid-ready"),
+		"forbidden": apierrors.NewForbidden(policiesResource.GroupResource(), "ai-grid-ready", errors.New("no access")),
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			client := newManagedClusterClient(managedCluster("cluster-a", map[string]string{"ai-grid/enabled": "true"}, true))
+			client.PrependReactor("get", "policies", func(clienttesting.Action) (bool, runtime.Object, error) {
+				return true, nil, policyErr
+			})
+			server := mustClustersServer(t, client)
+			got, err := server.Get(context.Background(), &aigridv1.ClustersGetRequest{Id: "cluster-a"})
+			if err != nil {
+				t.Fatalf("Get() error = %v", err)
+			}
+			if p := got.GetObject().GetStatus().GetProvisioning(); p != "" {
+				t.Fatalf("Get() provisioning = %q, want empty", p)
+			}
+			list, err := server.List(context.Background(), &aigridv1.ClustersListRequest{})
+			if err != nil {
+				t.Fatalf("List() error = %v", err)
+			}
+			if p := list.GetItems()[0].GetStatus().GetProvisioning(); p != "" {
+				t.Fatalf("List() provisioning = %q, want empty", p)
+			}
+		})
+	}
+}
+
 func TestCreateCluster(t *testing.T) {
 	t.Parallel()
 
