@@ -82,7 +82,7 @@ func (c *Client) ListOrganizations(ctx context.Context) ([]Organization, error) 
 	defer tokenResponseBody.Body.Close()
 	if tokenResponseBody.StatusCode/100 != 2 {
 		body, _ := io.ReadAll(io.LimitReader(tokenResponseBody.Body, 4096))
-		return nil, fmt.Errorf("Keycloak token request returned %s: %s", tokenResponseBody.Status, strings.TrimSpace(string(body)))
+		return nil, fmt.Errorf("keycloak token request returned %s: %s", tokenResponseBody.Status, strings.TrimSpace(string(body)))
 	}
 	var token tokenResponse
 	if err := json.NewDecoder(tokenResponseBody.Body).Decode(&token); err != nil {
@@ -102,7 +102,7 @@ func (c *Client) ListOrganizations(ctx context.Context) ([]Organization, error) 
 	defer response.Body.Close()
 	if response.StatusCode/100 != 2 {
 		body, _ := io.ReadAll(io.LimitReader(response.Body, 4096))
-		return nil, fmt.Errorf("Keycloak organizations request returned %s: %s", response.Status, strings.TrimSpace(string(body)))
+		return nil, fmt.Errorf("keycloak organizations request returned %s: %s", response.Status, strings.TrimSpace(string(body)))
 	}
 	var organizations []Organization
 	if err := json.NewDecoder(response.Body).Decode(&organizations); err != nil {

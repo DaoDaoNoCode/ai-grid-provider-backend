@@ -1,0 +1,40 @@
+# Repository-owned golangci-lint config (golangci-lint v2).
+version: "2"
+
+run:
+  timeout: 5m
+
+formatters:
+  enable:
+    - gofmt
+  exclusions:
+    generated: lax
+    paths:
+      - gen/
+      - third_party$
+      - builtin$
+      - examples$
+
+linters:
+  default: standard
+  enable:
+    - errorlint
+    - misspell
+    - nolintlint
+  exclusions:
+    generated: lax
+    presets:
+      - comments
+      - std-error-handling
+    paths:
+      - gen/
+      - third_party$
+      - builtin$
+      - examples$
+    rules:
+      - linters:
+          - errcheck
+        path: _test\.go
+
+issues:
+  uniq-by-line: true

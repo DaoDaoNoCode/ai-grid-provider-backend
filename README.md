@@ -201,17 +201,41 @@ Job creates the `ai-grid` realm and Organizations `tenant-a` and `tenant-b`.
 go test ./...
 ```
 
-The repository also provides standard developer targets:
+The repository also provides standard developer targets (`make help` lists them):
 
 ```sh
 make build            # build bin/ai-grid-provider-backend
-make test             # run all Go tests
+make unit             # unit tests (excludes Kind integration)
+make smoke            # live API smoke (needs make run)
 make lint             # gofmt check and go vet; uses golangci-lint when installed
-make verify           # build, test, and lint
-make image            # build container image (Podman)
+make verify           # build, unit, and lint
+make run              # run the API locally against your kubeconfig
+make image            # build container image (Podman); alias: container
 make push             # push container image to Quay
 make build-and-push   # image + push
 make kind-test        # full Podman/Kind integration test
+```
+
+## Run the API locally
+
+Requires a kubeconfig that can reach a hub with the ManagedCluster CRD (Kind or
+OpenShift after `oc login`). gRPC listens on `:8080`; REST and Swagger UI on
+`:8081`. For Tenants, start a local Keycloak first (Podman):
+
+```sh
+make keycloak-up      # :8180, seeds realm ai-grid + tenant-a / tenant-b
+make run              # KEYCLOAK_URL=http://127.0.0.1:8180 by default
+# LISTEN_ADDRESS=:9090 HTTP_LISTEN_ADDRESS=:9091 make run
+make keycloak-seed    # re-seed orgs if needed
+make keycloak-down
+```
+
+See [deploy/keycloak/README.md](deploy/keycloak/README.md). Swagger UI:
+`http://localhost:8081/docs/`. With the API up, smoke every RPC/REST route:
+
+```sh
+make smoke
+# GRPC_ADDR=localhost:8080 HTTP_ADDR=http://localhost:8081 make smoke
 ```
 
 The unit test uses a Kubernetes dynamic fake client. The Kind integration test
@@ -249,7 +273,13 @@ ManagedClusters when the ACM/OCM CRD is present.
 
 Default image: [`quay.io/rh-ee-rjjohnso/ai-grid-provider-backend`](https://quay.io/repository/rh-ee-rjjohnso/ai-grid-provider-backend).
 
-Publish the image first (Quay login required once: `podman login quay.io`):
+CI (`.github/workflows/ci.yaml`) runs the Check job on pull requests and on
+pushes to `main` / `development` (build, lint, unit tests, generated-file
+verify). Image build/push to Quay runs only on push (`latest` on `main`,
+`development` on `development`, plus `sha-*`). Set repository secrets
+`QUAY_USERNAME` and `QUAY_PASSWORD`.
+
+Publish locally (Quay login required once: `podman login quay.io`):
 
 ```sh
 make image              # build linux/amd64 → quay.io/rh-ee-rjjohnso/ai-grid-provider-backend:latest

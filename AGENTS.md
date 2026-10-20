@@ -93,6 +93,27 @@ Run commands from the repository root.
 make build
 make test
 make lint
+make help             # list targets
+make prereqs          # toolchain check (Podman, Kind, kubectl, grpcurl, Go, clusteradm)
+make build            # bin/ai-grid-provider-backend
+make unit             # unit tests (excludes ./integration)
+make smoke            # live gRPC/REST smoke (needs make run; optional keycloak-up)
+make test             # alias for unit
+make lint             # gofmt check, go vet; golangci-lint when installed
+make verify           # build + unit + lint
+make generate         # regenerate proto / gateway / OpenAPI
+make run              # local API (gRPC :8080, REST/Swagger :8081) against kubeconfig
+make keycloak-up      # local Keycloak on :8180 + seed tenant-a/tenant-b
+make keycloak-seed    # re-seed ai-grid realm / Organizations (idempotent)
+make keycloak-down    # remove local Keycloak container
+make kind-test        # full Kind integration (KIND_EXPERIMENTAL_PROVIDER=podman)
+make image            # build container image (IMAGE/TAG, default Quay :latest)
+make push             # push container (podman login quay.io first)
+make build-and-push   # image + push
+make openshift-up     # deploy to current oc context (Quay image by default)
+make openshift-down   # remove OpenShift deploy
+make acm-hub-up       # RHACM via Helm/OLM + playground ManagedClusters
+make acm-hub-down     # tear down ACM hub Helm release
 ```
 
 `make verify` is the aggregate check and must pass before a change is considered ready.
@@ -150,6 +171,17 @@ Run this for changes affecting Kubernetes behavior, OCM/RHACM resources, Keycloa
 - Preserve underlying errors with `fmt.Errorf("context: %w", err)`.
 - Log with `log/slog` and stable structured keys.
 - Include useful resource identifiers and operation names, but redact secrets and sensitive payload fields.
+## CI
+
+[`.github/workflows/ci.yaml`](.github/workflows/ci.yaml) runs Check on pull
+requests and on pushes to `main` / `development` (`make build`, `fmt-check`,
+`vet`, pinned golangci-lint + `.golangci.yml`, `unit`, `make generate` dirty
+diff). Image build/push to Quay runs only on push (never on PRs).
+
+Tags: `latest` on `main`, `development` on `development`, plus branch and
+`sha-*` tags. Repo secrets required: `QUAY_USERNAME`, `QUAY_PASSWORD`.
+
+## Security
 
 ## Security and tenancy
 

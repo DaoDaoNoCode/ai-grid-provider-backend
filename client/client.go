@@ -38,10 +38,11 @@ func (b *Builder) Build(ctx context.Context) (*Client, error) {
 		return nil, errors.New("server address is mandatory")
 	}
 	if !b.plaintext {
-		return nil, errors.New("TLS is not configured; call SetPlaintext(true) for a local server")
+		return nil, errors.New("tls is not configured; call SetPlaintext(true) for a local server")
 	}
 
-	connection, err := grpc.DialContext(ctx, b.address, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	// NewClient dials lazily; ctx is kept on Build for API compatibility.
+	connection, err := grpc.NewClient(b.address, grpc.WithTransportCredentials(insecure.NewCredentials()))
 	if err != nil {
 		return nil, fmt.Errorf("connect to ai-grid-provider-backend: %w", err)
 	}

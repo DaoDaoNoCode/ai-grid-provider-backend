@@ -51,7 +51,7 @@ func (b *TenantsServerBuilder) SetOrganizationLister(lister organizationLister) 
 // Build creates the TenantsServer.
 func (b *TenantsServerBuilder) Build() (*TenantsServer, error) {
 	if b.tenants == nil {
-		return nil, errors.New("Keycloak tenant client is mandatory")
+		return nil, errors.New("keycloak tenant client is mandatory")
 	}
 	logger := b.logger
 	if logger == nil {
@@ -63,7 +63,7 @@ func (b *TenantsServerBuilder) Build() (*TenantsServer, error) {
 // List returns Keycloak Organizations from the configured realm.
 func (s *TenantsServer) List(ctx context.Context, req *aigridv1.TenantsListRequest) (*aigridv1.TenantsListResponse, error) {
 	if s.tenants == nil {
-		return nil, fmt.Errorf("Keycloak tenant client is not configured")
+		return nil, fmt.Errorf("keycloak tenant client is not configured")
 	}
 	organizations, err := s.tenants.ListOrganizations(ctx)
 	if err != nil {

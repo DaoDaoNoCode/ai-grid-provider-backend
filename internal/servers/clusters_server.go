@@ -63,7 +63,7 @@ func (b *ClustersServerBuilder) SetDynamicClient(client dynamic.Interface) *Clus
 // Build creates the ClustersServer.
 func (b *ClustersServerBuilder) Build() (*ClustersServer, error) {
 	if b.client == nil {
-		return nil, errors.New("Kubernetes dynamic client is mandatory")
+		return nil, errors.New("kubernetes dynamic client is mandatory")
 	}
 	logger := b.logger
 	if logger == nil {
