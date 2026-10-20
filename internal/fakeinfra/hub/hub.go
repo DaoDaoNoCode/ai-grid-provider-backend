@@ -100,7 +100,7 @@ func New(fx *Fixtures, opts ...Option) (*Hub, error) {
 		c := fx.Clusters[i].DeepCopy()
 		c.APIVersion, c.Kind = APIVersion, Kind
 		if errs := apivalidation.ValidateObjectMeta(&c.ObjectMeta, false, apivalidation.NameIsDNSSubdomain, field.NewPath("metadata")); len(errs) > 0 {
-			return nil, fmt.Errorf("fixture ManagedCluster %q: %v", c.Name, errs.ToAggregate())
+			return nil, fmt.Errorf("fixture ManagedCluster %q: %w", c.Name, errs.ToAggregate())
 		}
 		if _, dup := h.clusters[c.Name]; dup {
 			return nil, fmt.Errorf("fixture ManagedCluster %q listed twice", c.Name)
