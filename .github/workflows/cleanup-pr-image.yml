@@ -29,11 +29,23 @@ jobs:
       - name: Delete pr-${{ github.event.number }} package versions
         run: |
           for image in $IMAGES; do
-            ids=$(gh api "orgs/${OWNER}/packages/container/${image}/versions" \
-              --paginate \
-              --jq ".[] | select(.metadata.container.tags[]? == \"pr-${PR_NUMBER}\") | .id")
+            versions=$(gh api "orgs/${OWNER}/packages/container/${image}/versions" --paginate)
+            # Delete only a version whose sole tag is pr-<N>. A PR controls
+            # its own build, so it can produce an image byte-identical to a
+            # published one; the push then adds pr-<N> to that sha-*/latest
+            # version, which must survive the PR closing.
+            ids=$(echo "$versions" | jq -r --arg tag "pr-${PR_NUMBER}" \
+              '.[] | select(.metadata.container.tags == [$tag]) | .id')
+            shared=$(echo "$versions" | jq -r --arg tag "pr-${PR_NUMBER}" \
+              '.[] | select((.metadata.container.tags | index($tag)) and (.metadata.container.tags | length > 1))
+                   | "\(.id) (\(.metadata.container.tags | join(",")))"')
+            if [ -n "$shared" ]; then
+              while read -r line; do
+                echo "::warning::keeping ${image} version ${line}: pr-${PR_NUMBER} shares it with other tags"
+              done <<< "$shared"
+            fi
             if [ -z "$ids" ]; then
-              echo "No pr-${PR_NUMBER} version of ${image} to delete."
+              echo "No version of ${image} tagged only pr-${PR_NUMBER} to delete."
               continue
             fi
             for id in $ids; do
