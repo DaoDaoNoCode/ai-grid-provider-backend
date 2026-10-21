@@ -33,3 +33,6 @@ go.work.sum
 # .vscode/
 
 /bin
+# Python
+__pycache__/
+*.py[cod]

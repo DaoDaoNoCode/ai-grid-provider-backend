@@ -17,6 +17,17 @@ rules:
   - apiGroups: ["cluster.open-cluster-management.io"]
     resources: ["managedclusters"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  # OCM admission: unlabeled ManagedClusters join ManagedClusterSet "default".
+  - apiGroups: ["cluster.open-cluster-management.io"]
+    resources: ["managedclustersets"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["cluster.open-cluster-management.io"]
+    resources: ["managedclustersets/join"]
+    verbs: ["create"]
+  # Setting/updating spec.hubAcceptsClient requires the accept subresource.
+  - apiGroups: ["register.open-cluster-management.io"]
+    resources: ["managedclusters/accept"]
+    verbs: ["update"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding

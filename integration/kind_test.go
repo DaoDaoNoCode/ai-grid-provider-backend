@@ -171,3 +171,72 @@ func TestListTenants(t *testing.T) {
 		}
 	}
 }
+
+func TestTenantCRUD(t *testing.T) {
+	address := os.Getenv("AI_GRID_GRPC_ADDRESS")
+	if address == "" {
+		t.Skip("AI_GRID_GRPC_ADDRESS is not set; run via hack/test-kind.sh")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	client, err := clientpkg.NewBuilder().SetAddress(address).SetPlaintext(true).Build(ctx)
+	if err != nil {
+		t.Fatalf("build gRPC client: %v", err)
+	}
+	defer client.Close()
+
+	const name = "kind-crud-tenant"
+	// Best-effort cleanup if a prior run left the object.
+	if tenants, err := client.ListTenants(ctx); err == nil {
+		for _, tenant := range tenants {
+			if tenant.GetMetadata().GetName() == name {
+				_ = client.DeleteTenant(ctx, tenant.GetId())
+			}
+		}
+	}
+
+	created, err := client.CreateTenant(ctx, &aigridv1.Tenant{
+		Metadata: &aigridv1.Metadata{Name: name},
+		Spec:     &aigridv1.TenantSpec{Domains: []string{"kind-crud.example.com"}},
+	})
+	if err != nil {
+		t.Fatalf("create tenant: %v", err)
+	}
+	if created.GetId() == "" {
+		t.Fatal("create returned empty Keycloak organization id")
+	}
+	t.Cleanup(func() {
+		_ = client.DeleteTenant(context.Background(), created.GetId())
+	})
+
+	got, err := client.GetTenant(ctx, created.GetId())
+	if err != nil {
+		t.Fatalf("get tenant: %v", err)
+	}
+	if got.GetMetadata().GetName() != name {
+		t.Fatalf("get name = %q, want %q", got.GetMetadata().GetName(), name)
+	}
+	if domains := got.GetSpec().GetDomains(); len(domains) != 1 || domains[0] != "kind-crud.example.com" {
+		t.Fatalf("get domains = %v", domains)
+	}
+
+	updated, err := client.UpdateTenant(ctx, &aigridv1.Tenant{
+		Id:       created.GetId(),
+		Metadata: &aigridv1.Metadata{Name: name},
+		Spec:     &aigridv1.TenantSpec{Domains: []string{"kind-crud-updated.example.com"}},
+	}, nil)
+	if err != nil {
+		t.Fatalf("update tenant: %v", err)
+	}
+	if domains := updated.GetSpec().GetDomains(); len(domains) != 1 || domains[0] != "kind-crud-updated.example.com" {
+		t.Fatalf("updated domains = %v", domains)
+	}
+
+	if err := client.DeleteTenant(ctx, created.GetId()); err != nil {
+		t.Fatalf("delete tenant: %v", err)
+	}
+	if _, err := client.GetTenant(ctx, created.GetId()); err == nil {
+		t.Fatal("get after delete succeeded, want error")
+	}
+}

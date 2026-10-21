@@ -1,13 +1,18 @@
 # AI Grid Provider Backend
 
-Go 1.26.3 service exposing gRPC APIs and a grpc-gateway REST surface for AI Grid provider operations. It currently manages OCM/RHACM `ManagedCluster` resources and Keycloak Organizations. Local integration uses Kind and Podman; OpenShift deployment is supported.
+Go 1.26.3 service exposing gRPC APIs and a grpc-gateway REST surface for AI Grid
+provider operations. It currently manages OCM/RHACM `ManagedCluster` resources
+and Tenants as Keycloak Organizations in a shared platform realm
+(`KEYCLOAK_REALM`, default `ai-grid`) — not one Keycloak realm per tenant.
+Local integration uses Kind and Podman; OpenShift deployment is supported.
 
 ## Instruction precedence
 
 1. Follow this file for repository-wide invariants and validation.
 2. For API, protobuf, REST, resource-shape, server-layer, error, logging, testing, and security work, read and follow [`docs/API.md`](docs/API.md).
-3. Use [`README.md`](README.md) for supported setup and operational workflows.
-4. If documentation and executable configuration disagree, stop and report the mismatch; do not silently choose one.
+3. For UI-facing REST payloads and examples, read [`docs/UI_API_REFERENCE.md`](docs/UI_API_REFERENCE.md).
+4. Use [`README.md`](README.md) for supported setup and operational workflows.
+5. If documentation and executable configuration disagree, stop and report the mismatch; do not silently choose one.
 
 The OSAC fulfillment-service standards are the reference architecture. Apply their API and service invariants where this repository implements the same concern. Do not copy fulfillment-service-specific PostgreSQL, event, reconciler, GoReleaser, or public/private API patterns unless the change intentionally introduces those capabilities.
 
@@ -38,9 +43,10 @@ client/                         reusable gRPC client
 proto/                          protobuf sources and buf configuration
 gen/ai_grid/v1/                 generated protobuf, gRPC, and gateway code
 docs/API.md                     authoritative API/service standards for this repo
+docs/UI_API_REFERENCE.md        UI-facing REST payload handout
 docs/openapi/                   generated OpenAPI snapshot
 internal/servers/               per-resource gRPC implementations
-internal/keycloak/              Keycloak Admin API client
+internal/keycloak/              Keycloak Admin API client (Tenants = Orgs in KEYCLOAK_REALM)
 internal/restgateway/           REST gateway and Swagger UI
 integration/                    Kind-backed integration tests
 deploy/kind/                    Kind manifests
@@ -168,6 +174,17 @@ make dev-fake-poc     # the same on fixtures/poc; override ports with DEV_*_PORT
 
 `make dev-fake` runs the unmodified backend against `internal/fakeinfra` (README.md, "Dev mode with fake infrastructure"). With the console, run `make -j2 dev-bff-fake dev-frontend-fake` in the console repo in a second terminal. It is a development aid, not a substitute for `make kind-test`.
 
+### Optional live smoke and deploy helpers
+
+```bash
+make smoke            # live gRPC/REST smoke against a running API
+make smoke-openshift  # same suite via oc port-forward
+make openshift-up     # deploy to current oc context; auto-installs ACM if ManagedCluster CRD missing
+make openshift-down   # remove OpenShift deploy (does not tear down ACM)
+make acm-hub-up       # RHACM via Helm/OLM + playground ManagedClusters
+make acm-hub-down     # tear down ACM hub Helm release
+```
+
 ## Testing conventions
 
 - Keep unit tests beside the package under test using `*_test.go`.
@@ -207,9 +224,11 @@ every Monday.
 ## Security and tenancy
 
 - Treat tenant identity and authorization as server-side concerns; never trust caller-supplied ownership fields without validation.
+- API request authn/authz is out of scope for this MVP; gRPC/REST endpoints are open. Keycloak is used only as the Tenants Organizations Admin API backend. `KEYCLOAK_REALM` is the shared platform realm name, not a per-tenant id.
 - Use least-privilege Kubernetes RBAC and Keycloak roles. Any new API operation that touches Kubernetes or Keycloak must include a review of required permissions.
 - Do not expose internal credentials or administrative APIs through generated REST routes.
-- Validate authentication and authorization behavior for every new externally reachable method.
+- Validate authentication and authorization behavior for every new externally reachable method once auth is in scope.
+- Outside local Kind, use a dedicated Keycloak service account with least privilege (not realm-admin credentials). OpenShift deploy stores Keycloak settings in Secret `ai-grid-provider-backend-keycloak`.
 
 ## Build and image rules
 
@@ -229,4 +248,4 @@ every Monday.
 
 ## Documentation
 
-Update documentation in the same change when behavior, API contracts, configuration, permissions, deployment steps, or developer commands change. Keep `README.md`, `docs/API.md`, generated OpenAPI, manifests, and this file consistent with executable behavior.
+Update documentation in the same change when behavior, API contracts, configuration, permissions, deployment steps, or developer commands change. Keep `README.md`, `docs/API.md`, `docs/UI_API_REFERENCE.md`, generated OpenAPI, manifests, and this file consistent with executable behavior.

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"strings"
@@ -207,7 +208,104 @@ func TestRESTClusterCreateDelete(t *testing.T) {
 	}
 }
 
-func startGateway(t *testing.T, objects []runtime.Object, orgs fakeOrganizationLister) string {
+func TestRESTTenantCRUD(t *testing.T) {
+	t.Parallel()
+
+	baseURL := startGateway(t, nil, newFakeOrganizationStore())
+	client := &http.Client{Timeout: 10 * time.Second}
+
+	createBody := `{
+		"metadata":{"name":"rest-tenant"},
+		"spec":{"domains":["rest.example.com"]}
+	}`
+	resp, err := client.Post(baseURL+"/api/v1/tenants", "application/json", strings.NewReader(createBody))
+	if err != nil {
+		t.Fatalf("POST create: %v", err)
+	}
+	defer resp.Body.Close()
+	createdBytes, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("read create body: %v", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("create status = %d body = %s", resp.StatusCode, createdBytes)
+	}
+	var created map[string]any
+	if err := json.Unmarshal(createdBytes, &created); err != nil {
+		t.Fatalf("unmarshal create: %v (%s)", err, createdBytes)
+	}
+	id, _ := created["id"].(string)
+	if id == "" {
+		t.Fatalf("missing id in create response: %s", createdBytes)
+	}
+
+	got := mustGET(t, client, baseURL+"/api/v1/tenants/"+id)
+	if !strings.Contains(got, `"rest-tenant"`) || !strings.Contains(got, `"rest.example.com"`) {
+		t.Fatalf("get after create = %s", got)
+	}
+
+	patchBody := `{
+		"id":"` + id + `",
+		"metadata":{"name":"rest-tenant"},
+		"spec":{"domains":["updated.example.com"]}
+	}`
+	patchReq, err := http.NewRequest(http.MethodPatch, baseURL+"/api/v1/tenants/"+id, strings.NewReader(patchBody))
+	if err != nil {
+		t.Fatalf("new patch request: %v", err)
+	}
+	patchReq.Header.Set("Content-Type", "application/json")
+	patchResp, err := client.Do(patchReq)
+	if err != nil {
+		t.Fatalf("PATCH: %v", err)
+	}
+	defer patchResp.Body.Close()
+	patched, err := io.ReadAll(patchResp.Body)
+	if err != nil {
+		t.Fatalf("read patch body: %v", err)
+	}
+	if patchResp.StatusCode != http.StatusOK {
+		t.Fatalf("patch status = %d body = %s", patchResp.StatusCode, patched)
+	}
+	if !strings.Contains(string(patched), `"updated.example.com"`) {
+		t.Fatalf("patch body = %s", patched)
+	}
+
+	delReq, err := http.NewRequest(http.MethodDelete, baseURL+"/api/v1/tenants/"+id, nil)
+	if err != nil {
+		t.Fatalf("new delete request: %v", err)
+	}
+	delResp, err := client.Do(delReq)
+	if err != nil {
+		t.Fatalf("DELETE: %v", err)
+	}
+	defer delResp.Body.Close()
+	if delResp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(delResp.Body)
+		t.Fatalf("delete status = %d body = %s", delResp.StatusCode, body)
+	}
+
+	missing, err := client.Get(baseURL + "/api/v1/tenants/" + id)
+	if err != nil {
+		t.Fatalf("GET after delete: %v", err)
+	}
+	defer missing.Body.Close()
+	if missing.StatusCode != http.StatusNotFound {
+		body, _ := io.ReadAll(missing.Body)
+		t.Fatalf("get after delete status = %d body = %s", missing.StatusCode, body)
+	}
+}
+
+// organizationClient mirrors servers' Keycloak Organizations dependency for tests.
+type organizationClient interface {
+	ListOrganizations(ctx context.Context) ([]keycloak.Organization, error)
+	GetOrganization(ctx context.Context, id string) (keycloak.Organization, error)
+	CreateOrganization(ctx context.Context, org keycloak.Organization) (keycloak.Organization, error)
+	UpdateOrganization(ctx context.Context, org keycloak.Organization) (keycloak.Organization, error)
+	DeleteOrganization(ctx context.Context, id string) error
+	ListOrganizationMembers(ctx context.Context, orgID string) ([]keycloak.OrganizationMember, error)
+}
+
+func startGateway(t *testing.T, objects []runtime.Object, orgs organizationClient) string {
 	t.Helper()
 
 	if objects == nil {
@@ -232,7 +330,7 @@ func startGateway(t *testing.T, objects []runtime.Object, orgs fakeOrganizationL
 		t.Fatalf("build Clusters server: %v", err)
 	}
 	tenantsServer, err := servers.NewTenantsServer().
-		SetOrganizationLister(orgs).
+		SetOrganizationClient(orgs).
 		Build()
 	if err != nil {
 		t.Fatalf("build Tenants server: %v", err)
@@ -306,6 +404,99 @@ func (f fakeOrganizationLister) ListOrganizations(context.Context) ([]keycloak.O
 		return nil, f.err
 	}
 	return f.orgs, nil
+}
+
+func (f fakeOrganizationLister) GetOrganization(_ context.Context, id string) (keycloak.Organization, error) {
+	for _, org := range f.orgs {
+		if org.ID == id {
+			return org, nil
+		}
+	}
+	return keycloak.Organization{}, &keycloak.APIError{Op: "get organization", StatusCode: http.StatusNotFound}
+}
+
+func (f fakeOrganizationLister) CreateOrganization(context.Context, keycloak.Organization) (keycloak.Organization, error) {
+	return keycloak.Organization{}, errors.New("CreateOrganization not implemented in list-only fake")
+}
+
+func (f fakeOrganizationLister) UpdateOrganization(context.Context, keycloak.Organization) (keycloak.Organization, error) {
+	return keycloak.Organization{}, errors.New("UpdateOrganization not implemented in list-only fake")
+}
+
+func (f fakeOrganizationLister) DeleteOrganization(context.Context, string) error {
+	return errors.New("DeleteOrganization not implemented in list-only fake")
+}
+
+func (f fakeOrganizationLister) ListOrganizationMembers(context.Context, string) ([]keycloak.OrganizationMember, error) {
+	return nil, errors.New("ListOrganizationMembers not implemented in list-only fake")
+}
+
+type fakeOrganizationStore struct {
+	byID map[string]keycloak.Organization
+	next int
+}
+
+func newFakeOrganizationStore(orgs ...keycloak.Organization) *fakeOrganizationStore {
+	store := &fakeOrganizationStore{byID: make(map[string]keycloak.Organization, len(orgs))}
+	for _, org := range orgs {
+		store.byID[org.ID] = org
+	}
+	return store
+}
+
+func (f *fakeOrganizationStore) ListOrganizations(context.Context) ([]keycloak.Organization, error) {
+	out := make([]keycloak.Organization, 0, len(f.byID))
+	for _, org := range f.byID {
+		out = append(out, org)
+	}
+	return out, nil
+}
+
+func (f *fakeOrganizationStore) GetOrganization(_ context.Context, id string) (keycloak.Organization, error) {
+	org, ok := f.byID[id]
+	if !ok {
+		return keycloak.Organization{}, &keycloak.APIError{Op: "get organization", StatusCode: http.StatusNotFound}
+	}
+	return org, nil
+}
+
+func (f *fakeOrganizationStore) CreateOrganization(_ context.Context, org keycloak.Organization) (keycloak.Organization, error) {
+	for _, existing := range f.byID {
+		if existing.Name == org.Name {
+			return keycloak.Organization{}, &keycloak.APIError{Op: "create organization", StatusCode: http.StatusConflict}
+		}
+	}
+	f.next++
+	org.ID = "org-" + strings.TrimSpace(org.Name)
+	if org.Alias == "" {
+		org.Alias = org.Name
+	}
+	f.byID[org.ID] = org
+	return org, nil
+}
+
+func (f *fakeOrganizationStore) UpdateOrganization(_ context.Context, org keycloak.Organization) (keycloak.Organization, error) {
+	existing, ok := f.byID[org.ID]
+	if !ok {
+		return keycloak.Organization{}, &keycloak.APIError{Op: "update organization", StatusCode: http.StatusNotFound}
+	}
+	if org.Alias == "" {
+		org.Alias = existing.Alias
+	}
+	f.byID[org.ID] = org
+	return org, nil
+}
+
+func (f *fakeOrganizationStore) DeleteOrganization(_ context.Context, id string) error {
+	if _, ok := f.byID[id]; !ok {
+		return &keycloak.APIError{Op: "delete organization", StatusCode: http.StatusNotFound}
+	}
+	delete(f.byID, id)
+	return nil
+}
+
+func (f *fakeOrganizationStore) ListOrganizationMembers(context.Context, string) ([]keycloak.OrganizationMember, error) {
+	return nil, nil
 }
 
 func managedCluster(name string, labels map[string]string, accepts bool) *unstructured.Unstructured {

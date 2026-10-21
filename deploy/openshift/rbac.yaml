@@ -6,6 +6,19 @@ rules:
   - apiGroups: ["cluster.open-cluster-management.io"]
     resources: ["managedclusters"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  # OCM admission requires managedclustersets/join to place a ManagedCluster in a
+  # ManagedClusterSet (unlabeled CRs join "default"). Without this, Create fails with:
+  #   cannot add/remove the resource to/from ManagedClusterSet "default"
+  - apiGroups: ["cluster.open-cluster-management.io"]
+    resources: ["managedclustersets"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["cluster.open-cluster-management.io"]
+    resources: ["managedclustersets/join"]
+    verbs: ["create"]
+  # Setting/updating spec.hubAcceptsClient requires the accept subresource.
+  - apiGroups: ["register.open-cluster-management.io"]
+    resources: ["managedclusters/accept"]
+    verbs: ["update"]
   # Clusters List/Get read each cluster's provisioning from the root
   # ai-grid-ready Policy's status (AI_GRID_READY_POLICY, default
   # ai-grid-policies/ai-grid-ready). get on that one name only: other

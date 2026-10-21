@@ -3,8 +3,11 @@ package servers
 import (
 	"context"
 	"errors"
+	"fmt"
 	"maps"
+	"net/http"
 	"strings"
+	"sync"
 	"testing"
 
 	aigridv1 "github.com/osac-project/ai-grid-provider-backend/gen/ai_grid/v1"
@@ -577,7 +580,7 @@ func TestListTenants(t *testing.T) {
 
 	tests := []struct {
 		name      string
-		lister    organizationLister
+		client    organizationClient
 		wantIDs   map[string]string
 		wantNames []string
 		wantDom   map[string][]string
@@ -585,14 +588,12 @@ func TestListTenants(t *testing.T) {
 	}{
 		{
 			name: "maps organizations to tenants",
-			lister: fakeOrganizationLister{
-				orgs: []keycloak.Organization{
-					{ID: "org-1", Name: "tenant-a", Domains: []keycloak.OrganizationDomain{{Name: "a.example.com"}}},
-					{ID: "org-2", Name: "tenant-b", Domains: []keycloak.OrganizationDomain{
-						{Name: "b.example.com"}, {Name: "b.alt.example.com"},
-					}},
-				},
-			},
+			client: newFakeOrganizationStore(
+				keycloak.Organization{ID: "org-1", Name: "tenant-a", Domains: []keycloak.OrganizationDomain{{Name: "a.example.com"}}},
+				keycloak.Organization{ID: "org-2", Name: "tenant-b", Domains: []keycloak.OrganizationDomain{
+					{Name: "b.example.com"}, {Name: "b.alt.example.com"},
+				}},
+			),
 			wantIDs: map[string]string{
 				"tenant-a": "org-1",
 				"tenant-b": "org-2",
@@ -605,12 +606,12 @@ func TestListTenants(t *testing.T) {
 		},
 		{
 			name:      "empty organizations",
-			lister:    fakeOrganizationLister{},
+			client:    newFakeOrganizationStore(),
 			wantNames: []string{},
 		},
 		{
 			name:    "upstream error",
-			lister:  fakeOrganizationLister{err: errors.New("token rejected")},
+			client:  &fakeOrganizationStore{listErr: errors.New("token rejected")},
 			wantErr: "token rejected",
 		},
 	}
@@ -619,7 +620,7 @@ func TestListTenants(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			server, err := NewTenantsServer().SetOrganizationLister(tc.lister).Build()
+			server, err := NewTenantsServer().SetOrganizationClient(tc.client).Build()
 			if err != nil {
 				t.Fatalf("Build() error = %v", err)
 			}
@@ -664,16 +665,516 @@ func TestListTenants(t *testing.T) {
 	}
 }
 
-type fakeOrganizationLister struct {
-	orgs []keycloak.Organization
-	err  error
+func TestGetTenant(t *testing.T) {
+	t.Parallel()
+
+	store := newFakeOrganizationStore(
+		keycloak.Organization{ID: "org-1", Name: "tenant-a", Domains: []keycloak.OrganizationDomain{{Name: "a.example.com"}}},
+	)
+	server := mustTenantsServer(t, store)
+
+	got, err := server.Get(context.Background(), &aigridv1.TenantsGetRequest{Id: "org-1"})
+	if err != nil {
+		t.Fatalf("Get() error = %v", err)
+	}
+	if got.GetObject().GetMetadata().GetName() != "tenant-a" {
+		t.Fatalf("name = %q", got.GetObject().GetMetadata().GetName())
+	}
+
+	_, err = server.Get(context.Background(), &aigridv1.TenantsGetRequest{Id: "missing"})
+	assertGRPCCode(t, err, codes.NotFound)
+
+	_, err = server.Get(context.Background(), &aigridv1.TenantsGetRequest{})
+	assertGRPCCode(t, err, codes.InvalidArgument)
 }
 
-func (f fakeOrganizationLister) ListOrganizations(context.Context) ([]keycloak.Organization, error) {
-	if f.err != nil {
-		return nil, f.err
+func TestCreateTenant(t *testing.T) {
+	t.Parallel()
+
+	t.Run("creates tenant", func(t *testing.T) {
+		t.Parallel()
+		server := mustTenantsServer(t, newFakeOrganizationStore())
+		got, err := server.Create(context.Background(), &aigridv1.TenantsCreateRequest{
+			Object: &aigridv1.Tenant{
+				Metadata: &aigridv1.Metadata{Name: "acme"},
+				Spec:     &aigridv1.TenantSpec{Domains: []string{"acme.example.com"}},
+			},
+		})
+		if err != nil {
+			t.Fatalf("Create() error = %v", err)
+		}
+		if got.GetObject().GetId() == "" {
+			t.Fatal("expected Keycloak-assigned id")
+		}
+		if got.GetObject().GetMetadata().GetName() != "acme" {
+			t.Fatalf("name = %q", got.GetObject().GetMetadata().GetName())
+		}
+		assertStringSlicesEqual(t, got.GetObject().GetSpec().GetDomains(), []string{"acme.example.com"})
+	})
+
+	t.Run("already exists", func(t *testing.T) {
+		t.Parallel()
+		server := mustTenantsServer(t, newFakeOrganizationStore(
+			keycloak.Organization{ID: "org-1", Name: "acme"},
+		))
+		_, err := server.Create(context.Background(), &aigridv1.TenantsCreateRequest{
+			Object: &aigridv1.Tenant{Metadata: &aigridv1.Metadata{Name: "acme"}},
+		})
+		assertGRPCCode(t, err, codes.AlreadyExists)
+	})
+
+	t.Run("invalid name", func(t *testing.T) {
+		t.Parallel()
+		server := mustTenantsServer(t, newFakeOrganizationStore())
+		_, err := server.Create(context.Background(), &aigridv1.TenantsCreateRequest{
+			Object: &aigridv1.Tenant{Metadata: &aigridv1.Metadata{Name: "INVALID"}},
+		})
+		assertGRPCCode(t, err, codes.InvalidArgument)
+	})
+
+	t.Run("invalid domain single label", func(t *testing.T) {
+		t.Parallel()
+		server := mustTenantsServer(t, newFakeOrganizationStore())
+		_, err := server.Create(context.Background(), &aigridv1.TenantsCreateRequest{
+			Object: &aigridv1.Tenant{
+				Metadata: &aigridv1.Metadata{Name: "acme"},
+				Spec:     &aigridv1.TenantSpec{Domains: []string{"localhost"}},
+			},
+		})
+		assertGRPCCode(t, err, codes.InvalidArgument)
+	})
+
+	t.Run("invalid domain ip", func(t *testing.T) {
+		t.Parallel()
+		server := mustTenantsServer(t, newFakeOrganizationStore())
+		_, err := server.Create(context.Background(), &aigridv1.TenantsCreateRequest{
+			Object: &aigridv1.Tenant{
+				Metadata: &aigridv1.Metadata{Name: "acme"},
+				Spec:     &aigridv1.TenantSpec{Domains: []string{"1.2.3.4"}},
+			},
+		})
+		assertGRPCCode(t, err, codes.InvalidArgument)
+	})
+
+	t.Run("invalid domain uppercase", func(t *testing.T) {
+		t.Parallel()
+		server := mustTenantsServer(t, newFakeOrganizationStore())
+		_, err := server.Create(context.Background(), &aigridv1.TenantsCreateRequest{
+			Object: &aigridv1.Tenant{
+				Metadata: &aigridv1.Metadata{Name: "acme"},
+				Spec:     &aigridv1.TenantSpec{Domains: []string{"Acme.Example.COM"}},
+			},
+		})
+		assertGRPCCode(t, err, codes.InvalidArgument)
+	})
+
+	t.Run("duplicate domains", func(t *testing.T) {
+		t.Parallel()
+		server := mustTenantsServer(t, newFakeOrganizationStore())
+		_, err := server.Create(context.Background(), &aigridv1.TenantsCreateRequest{
+			Object: &aigridv1.Tenant{
+				Metadata: &aigridv1.Metadata{Name: "acme"},
+				Spec:     &aigridv1.TenantSpec{Domains: []string{"acme.example.com", "acme.example.com"}},
+			},
+		})
+		assertGRPCCode(t, err, codes.InvalidArgument)
+	})
+
+	t.Run("blank domain entry is rejected", func(t *testing.T) {
+		t.Parallel()
+		server := mustTenantsServer(t, newFakeOrganizationStore())
+		_, err := server.Create(context.Background(), &aigridv1.TenantsCreateRequest{
+			Object: &aigridv1.Tenant{
+				Metadata: &aigridv1.Metadata{Name: "acme"},
+				Spec:     &aigridv1.TenantSpec{Domains: []string{" "}},
+			},
+		})
+		assertGRPCCode(t, err, codes.InvalidArgument)
+	})
+
+	t.Run("nil object", func(t *testing.T) {
+		t.Parallel()
+		server := mustTenantsServer(t, newFakeOrganizationStore())
+		_, err := server.Create(context.Background(), &aigridv1.TenantsCreateRequest{})
+		assertGRPCCode(t, err, codes.InvalidArgument)
+	})
+}
+
+func TestUpdateTenant(t *testing.T) {
+	t.Parallel()
+
+	t.Run("updates name and domains", func(t *testing.T) {
+		t.Parallel()
+		enabled := false
+		store := newFakeOrganizationStore(
+			keycloak.Organization{
+				ID: "org-1", Name: "acme", Alias: "acme",
+				Enabled: &enabled, Description: "keep-me", RedirectURL: "https://acme.example.com",
+				Domains: []keycloak.OrganizationDomain{{Name: "acme.example.com"}},
+			},
+		)
+		server := mustTenantsServer(t, store)
+		got, err := server.Update(context.Background(), &aigridv1.TenantsUpdateRequest{
+			Object: &aigridv1.Tenant{
+				Id:       "org-1",
+				Metadata: &aigridv1.Metadata{Name: "acme-renamed"},
+				Spec:     &aigridv1.TenantSpec{Domains: []string{"renamed.example.com"}},
+			},
+		})
+		if err != nil {
+			t.Fatalf("Update() error = %v", err)
+		}
+		if got.GetObject().GetMetadata().GetName() != "acme-renamed" {
+			t.Fatalf("name = %q", got.GetObject().GetMetadata().GetName())
+		}
+		assertStringSlicesEqual(t, got.GetObject().GetSpec().GetDomains(), []string{"renamed.example.com"})
+		stored, err := store.GetOrganization(context.Background(), "org-1")
+		if err != nil {
+			t.Fatalf("GetOrganization: %v", err)
+		}
+		if stored.Alias != "acme" {
+			t.Fatalf("alias changed on rename: %q", stored.Alias)
+		}
+		if stored.Enabled == nil || *stored.Enabled || stored.Description != "keep-me" || stored.RedirectURL != "https://acme.example.com" {
+			t.Fatalf("Keycloak fields not preserved: %+v", stored)
+		}
+	})
+
+	t.Run("field mask domains only", func(t *testing.T) {
+		t.Parallel()
+		enabled := false
+		store := newFakeOrganizationStore(
+			keycloak.Organization{
+				ID: "org-1", Name: "acme", Alias: "acme",
+				Enabled: &enabled, Description: "keep-me",
+				Domains: []keycloak.OrganizationDomain{{Name: "acme.example.com"}},
+			},
+		)
+		server := mustTenantsServer(t, store)
+		got, err := server.Update(context.Background(), &aigridv1.TenantsUpdateRequest{
+			Object: &aigridv1.Tenant{
+				Id:       "org-1",
+				Metadata: &aigridv1.Metadata{Name: "should-not-apply"},
+				Spec:     &aigridv1.TenantSpec{Domains: []string{"only-domains.example.com"}},
+			},
+			UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.domains"}},
+		})
+		if err != nil {
+			t.Fatalf("Update() error = %v", err)
+		}
+		if got.GetObject().GetMetadata().GetName() != "acme" {
+			t.Fatalf("name changed despite domains-only mask: %q", got.GetObject().GetMetadata().GetName())
+		}
+		assertStringSlicesEqual(t, got.GetObject().GetSpec().GetDomains(), []string{"only-domains.example.com"})
+		stored, err := store.GetOrganization(context.Background(), "org-1")
+		if err != nil {
+			t.Fatalf("GetOrganization: %v", err)
+		}
+		if stored.Alias != "acme" || stored.Description != "keep-me" || stored.Enabled == nil || *stored.Enabled {
+			t.Fatalf("domains-only update cleared Keycloak fields: %+v", stored)
+		}
+	})
+
+	t.Run("rejects unsupported field mask paths", func(t *testing.T) {
+		t.Parallel()
+		store := newFakeOrganizationStore(
+			keycloak.Organization{
+				ID: "org-1", Name: "acme", Alias: "acme",
+				Domains: []keycloak.OrganizationDomain{{Name: "acme.example.com"}},
+			},
+		)
+		server := mustTenantsServer(t, store)
+		_, err := server.Update(context.Background(), &aigridv1.TenantsUpdateRequest{
+			Object: &aigridv1.Tenant{
+				Id:       "org-1",
+				Metadata: &aigridv1.Metadata{Name: "unexpected"},
+			},
+			UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"metadata.labels"}},
+		})
+		assertGRPCCode(t, err, codes.InvalidArgument)
+		stored, err := store.GetOrganization(context.Background(), "org-1")
+		if err != nil {
+			t.Fatalf("GetOrganization: %v", err)
+		}
+		if stored.Name != "acme" {
+			t.Fatalf("unsupported mask mutated name to %q", stored.Name)
+		}
+	})
+
+	t.Run("empty mask without name preserves display name", func(t *testing.T) {
+		t.Parallel()
+		store := newFakeOrganizationStore(
+			keycloak.Organization{
+				ID: "org-1", Name: "acme", Alias: "acme",
+				Domains: []keycloak.OrganizationDomain{{Name: "acme.example.com"}},
+			},
+		)
+		server := mustTenantsServer(t, store)
+		got, err := server.Update(context.Background(), &aigridv1.TenantsUpdateRequest{
+			Object: &aigridv1.Tenant{
+				Id:   "org-1",
+				Spec: &aigridv1.TenantSpec{Domains: []string{"new.example.com"}},
+			},
+		})
+		if err != nil {
+			t.Fatalf("Update() error = %v", err)
+		}
+		if got.GetObject().GetMetadata().GetName() != "acme" {
+			t.Fatalf("name became %q; want preserved acme (not org id)", got.GetObject().GetMetadata().GetName())
+		}
+		assertStringSlicesEqual(t, got.GetObject().GetSpec().GetDomains(), []string{"new.example.com"})
+	})
+
+	t.Run("explicit empty name is rejected", func(t *testing.T) {
+		t.Parallel()
+		store := newFakeOrganizationStore(
+			keycloak.Organization{ID: "org-1", Name: "acme", Alias: "acme"},
+		)
+		server := mustTenantsServer(t, store)
+		_, err := server.Update(context.Background(), &aigridv1.TenantsUpdateRequest{
+			Object: &aigridv1.Tenant{
+				Id:       "org-1",
+				Metadata: &aigridv1.Metadata{Name: ""},
+			},
+			UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"metadata.name"}},
+		})
+		assertGRPCCode(t, err, codes.InvalidArgument)
+	})
+
+	t.Run("blank domain entry is rejected", func(t *testing.T) {
+		t.Parallel()
+		store := newFakeOrganizationStore(
+			keycloak.Organization{
+				ID: "org-1", Name: "acme", Alias: "acme",
+				Domains: []keycloak.OrganizationDomain{{Name: "acme.example.com"}},
+			},
+		)
+		server := mustTenantsServer(t, store)
+		_, err := server.Update(context.Background(), &aigridv1.TenantsUpdateRequest{
+			Object: &aigridv1.Tenant{
+				Id:   "org-1",
+				Spec: &aigridv1.TenantSpec{Domains: []string{" "}},
+			},
+			UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.domains"}},
+		})
+		assertGRPCCode(t, err, codes.InvalidArgument)
+		stored, err := store.GetOrganization(context.Background(), "org-1")
+		if err != nil {
+			t.Fatalf("GetOrganization: %v", err)
+		}
+		if len(stored.Domains) != 1 || stored.Domains[0].Name != "acme.example.com" {
+			t.Fatalf("blank domain mutated store: %+v", stored.Domains)
+		}
+	})
+
+	t.Run("preserves attributes on update", func(t *testing.T) {
+		t.Parallel()
+		store := newFakeOrganizationStore(
+			keycloak.Organization{
+				ID: "org-1", Name: "acme", Alias: "acme",
+				Attributes: map[string][]string{"billing-id": {"keep-me"}},
+				Domains:    []keycloak.OrganizationDomain{{Name: "acme.example.com"}},
+			},
+		)
+		server := mustTenantsServer(t, store)
+		_, err := server.Update(context.Background(), &aigridv1.TenantsUpdateRequest{
+			Object: &aigridv1.Tenant{
+				Id:       "org-1",
+				Metadata: &aigridv1.Metadata{Name: "acme-renamed"},
+				Spec:     &aigridv1.TenantSpec{Domains: []string{"renamed.example.com"}},
+			},
+		})
+		if err != nil {
+			t.Fatalf("Update() error = %v", err)
+		}
+		stored, err := store.GetOrganization(context.Background(), "org-1")
+		if err != nil {
+			t.Fatalf("GetOrganization: %v", err)
+		}
+		if got := stored.Attributes["billing-id"]; len(got) != 1 || got[0] != "keep-me" {
+			t.Fatalf("attributes dropped: %+v", stored.Attributes)
+		}
+	})
+
+	t.Run("not found", func(t *testing.T) {
+		t.Parallel()
+		server := mustTenantsServer(t, newFakeOrganizationStore())
+		_, err := server.Update(context.Background(), &aigridv1.TenantsUpdateRequest{
+			Object: &aigridv1.Tenant{
+				Id:       "missing",
+				Metadata: &aigridv1.Metadata{Name: "missing"},
+			},
+		})
+		assertGRPCCode(t, err, codes.NotFound)
+	})
+}
+
+func TestListTenantMembers(t *testing.T) {
+	t.Parallel()
+
+	t.Run("lists members", func(t *testing.T) {
+		t.Parallel()
+		store := newFakeOrganizationStore(
+			keycloak.Organization{ID: "org-1", Name: "acme"},
+		)
+		store.members["org-1"] = []keycloak.OrganizationMember{
+			{ID: "u1", Username: "alice", Email: "alice@acme.example.com", Enabled: true},
+			{ID: "u2", Username: "bob", FirstName: "Bob", LastName: "Builder", Enabled: false},
+		}
+		server := mustTenantsServer(t, store)
+		got, err := server.ListMembers(context.Background(), &aigridv1.TenantsListMembersRequest{Id: "org-1"})
+		if err != nil {
+			t.Fatalf("ListMembers() error = %v", err)
+		}
+		if got.GetTotal() != 2 || got.GetSize() != 2 || len(got.GetItems()) != 2 {
+			t.Fatalf("ListMembers() = %+v", got)
+		}
+		if got.GetItems()[0].GetUsername() != "alice" || got.GetItems()[1].GetUsername() != "bob" {
+			t.Fatalf("items = %+v", got.GetItems())
+		}
+	})
+
+	t.Run("not found", func(t *testing.T) {
+		t.Parallel()
+		server := mustTenantsServer(t, newFakeOrganizationStore())
+		_, err := server.ListMembers(context.Background(), &aigridv1.TenantsListMembersRequest{Id: "missing"})
+		assertGRPCCode(t, err, codes.NotFound)
+	})
+
+	t.Run("requires id", func(t *testing.T) {
+		t.Parallel()
+		server := mustTenantsServer(t, newFakeOrganizationStore())
+		_, err := server.ListMembers(context.Background(), &aigridv1.TenantsListMembersRequest{})
+		assertGRPCCode(t, err, codes.InvalidArgument)
+	})
+}
+
+func TestDeleteTenant(t *testing.T) {
+	t.Parallel()
+
+	t.Run("deletes existing", func(t *testing.T) {
+		t.Parallel()
+		server := mustTenantsServer(t, newFakeOrganizationStore(
+			keycloak.Organization{ID: "org-1", Name: "acme"},
+		))
+		_, err := server.Delete(context.Background(), &aigridv1.TenantsDeleteRequest{Id: "org-1"})
+		if err != nil {
+			t.Fatalf("Delete() error = %v", err)
+		}
+		_, err = server.Get(context.Background(), &aigridv1.TenantsGetRequest{Id: "org-1"})
+		assertGRPCCode(t, err, codes.NotFound)
+	})
+
+	t.Run("not found", func(t *testing.T) {
+		t.Parallel()
+		server := mustTenantsServer(t, newFakeOrganizationStore())
+		_, err := server.Delete(context.Background(), &aigridv1.TenantsDeleteRequest{Id: "missing"})
+		assertGRPCCode(t, err, codes.NotFound)
+	})
+}
+
+type fakeOrganizationStore struct {
+	mu      sync.Mutex
+	byID    map[string]keycloak.Organization
+	members map[string][]keycloak.OrganizationMember
+	next    int
+	listErr error
+}
+
+func newFakeOrganizationStore(orgs ...keycloak.Organization) *fakeOrganizationStore {
+	store := &fakeOrganizationStore{
+		byID:    make(map[string]keycloak.Organization, len(orgs)),
+		members: make(map[string][]keycloak.OrganizationMember),
 	}
-	return f.orgs, nil
+	for _, org := range orgs {
+		store.byID[org.ID] = org
+	}
+	return store
+}
+
+func (f *fakeOrganizationStore) ListOrganizations(context.Context) ([]keycloak.Organization, error) {
+	if f.listErr != nil {
+		return nil, f.listErr
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := make([]keycloak.Organization, 0, len(f.byID))
+	for _, org := range f.byID {
+		out = append(out, org)
+	}
+	return out, nil
+}
+
+func (f *fakeOrganizationStore) GetOrganization(_ context.Context, id string) (keycloak.Organization, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	org, ok := f.byID[id]
+	if !ok {
+		return keycloak.Organization{}, &keycloak.APIError{Op: "get organization", StatusCode: http.StatusNotFound}
+	}
+	return org, nil
+}
+
+func (f *fakeOrganizationStore) CreateOrganization(_ context.Context, org keycloak.Organization) (keycloak.Organization, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for _, existing := range f.byID {
+		if existing.Name == org.Name {
+			return keycloak.Organization{}, &keycloak.APIError{Op: "create organization", StatusCode: http.StatusConflict}
+		}
+	}
+	f.next++
+	org.ID = fmt.Sprintf("org-%d", f.next)
+	if org.Alias == "" {
+		org.Alias = org.Name
+	}
+	f.byID[org.ID] = org
+	return org, nil
+}
+
+func (f *fakeOrganizationStore) UpdateOrganization(_ context.Context, org keycloak.Organization) (keycloak.Organization, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	existing, ok := f.byID[org.ID]
+	if !ok {
+		return keycloak.Organization{}, &keycloak.APIError{Op: "update organization", StatusCode: http.StatusNotFound}
+	}
+	// Keycloak alias is immutable once set; preserve when omitted.
+	if org.Alias == "" {
+		org.Alias = existing.Alias
+	}
+	f.byID[org.ID] = org
+	return org, nil
+}
+
+func (f *fakeOrganizationStore) ListOrganizationMembers(_ context.Context, orgID string) ([]keycloak.OrganizationMember, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if _, ok := f.byID[orgID]; !ok {
+		return nil, &keycloak.APIError{Op: "list organization members", StatusCode: http.StatusNotFound}
+	}
+	out := make([]keycloak.OrganizationMember, len(f.members[orgID]))
+	copy(out, f.members[orgID])
+	return out, nil
+}
+
+func (f *fakeOrganizationStore) DeleteOrganization(_ context.Context, id string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if _, ok := f.byID[id]; !ok {
+		return &keycloak.APIError{Op: "delete organization", StatusCode: http.StatusNotFound}
+	}
+	delete(f.byID, id)
+	return nil
+}
+
+func mustTenantsServer(t *testing.T, client organizationClient) *TenantsServer {
+	t.Helper()
+	server, err := NewTenantsServer().SetOrganizationClient(client).Build()
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+	return server
 }
 
 func mustClustersServer(t *testing.T, client *fake.FakeDynamicClient) *ClustersServer {

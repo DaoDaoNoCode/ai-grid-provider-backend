@@ -74,7 +74,6 @@ func New(ctx context.Context, address string, servers Servers) (*Server, error) 
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		_, _ = w.Write(swaggerHTML)
 	})
-	// Keep the generated file available under a stable docs path as well.
 	if sub, err := fs.Sub(openAPIFS, "openapi"); err == nil {
 		root.Handle("/openapi/", http.StripPrefix("/openapi/", http.FileServer(http.FS(sub))))
 	}

@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# Exercise ManagedCluster CRUD against a running ai-grid-provider-backend.
+# Exercise ManagedCluster (Clusters) CRUD against a running ai-grid-provider-backend.
 #
 # Prerequisite (local):
-#   go run ./cmd/ai-grid-provider-backend --kubeconfig "$HOME/.kube/config"
+#   make run   # or: go run ./cmd/... --kubeconfig "$HOME/.kube/config"
 #
 # Usage:
 #   bash hack/smoke-managedcluster-crud.sh
@@ -31,14 +31,20 @@ call "1. Create ${name}" \
   "{\"object\":{\"id\":\"${name}\",\"metadata\":{\"name\":\"${name}\",\"labels\":{\"environment\":\"dev\",\"ai-grid/enabled\":\"false\"}},\"spec\":{\"hub_accepts_client\":true}}}" \
   Create
 
-call "2. List" '{}' List
+call "2. Get ${name}" \
+  "{\"id\":\"${name}\"}" \
+  Get
 
-call "3. Update ${name} (enable + region)" \
-  "{\"object\":{\"id\":\"${name}\",\"metadata\":{\"labels\":{\"ai-grid/enabled\":\"true\",\"ai-grid/region\":\"us-east\"}},\"spec\":{\"hub_accepts_client\":true}}}" \
+call "3. List" '{}' List
+
+call "4. Update ${name} (update_mask=metadata.labels)" \
+  "{\"object\":{\"id\":\"${name}\",\"metadata\":{\"labels\":{\"ai-grid/enabled\":\"true\",\"ai-grid/region\":\"us-east\"}},\"spec\":{\"hub_accepts_client\":true}},\"update_mask\":{\"paths\":[\"metadata.labels\"]}}" \
   Update
 
-call "4. List (after update)" '{}' List
+call "5. Get ${name} (after update)" \
+  "{\"id\":\"${name}\"}" \
+  Get
 
-call "5. Delete ${name}" "{\"id\":\"${name}\"}" Delete
+call "6. Delete ${name}" "{\"id\":\"${name}\"}" Delete
 
-printf '\n==> done (created, listed, updated, listed, deleted %s)\n' "$name"
+printf '\n==> done (created, got, listed, updated, got, deleted %s)\n' "$name"

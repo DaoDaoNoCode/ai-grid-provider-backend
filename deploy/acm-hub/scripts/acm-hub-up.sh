@@ -153,6 +153,7 @@ helm upgrade --install "${RELEASE_NAME}" "${CHART}" \
   --namespace "${NAMESPACE}" \
   --create-namespace \
   "${helm_take_ownership_args[@]}" \
+  --set "namespace=${NAMESPACE}" \
   --set multiclusterhub.create=false \
   --set clusterSet.create=false \
   --set samples.create=false \
@@ -214,6 +215,7 @@ adopt multiclusterhubs.operator.open-cluster-management.io multiclusterhub "${NA
 helm upgrade --install "${RELEASE_NAME}" "${CHART}" \
   --namespace "${NAMESPACE}" \
   "${helm_take_ownership_args[@]}" \
+  --set "namespace=${NAMESPACE}" \
   --set multiclusterhub.create=true \
   --set clusterSet.create=false \
   --set samples.create=false \
@@ -256,6 +258,7 @@ if [[ "$SKIP_SAMPLES" != "1" ]]; then
   helm upgrade --install "${RELEASE_NAME}" "${CHART}" \
     --namespace "${NAMESPACE}" \
     "${helm_take_ownership_args[@]}" \
+    --set "namespace=${NAMESPACE}" \
     --set multiclusterhub.create=true \
     --set clusterSet.create=true \
     --set samples.create=true \

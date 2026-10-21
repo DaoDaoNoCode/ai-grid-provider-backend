@@ -83,10 +83,17 @@ oc get multiclusterhub -n open-cluster-management
 
 ## Point ai-grid-provider-backend at this hub
 
-Skip the backend’s own sample CRs so you do not duplicate names:
+`make openshift-up` calls this script automatically when the ManagedCluster CRD
+is missing. If ACM is already Running, openshift-up skips the install and can
+still apply `deploy/openshift/sample-managedclusters.yaml` (`ai-grid-sample-*`).
+
+On hubs that already have real clusters (or playground samples from this chart),
+skip the backend’s own sample CRs:
 
 ```bash
 APPLY_SAMPLES=0 make openshift-up
+# or skip ACM entirely on a GitOps-managed hub:
+SKIP_ACM=1 APPLY_SAMPLES=0 make openshift-up
 ```
 
 ## Tear down

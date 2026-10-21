@@ -13,12 +13,17 @@ The current API includes:
 - `ai_grid.v1.Clusters/Update`
 - `ai_grid.v1.Clusters/Delete`
 - `ai_grid.v1.Tenants/List`
+- `ai_grid.v1.Tenants/Get`
+- `ai_grid.v1.Tenants/Create`
+- `ai_grid.v1.Tenants/Update`
+- `ai_grid.v1.Tenants/Delete`
 
 REST (grpc-gateway) and Swagger UI are also exposed on HTTP `:8081`:
 
 - Swagger UI: `http://localhost:8081/docs/`
 - OpenAPI (Swagger 2.0): `http://localhost:8081/openapi.json`
 - REST routes: `/api/v1/ping`, `/api/v1/clusters`, `/api/v1/tenants`
+- UI handout (payloads + examples): [`docs/UI_API_REFERENCE.md`](docs/UI_API_REFERENCE.md)
 
 Regenerate protobuf, gateway stubs, and OpenAPI with `make generate` (requires [buf](https://buf.build)).
 
@@ -32,11 +37,14 @@ The service runs in-cluster using its Kubernetes ServiceAccount. Its RBAC role
 allows `get`, `list`, `watch`, `create`, `update`, `patch`, and `delete` on
 `ManagedCluster` resources.
 
-`ListTenants` reads Keycloak Organizations from the `ai-grid` realm through the
-Keycloak Admin REST API. The Kind setup creates two sample Organizations,
-`tenant-a` and `tenant-b`, and configures the backend with the development
-Keycloak admin credentials. Use a dedicated service account with the
-`query-organizations` role instead of these credentials outside local testing.
+Tenants CRUD maps to **Keycloak Organizations** in one shared platform realm
+(`KEYCLOAK_REALM`, default `ai-grid`) through the Keycloak Admin REST API.
+A Tenant is an Organization — **not** a Keycloak realm. `id` is the
+organization UUID; `metadata.name` is the organization name (and alias). The
+Kind setup creates two sample Organizations, `tenant-a` and `tenant-b`, and
+configures the backend with the development Keycloak admin credentials. Use a
+dedicated service account with organization manage/query roles instead of these
+credentials outside local testing.
 
 ## Local architecture
 
@@ -149,6 +157,10 @@ List available gRPC services:
 grpcurl -plaintext localhost:8080 list
 ```
 
+API request authn/authz is out of scope for this MVP — gRPC and REST endpoints
+are open. Keycloak is used only as the Tenants Organizations Admin API backend.
+See [`docs/UI_API_REFERENCE.md`](docs/UI_API_REFERENCE.md).
+
 Call the Clusters API (hub ManagedCluster list / get / create / update / delete):
 
 ```sh
@@ -158,10 +170,12 @@ grpcurl -plaintext -d '{}' localhost:8080 \
 grpcurl -plaintext -d '{"id":"playground-east"}' localhost:8080 \
   ai_grid.v1.Clusters/Get
 
-grpcurl -plaintext -d '{"object":{"id":"demo-cluster","metadata":{"name":"demo-cluster","labels":{"environment":"dev"}},"spec":{"hub_accepts_client":true}}}' \
+grpcurl -plaintext \
+  -d '{"object":{"id":"demo-cluster","metadata":{"name":"demo-cluster","labels":{"environment":"dev"}},"spec":{"hub_accepts_client":true}}}' \
   localhost:8080 ai_grid.v1.Clusters/Create
 
-grpcurl -plaintext -d '{"object":{"id":"demo-cluster","metadata":{"labels":{"ai-grid/enabled":"true"}},"spec":{"hub_accepts_client":true}}}' \
+grpcurl -plaintext \
+  -d '{"object":{"id":"demo-cluster","metadata":{"labels":{"ai-grid/enabled":"true"}},"spec":{"hub_accepts_client":true}},"update_mask":{"paths":["metadata.labels"]}}' \
   localhost:8080 ai_grid.v1.Clusters/Update
 
 grpcurl -plaintext -d '{"id":"demo-cluster"}' localhost:8080 \
@@ -171,12 +185,18 @@ grpcurl -plaintext -d '{"id":"demo-cluster"}' localhost:8080 \
 REST equivalents use `/api/v1/clusters` (GET list, GET/`PATCH`/`DELETE` by id, POST create).
 Objects use OSAC shape: `id` + `metadata` + `spec` + `status`.
 
-Call the tenant API:
+Call the Tenants API:
 
 ```sh
 grpcurl -plaintext -d '{}' localhost:8080 \
   ai_grid.v1.Tenants/List
+
+grpcurl -plaintext \
+  -d '{"object":{"metadata":{"name":"demo-tenant"},"spec":{"domains":["demo.example.com"]}}}' \
+  localhost:8080 ai_grid.v1.Tenants/Create
 ```
+
+REST equivalents use `/api/v1/tenants` (GET list, GET/`PATCH`/`DELETE` by id, POST create).
 
 Call the service ping API:
 
@@ -185,15 +205,30 @@ grpcurl -plaintext -d '{"name":"Ada"}' localhost:8080 \
   ai_grid.v1.AiGrid/Ping
 ```
 
+Or run the full gRPC + REST smoke suite:
+
+```sh
+# Local: KEYCLOAK_URL=http://127.0.0.1:8180 make run   # then in another shell:
+make smoke
+
+# OpenShift (port-forwards backend):
+make smoke-openshift
+# SKIP_CLUSTERS=1 make smoke-openshift
+```
+
+`make smoke-openshift` expects the backend already deployed (`make openshift-up`)
+with an image that exposes `ai_grid.v1.Clusters` and full `ai_grid.v1.Tenants`
+CRUD. If `grpcurl list` still shows `ManagedClusters`, rebuild/push and redeploy.
+
 Keycloak is available inside the cluster at `keycloak.ai-grid.svc:8080`.
 For local browser access, forward it with:
 
 ```sh
-kubectl -n ai-grid port-forward service/keycloak 8081:8080
+kubectl -n ai-grid port-forward service/keycloak 8180:8080
 ```
 
 The development Keycloak credentials are `admin` / `admin`. The initialization
-Job creates the `ai-grid` realm and Organizations `tenant-a` and `tenant-b`.
+Job creates the `ai-grid` realm and Organizations `tenant-a` / `tenant-b`.
 
 ## Run Go tests
 
@@ -332,24 +367,27 @@ kind delete cluster --name ai-grid-hub
 
 ## Install ACM hub on OpenShift (playground)
 
-To get a real RHACM hub plus queryable sample `ManagedCluster`s on a logged-in
-OpenShift cluster (`oc`, `helm`, OperatorHub required):
+`make openshift-up` installs RHACM automatically when the `ManagedCluster` CRD
+is missing (needs `helm` + OperatorHub; allow 15–20+ minutes). To install ACM
+alone, or re-run it explicitly:
 
 ```sh
 make acm-hub-up
-# CHANNEL=release-2.13 make acm-hub-up   # override default release-2.16
+# CHANNEL=release-2.13 make acm-hub-up   # OCP 4.18; default chart channel is release-2.13
+# CHANNEL=release-2.16 make acm-hub-up   # OCP ≥ 4.19
 # SKIP_SAMPLES=1 make acm-hub-up
 ```
 
 See [deploy/acm-hub/README.md](deploy/acm-hub/README.md). Tear down with
-`make acm-hub-down`. After the hub is Running, deploy this backend with
-`APPLY_SAMPLES=0 make openshift-up` so you do not duplicate sample clusters.
+`make acm-hub-down` (not part of `make openshift-down`). On hubs that already
+have real ACM clusters, skip backend sample CRs with
+`APPLY_SAMPLES=0 make openshift-up` (and `SKIP_ACM=1` if you must not touch ACM).
 
 ## Deploy to OpenShift
 
 Kind-parity stack for a logged-in OpenShift cluster (`oc whoami`): backend,
-optional embedded Keycloak + Postgres, Routes for HTTP and gRPC, and sample
-ManagedClusters when the ACM/OCM CRD is present.
+optional embedded Keycloak + Postgres (Tenants API), Routes for HTTP and gRPC,
+RHACM when needed (Clusters API), and sample ManagedClusters.
 
 Default image: [`ghcr.io/ai-grid-cloud/ai-grid-provider-backend`](https://github.com/ai-grid-cloud/ai-grid-provider-backend/pkgs/container/ai-grid-provider-backend).
 
@@ -386,7 +424,7 @@ the deployment (`make openshift-up` or `oc -n ai-grid rollout restart deploy/ai-
 Then deploy:
 
 ```sh
-# Embedded Keycloak (default, Kind parity)
+# Embedded Keycloak + ACM (if ManagedCluster CRD missing) + sample clusters
 make openshift-up
 
 # Or build/push and deploy in one step
@@ -398,6 +436,12 @@ EXTERNAL_KEYCLOAK=1 \
   KEYCLOAK_ADMIN_USERNAME=admin \
   KEYCLOAK_ADMIN_PASSWORD=... \
   make openshift-up
+
+# Skip ACM install (Clusters API needs the CRD already present)
+SKIP_ACM=1 make openshift-up
+
+# Force ACM install even if the CRD already exists (idempotent helm upgrade)
+INSTALL_ACM=1 make openshift-up
 
 # Skip sample ManagedClusters on hubs that already have real ACM clusters
 APPLY_SAMPLES=0 make openshift-up
@@ -433,6 +477,7 @@ client/                          reusable gRPC client
 proto/                           protobuf + buf config
 proto/ai_grid/v1/                per-resource *_type.proto / *_service.proto + metadata
 gen/ai_grid/v1/                  generated protobuf, gRPC, and gateway code
+docs/UI_API_REFERENCE.md         REST payloads for UI/BFF consumers
 docs/openapi/                    generated OpenAPI (Swagger 2.0) JSON
 internal/servers/                Per-resource gRPC servers (OSAC-style builders)
 internal/servers/clusters_server.go         Kubernetes-backed Clusters API
@@ -447,7 +492,7 @@ hack/ocm-up.sh                   OCM bootstrap helper
 hack/openshift-up.sh             OpenShift deploy helper
 hack/openshift-down.sh           OpenShift teardown helper
 hack/check-prereqs.sh            local toolchain and runtime preflight
-hack/smoke-apis.sh               grpcurl smoke test for every RPC
+hack/smoke-apis.sh               gRPC + REST smoke for Ping/Clusters/Tenants (make smoke)
 hack/test-kind.sh                end-to-end integration test
 integration/kind_test.go         typed gRPC integration test
 cmd/ai-grid-fake-infra/          fake hub API + fake Keycloak for make dev-fake

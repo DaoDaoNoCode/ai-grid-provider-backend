@@ -125,5 +125,50 @@ func (c *Client) ListTenants(ctx context.Context) ([]*aigridv1.Tenant, error) {
 	return response.GetItems(), nil
 }
 
+// GetTenant returns a single tenant by Keycloak Organization id.
+func (c *Client) GetTenant(ctx context.Context, id string) (*aigridv1.Tenant, error) {
+	response, err := c.tenants.Get(ctx, &aigridv1.TenantsGetRequest{Id: id})
+	if err != nil {
+		return nil, err
+	}
+	return response.GetObject(), nil
+}
+
+// CreateTenant creates a Keycloak Organization for the tenant.
+func (c *Client) CreateTenant(ctx context.Context, object *aigridv1.Tenant) (*aigridv1.Tenant, error) {
+	response, err := c.tenants.Create(ctx, &aigridv1.TenantsCreateRequest{Object: object})
+	if err != nil {
+		return nil, err
+	}
+	return response.GetObject(), nil
+}
+
+// UpdateTenant patches an existing tenant. A nil mask updates all mutable fields.
+func (c *Client) UpdateTenant(ctx context.Context, object *aigridv1.Tenant, mask *fieldmaskpb.FieldMask) (*aigridv1.Tenant, error) {
+	response, err := c.tenants.Update(ctx, &aigridv1.TenantsUpdateRequest{
+		Object:     object,
+		UpdateMask: mask,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return response.GetObject(), nil
+}
+
+// DeleteTenant deletes a tenant (Keycloak Organization) by id.
+func (c *Client) DeleteTenant(ctx context.Context, id string) error {
+	_, err := c.tenants.Delete(ctx, &aigridv1.TenantsDeleteRequest{Id: id})
+	return err
+}
+
+// ListTenantMembers returns Keycloak users that belong to the tenant Organization.
+func (c *Client) ListTenantMembers(ctx context.Context, id string) ([]*aigridv1.TenantMember, error) {
+	response, err := c.tenants.ListMembers(ctx, &aigridv1.TenantsListMembersRequest{Id: id})
+	if err != nil {
+		return nil, err
+	}
+	return response.GetItems(), nil
+}
+
 // Close releases the underlying gRPC connection.
 func (c *Client) Close() error { return c.connection.Close() }

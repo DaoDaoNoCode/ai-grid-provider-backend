@@ -2,7 +2,9 @@ package client_test
 
 import (
 	"context"
+	"errors"
 	"net"
+	"net/http"
 	"testing"
 
 	clientpkg "github.com/osac-project/ai-grid-provider-backend/client"
@@ -202,7 +204,124 @@ func TestClientListTenants(t *testing.T) {
 	}
 }
 
-func startTestClient(t *testing.T, objects []runtime.Object, orgs fakeOrganizationLister) (*clientpkg.Client, func()) {
+func TestClientTenantCRUD(t *testing.T) {
+	t.Parallel()
+
+	store := &mutableOrganizationStore{byID: map[string]keycloak.Organization{}}
+	c, cleanup := startTestClient(t, nil, store)
+	defer cleanup()
+	ctx := context.Background()
+
+	created, err := c.CreateTenant(ctx, &aigridv1.Tenant{
+		Metadata: &aigridv1.Metadata{Name: "acme"},
+		Spec:     &aigridv1.TenantSpec{Domains: []string{"acme.example.com"}},
+	})
+	if err != nil {
+		t.Fatalf("CreateTenant() error = %v", err)
+	}
+	if created.GetId() == "" || created.GetMetadata().GetName() != "acme" {
+		t.Fatalf("created = %+v", created)
+	}
+
+	got, err := c.GetTenant(ctx, created.GetId())
+	if err != nil {
+		t.Fatalf("GetTenant() error = %v", err)
+	}
+	if got.GetMetadata().GetName() != "acme" {
+		t.Fatalf("GetTenant name = %q", got.GetMetadata().GetName())
+	}
+
+	updated, err := c.UpdateTenant(ctx, &aigridv1.Tenant{
+		Id:       created.GetId(),
+		Metadata: &aigridv1.Metadata{Name: "acme"},
+		Spec:     &aigridv1.TenantSpec{Domains: []string{"updated.example.com"}},
+	}, nil)
+	if err != nil {
+		t.Fatalf("UpdateTenant() error = %v", err)
+	}
+	if domains := updated.GetSpec().GetDomains(); len(domains) != 1 || domains[0] != "updated.example.com" {
+		t.Fatalf("domains = %v", domains)
+	}
+
+	if err := c.DeleteTenant(ctx, created.GetId()); err != nil {
+		t.Fatalf("DeleteTenant() error = %v", err)
+	}
+	_, err = c.GetTenant(ctx, created.GetId())
+	if status.Code(err) != codes.NotFound {
+		t.Fatalf("Get after delete code = %v (%v)", status.Code(err), err)
+	}
+}
+
+type organizationClient interface {
+	ListOrganizations(ctx context.Context) ([]keycloak.Organization, error)
+	GetOrganization(ctx context.Context, id string) (keycloak.Organization, error)
+	CreateOrganization(ctx context.Context, org keycloak.Organization) (keycloak.Organization, error)
+	UpdateOrganization(ctx context.Context, org keycloak.Organization) (keycloak.Organization, error)
+	DeleteOrganization(ctx context.Context, id string) error
+	ListOrganizationMembers(ctx context.Context, orgID string) ([]keycloak.OrganizationMember, error)
+}
+
+type mutableOrganizationStore struct {
+	byID map[string]keycloak.Organization
+	next int
+}
+
+func (f *mutableOrganizationStore) ListOrganizations(context.Context) ([]keycloak.Organization, error) {
+	out := make([]keycloak.Organization, 0, len(f.byID))
+	for _, org := range f.byID {
+		out = append(out, org)
+	}
+	return out, nil
+}
+
+func (f *mutableOrganizationStore) GetOrganization(_ context.Context, id string) (keycloak.Organization, error) {
+	org, ok := f.byID[id]
+	if !ok {
+		return keycloak.Organization{}, &keycloak.APIError{Op: "get organization", StatusCode: http.StatusNotFound}
+	}
+	return org, nil
+}
+
+func (f *mutableOrganizationStore) CreateOrganization(_ context.Context, org keycloak.Organization) (keycloak.Organization, error) {
+	for _, existing := range f.byID {
+		if existing.Name == org.Name {
+			return keycloak.Organization{}, &keycloak.APIError{Op: "create organization", StatusCode: http.StatusConflict}
+		}
+	}
+	f.next++
+	org.ID = "org-" + org.Name
+	if org.Alias == "" {
+		org.Alias = org.Name
+	}
+	f.byID[org.ID] = org
+	return org, nil
+}
+
+func (f *mutableOrganizationStore) UpdateOrganization(_ context.Context, org keycloak.Organization) (keycloak.Organization, error) {
+	existing, ok := f.byID[org.ID]
+	if !ok {
+		return keycloak.Organization{}, &keycloak.APIError{Op: "update organization", StatusCode: http.StatusNotFound}
+	}
+	if org.Alias == "" {
+		org.Alias = existing.Alias
+	}
+	f.byID[org.ID] = org
+	return org, nil
+}
+
+func (f *mutableOrganizationStore) DeleteOrganization(_ context.Context, id string) error {
+	if _, ok := f.byID[id]; !ok {
+		return &keycloak.APIError{Op: "delete organization", StatusCode: http.StatusNotFound}
+	}
+	delete(f.byID, id)
+	return nil
+}
+
+func (f *mutableOrganizationStore) ListOrganizationMembers(context.Context, string) ([]keycloak.OrganizationMember, error) {
+	return nil, nil
+}
+
+func startTestClient(t *testing.T, objects []runtime.Object, orgs organizationClient) (*clientpkg.Client, func()) {
 	t.Helper()
 
 	if objects == nil {
@@ -227,7 +346,7 @@ func startTestClient(t *testing.T, objects []runtime.Object, orgs fakeOrganizati
 		t.Fatalf("build Clusters server: %v", err)
 	}
 	tenantsServer, err := servers.NewTenantsServer().
-		SetOrganizationLister(orgs).
+		SetOrganizationClient(orgs).
 		Build()
 	if err != nil {
 		t.Fatalf("build Tenants server: %v", err)
@@ -273,6 +392,31 @@ func (f fakeOrganizationLister) ListOrganizations(context.Context) ([]keycloak.O
 		return nil, f.err
 	}
 	return f.orgs, nil
+}
+
+func (f fakeOrganizationLister) GetOrganization(_ context.Context, id string) (keycloak.Organization, error) {
+	for _, org := range f.orgs {
+		if org.ID == id {
+			return org, nil
+		}
+	}
+	return keycloak.Organization{}, &keycloak.APIError{Op: "get organization", StatusCode: http.StatusNotFound}
+}
+
+func (f fakeOrganizationLister) CreateOrganization(context.Context, keycloak.Organization) (keycloak.Organization, error) {
+	return keycloak.Organization{}, errors.New("CreateOrganization not implemented in list-only fake")
+}
+
+func (f fakeOrganizationLister) UpdateOrganization(context.Context, keycloak.Organization) (keycloak.Organization, error) {
+	return keycloak.Organization{}, errors.New("UpdateOrganization not implemented in list-only fake")
+}
+
+func (f fakeOrganizationLister) DeleteOrganization(context.Context, string) error {
+	return errors.New("DeleteOrganization not implemented in list-only fake")
+}
+
+func (f fakeOrganizationLister) ListOrganizationMembers(context.Context, string) ([]keycloak.OrganizationMember, error) {
+	return nil, errors.New("ListOrganizationMembers not implemented in list-only fake")
 }
 
 func managedCluster(name string, labels map[string]string, accepts bool) *unstructured.Unstructured {

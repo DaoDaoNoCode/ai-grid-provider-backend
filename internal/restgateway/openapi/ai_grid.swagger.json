@@ -2,7 +2,7 @@
   "swagger": "2.0",
   "info": {
     "title": "AI Grid API",
-    "description": "gRPC-Gateway REST surface for ai-grid-provider-backend (Ping, Clusters, Tenants).",
+    "description": "gRPC-Gateway REST surface for ai-grid-provider-backend (Ping, Clusters CRUD, Tenants CRUD).",
     "version": "0.1.0",
     "contact": {
       "name": "AI Grid",
@@ -314,6 +314,202 @@
         "tags": [
           "Tenants"
         ]
+      },
+      "post": {
+        "operationId": "Tenants_Create",
+        "responses": {
+          "200": {
+            "description": "",
+            "schema": {
+              "$ref": "#/definitions/v1Tenant"
+            }
+          },
+          "default": {
+            "description": "An unexpected error response.",
+            "schema": {
+              "$ref": "#/definitions/rpcStatus"
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "object",
+            "in": "body",
+            "required": true,
+            "schema": {
+              "$ref": "#/definitions/v1Tenant"
+            }
+          }
+        ],
+        "tags": [
+          "Tenants"
+        ]
+      }
+    },
+    "/api/v1/tenants/{id}": {
+      "get": {
+        "operationId": "Tenants_Get",
+        "responses": {
+          "200": {
+            "description": "",
+            "schema": {
+              "$ref": "#/definitions/v1Tenant"
+            }
+          },
+          "default": {
+            "description": "An unexpected error response.",
+            "schema": {
+              "$ref": "#/definitions/rpcStatus"
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "id",
+            "description": "Keycloak Organization id.",
+            "in": "path",
+            "required": true,
+            "type": "string"
+          }
+        ],
+        "tags": [
+          "Tenants"
+        ]
+      },
+      "delete": {
+        "operationId": "Tenants_Delete",
+        "responses": {
+          "200": {
+            "description": "A successful response.",
+            "schema": {
+              "$ref": "#/definitions/v1TenantsDeleteResponse"
+            }
+          },
+          "default": {
+            "description": "An unexpected error response.",
+            "schema": {
+              "$ref": "#/definitions/rpcStatus"
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "id",
+            "description": "Keycloak Organization id.",
+            "in": "path",
+            "required": true,
+            "type": "string"
+          }
+        ],
+        "tags": [
+          "Tenants"
+        ]
+      }
+    },
+    "/api/v1/tenants/{id}:listMembers": {
+      "get": {
+        "summary": "ListMembers returns Keycloak users that belong to the tenant Organization.\nREST uses an AIP-136 custom method to keep the URL space flat (no nested collection).",
+        "operationId": "Tenants_ListMembers",
+        "responses": {
+          "200": {
+            "description": "A successful response.",
+            "schema": {
+              "$ref": "#/definitions/v1TenantsListMembersResponse"
+            }
+          },
+          "default": {
+            "description": "An unexpected error response.",
+            "schema": {
+              "$ref": "#/definitions/rpcStatus"
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "id",
+            "description": "Keycloak Organization id (tenant id).",
+            "in": "path",
+            "required": true,
+            "type": "string"
+          },
+          {
+            "name": "offset",
+            "description": "Index of the first result. If not specified the default value will be zero.",
+            "in": "query",
+            "required": false,
+            "type": "integer",
+            "format": "int32"
+          },
+          {
+            "name": "limit",
+            "description": "Maximum number of results to be returned by the server. When not specified all\nthe results will be returned (subject to an internal Keycloak page cap).",
+            "in": "query",
+            "required": false,
+            "type": "integer",
+            "format": "int32"
+          }
+        ],
+        "tags": [
+          "Tenants"
+        ]
+      }
+    },
+    "/api/v1/tenants/{object.id}": {
+      "patch": {
+        "operationId": "Tenants_Update",
+        "responses": {
+          "200": {
+            "description": "",
+            "schema": {
+              "$ref": "#/definitions/v1Tenant"
+            }
+          },
+          "default": {
+            "description": "An unexpected error response.",
+            "schema": {
+              "$ref": "#/definitions/rpcStatus"
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "object.id",
+            "description": "Unique identifier of the tenant (Keycloak organization id / UUID).",
+            "in": "path",
+            "required": true,
+            "type": "string"
+          },
+          {
+            "name": "object",
+            "in": "body",
+            "required": true,
+            "schema": {
+              "type": "object",
+              "properties": {
+                "metadata": {
+                  "$ref": "#/definitions/v1Metadata"
+                },
+                "spec": {
+                  "$ref": "#/definitions/v1TenantSpec"
+                },
+                "status": {
+                  "$ref": "#/definitions/v1TenantStatus"
+                }
+              },
+              "description": "A tenant groups resources and users.\nBacked by a Keycloak Organization in the shared platform realm (KEYCLOAK_REALM),\nnot by a Keycloak realm per tenant."
+            }
+          },
+          {
+            "name": "lock",
+            "description": "Lock enables optimistic locking against metadata.version. Not enforced yet.",
+            "in": "query",
+            "required": false,
+            "type": "boolean"
+          }
+        ],
+        "tags": [
+          "Tenants"
+        ]
       }
     }
   },
@@ -507,7 +703,7 @@
       "properties": {
         "id": {
           "type": "string",
-          "description": "Unique identifier of the tenant (Keycloak organization id)."
+          "description": "Unique identifier of the tenant (Keycloak organization id / UUID)."
         },
         "metadata": {
           "$ref": "#/definitions/v1Metadata"
@@ -519,7 +715,35 @@
           "$ref": "#/definitions/v1TenantStatus"
         }
       },
-      "description": "A tenant groups resources and users. Backed by a Keycloak Organization."
+      "description": "A tenant groups resources and users.\nBacked by a Keycloak Organization in the shared platform realm (KEYCLOAK_REALM),\nnot by a Keycloak realm per tenant."
+    },
+    "v1TenantMember": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Keycloak user id (UUID)."
+        },
+        "username": {
+          "type": "string",
+          "description": "Login username."
+        },
+        "email": {
+          "type": "string",
+          "description": "Email address when present on the user."
+        },
+        "first_name": {
+          "type": "string"
+        },
+        "last_name": {
+          "type": "string"
+        },
+        "enabled": {
+          "type": "boolean",
+          "description": "Whether the Keycloak user is enabled."
+        }
+      },
+      "description": "TenantMember is a Keycloak user that belongs to the tenant's Organization.\nThis is a read projection for listing; full user management is out of scope."
     },
     "v1TenantSpec": {
       "type": "object",
@@ -529,12 +753,54 @@
           "items": {
             "type": "string"
           },
-          "description": "Email domains associated with this tenant."
+          "description": "Email domains associated with this tenant (DNS hostnames, lowercase)."
         }
       }
     },
     "v1TenantStatus": {
       "type": "object"
+    },
+    "v1TenantsCreateResponse": {
+      "type": "object",
+      "properties": {
+        "object": {
+          "$ref": "#/definitions/v1Tenant"
+        }
+      }
+    },
+    "v1TenantsDeleteResponse": {
+      "type": "object"
+    },
+    "v1TenantsGetResponse": {
+      "type": "object",
+      "properties": {
+        "object": {
+          "$ref": "#/definitions/v1Tenant"
+        }
+      }
+    },
+    "v1TenantsListMembersResponse": {
+      "type": "object",
+      "properties": {
+        "size": {
+          "type": "integer",
+          "format": "int32",
+          "description": "Actual number of items returned."
+        },
+        "total": {
+          "type": "integer",
+          "format": "int32",
+          "description": "Total number of members that match (before limit)."
+        },
+        "items": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "$ref": "#/definitions/v1TenantMember"
+          },
+          "description": "Organization members."
+        }
+      }
     },
     "v1TenantsListResponse": {
       "type": "object",
@@ -556,6 +822,14 @@
             "$ref": "#/definitions/v1Tenant"
           },
           "description": "List of results."
+        }
+      }
+    },
+    "v1TenantsUpdateResponse": {
+      "type": "object",
+      "properties": {
+        "object": {
+          "$ref": "#/definitions/v1Tenant"
         }
       }
     }

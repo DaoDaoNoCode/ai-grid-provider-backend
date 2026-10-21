@@ -35,7 +35,7 @@ KEYCLOAK_PORT ?= 8180
 GRPC_ADDR ?= localhost:8080
 HTTP_ADDR ?= http://localhost:8081
 
-.PHONY: help all binary build-bin build test unit smoke vet fmt-check lint verify generate \
+.PHONY: help all binary build-bin build test unit smoke smoke-openshift vet fmt-check lint verify generate \
 	image container push build-and-push run \
 	keycloak-up keycloak-down keycloak-seed \
 	build-fake-infra dev-fake dev-fake-poc \
@@ -149,9 +149,19 @@ run: ## Run the API locally (gRPC :8080, REST/Swagger :8081)
 		--kubeconfig=$(KUBECONFIG_PATH)
 
 # Requires a running API (make run) plus hub kubeconfig + Keycloak for full coverage.
+# SKIP_CLUSTERS=1 / SKIP_TENANTS=1 to exercise a subset.
 smoke: ## Live gRPC/REST smoke against localhost:8080/:8081
 	GRPC_ADDR=$(GRPC_ADDR) HTTP_ADDR=$(HTTP_ADDR) bash hack/smoke-apis.sh
-	GRPC_ADDR=$(GRPC_ADDR) bash hack/smoke-managedcluster-crud.sh
+	@if [[ "$(SKIP_CLUSTERS)" != "1" ]]; then \
+		GRPC_ADDR=$(GRPC_ADDR) bash hack/smoke-managedcluster-crud.sh; \
+	else \
+		echo "skipping ManagedCluster CRUD (SKIP_CLUSTERS=1)"; \
+	fi
+
+# Same smoke suite against the current oc context (port-forwards svc in NAMESPACE).
+# Deploy first: make openshift-up.
+smoke-openshift: ## Live smoke via oc port-forward to the current cluster
+	bash hack/smoke-openshift.sh
 
 ##@ Local Keycloak
 
@@ -179,19 +189,23 @@ clean-kind: ## Delete the Kind cluster
 	kind delete cluster --name "$${KIND_CLUSTER_NAME:-ai-grid-hub}"
 
 # Deploy to the current OpenShift cluster (oc login required).
-# See hack/openshift-up.sh for IMAGE, EXTERNAL_KEYCLOAK, BUILD_IMAGE, APPLY_SAMPLES.
+# Installs RHACM automatically when the ManagedCluster CRD is missing (needs helm).
+# See hack/openshift-up.sh for IMAGE, EXTERNAL_KEYCLOAK, BUILD_IMAGE, APPLY_SAMPLES,
+# INSTALL_ACM / SKIP_ACM, CHANNEL.
 openshift-up: ## Deploy backend to the current oc context
 	bash hack/openshift-up.sh
 
-openshift-down: ## Remove OpenShift deploy
+openshift-down: ## Remove OpenShift deploy (does not tear down ACM)
 	bash hack/openshift-down.sh
 
 # Install RHACM (OLM + MultiClusterHub) + playground ManagedClusters on the
-# current OpenShift cluster. See deploy/acm-hub/README.md.
+# current OpenShift cluster. Also invoked by openshift-up when the CRD is missing.
+# See deploy/acm-hub/README.md.
 # CHANNEL=release-2.13 SKIP_SAMPLES=1 make acm-hub-up
 acm-hub-up: ## Install RHACM hub + sample ManagedClusters
 	bash deploy/acm-hub/scripts/acm-hub-up.sh
 
 # FORCE_CLEAN=1 make acm-hub-down  (or: bash deploy/acm-hub/scripts/acm-hub-down.sh --force-clean)
+# openshift-down does not remove ACM; tear it down separately.
 acm-hub-down: ## Tear down ACM hub Helm release
 	bash deploy/acm-hub/scripts/acm-hub-down.sh

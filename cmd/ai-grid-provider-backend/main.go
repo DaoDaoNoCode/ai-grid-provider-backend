@@ -58,7 +58,7 @@ func main() {
 		os.Exit(1)
 	}
 	tenantsServer, err := servers.NewTenantsServer().
-		SetOrganizationLister(keycloak.New(keycloak.Config{
+		SetOrganizationClient(keycloak.New(keycloak.Config{
 			BaseURL:    getEnv("KEYCLOAK_URL", "http://keycloak.ai-grid.svc:8080"),
 			AdminRealm: getEnv("KEYCLOAK_ADMIN_REALM", "master"),
 			Realm:      getEnv("KEYCLOAK_REALM", "ai-grid"),
