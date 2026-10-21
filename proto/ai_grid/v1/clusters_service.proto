@@ -61,7 +61,8 @@ message ClustersUpdateRequest {
 
   // Lock requires object.metadata.version: without one the request is
   // InvalidArgument. A non-zero version is checked against the hub's
-  // resourceVersion with or without lock, and a stale one is Aborted.
+  // resourceVersion with or without lock, before the labels, so a stale one
+  // is Aborted whatever the request changes, even nothing.
   bool lock = 3;
 }
 

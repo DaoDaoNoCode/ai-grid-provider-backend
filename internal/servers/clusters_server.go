@@ -198,8 +198,6 @@ func (s *ClustersServer) Update(ctx context.Context, req *aigridv1.ClustersUpdat
 		return nil, mapManagedClusterAPIError("get", id, err)
 	}
 
-	paths := updatePaths(req.GetUpdateMask(), object)
-
 	var version int32
 	if object.GetMetadata() != nil {
 		version = object.GetMetadata().GetVersion()
@@ -207,6 +205,13 @@ func (s *ClustersServer) Update(ctx context.Context, req *aigridv1.ClustersUpdat
 	if req.GetLock() && version == 0 {
 		return nil, status.Error(codes.InvalidArgument, "lock requires metadata.version")
 	}
+	// A stale version is Aborted before anything else is checked: a client
+	// sends back the labels it read, and ACM may have changed some since.
+	if version != 0 && strconv.FormatInt(int64(version), 10) != current.GetResourceVersion() {
+		return nil, staleClusterError("update", id)
+	}
+
+	paths := updatePaths(req.GetUpdateMask(), object)
 
 	patchMeta := map[string]interface{}{}
 	if paths.labels {
@@ -433,6 +438,11 @@ func validateManagedClusterID(id string) error {
 	return nil
 }
 
+// staleClusterError is the Aborted error for a write against an old version.
+func staleClusterError(op, id string) error {
+	return status.Errorf(codes.Aborted, "%s ManagedCluster %q: the cluster changed since it was read; reload and retry", op, id)
+}
+
 func mapManagedClusterAPIError(op, id string, err error) error {
 	switch {
 	case apierrors.IsNotFound(err):
@@ -442,7 +452,7 @@ func mapManagedClusterAPIError(op, id string, err error) error {
 	case apierrors.IsInvalid(err), apierrors.IsBadRequest(err):
 		return status.Errorf(codes.InvalidArgument, "%s ManagedCluster %q: %v", op, id, err)
 	case apierrors.IsConflict(err):
-		return status.Errorf(codes.Aborted, "%s ManagedCluster %q: the cluster changed since it was read; reload and retry", op, id)
+		return staleClusterError(op, id)
 	case apierrors.IsForbidden(err), apierrors.IsUnauthorized(err):
 		return status.Errorf(codes.PermissionDenied, "%s ManagedCluster %q: %v", op, id, err)
 	default:

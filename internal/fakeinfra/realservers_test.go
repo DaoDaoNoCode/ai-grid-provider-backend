@@ -264,6 +264,26 @@ func TestRealClustersServerUpdateVersion(t *testing.T) {
 	if status.Code(err) != codes.Aborted {
 		t.Fatalf("Update(stale version) error = %v, want Aborted", err)
 	}
+	// A stale version is Aborted before the labels are checked, so a label ACM
+	// changed since the read gives Aborted, not InvalidArgument; and so is a
+	// request that selects no field.
+	changed := maps.Clone(add)
+	changed["vendor"] = "Other"
+	for name, req := range map[string]*aigridv1.ClustersUpdateRequest{
+		"changed ACM label": {Object: &aigridv1.ManagedCluster{Id: "site-oslo-1", Metadata: &aigridv1.Metadata{Labels: changed, Version: read.GetVersion()}}, UpdateMask: mask},
+		"no field":          {Object: &aigridv1.ManagedCluster{Id: "site-oslo-1", Metadata: &aigridv1.Metadata{Version: read.GetVersion()}}},
+	} {
+		if _, err := s.Update(ctx, req); status.Code(err) != codes.Aborted {
+			t.Fatalf("Update(stale version, %s) error = %v, want Aborted", name, err)
+		}
+	}
+	// At the current version the changed label is refused.
+	if _, err := s.Update(ctx, &aigridv1.ClustersUpdateRequest{
+		Object:     &aigridv1.ManagedCluster{Id: "site-oslo-1", Metadata: &aigridv1.Metadata{Labels: changed, Version: added.GetObject().GetMetadata().GetVersion()}},
+		UpdateMask: mask,
+	}); status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("Update(current version, changed ACM label) error = %v, want InvalidArgument", err)
+	}
 
 	// Remove from AI Grid: the console sends the labels without ai-grid/enabled
 	// and without the ACM labels it doesn't own.

@@ -221,7 +221,7 @@
           },
           {
             "name": "lock",
-            "description": "Lock requires object.metadata.version: without one the request is\nInvalidArgument. A non-zero version is checked against the hub's\nresourceVersion with or without lock, and a stale one is Aborted.",
+            "description": "Lock requires object.metadata.version: without one the request is\nInvalidArgument. A non-zero version is checked against the hub's\nresourceVersion with or without lock, before the labels, so a stale one\nis Aborted whatever the request changes, even nothing.",
             "in": "query",
             "required": false,
             "type": "boolean"

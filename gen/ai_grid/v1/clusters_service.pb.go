@@ -346,7 +346,8 @@ type ClustersUpdateRequest struct {
 	UpdateMask *fieldmaskpb.FieldMask `protobuf:"bytes,2,opt,name=update_mask,json=updateMask,proto3" json:"update_mask,omitempty"`
 	// Lock requires object.metadata.version: without one the request is
 	// InvalidArgument. A non-zero version is checked against the hub's
-	// resourceVersion with or without lock, and a stale one is Aborted.
+	// resourceVersion with or without lock, before the labels, so a stale one
+	// is Aborted whatever the request changes, even nothing.
 	Lock          bool `protobuf:"varint,3,opt,name=lock,proto3" json:"lock,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
