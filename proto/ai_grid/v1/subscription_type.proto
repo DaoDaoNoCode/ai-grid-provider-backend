@@ -1,0 +1,84 @@
+syntax = "proto3";
+
+package ai_grid.v1;
+
+import "ai_grid/v1/metadata_type.proto";
+import "buf/validate/validate.proto";
+
+option go_package = "github.com/osac-project/ai-grid-provider-backend/gen/ai_grid/v1;aigridv1";
+
+// Subscription is a MaaS entitlement that binds identity subjects to models
+// with token rate limits and a priority.
+//
+// It maps to the spoke-cluster Kubernetes CR MaaSSubscription
+// (apiVersion: maas.opendatahub.io/v1alpha1). It is not an OLM Subscription,
+// not an AAP license subscription, and not OSAC SERVICE_TIER_MAAS
+// ("Metal as a Service").
+//
+// The `spec` contains the desired details and may be modified by the user.
+// The `status` contains the current status and is provided by the system.
+message Subscription {
+  // Unique identifier of the subscription. Equals metadata.name.
+  string id = 1 [(buf.validate.field).string = {
+    min_len: 1
+    max_len: 63
+    pattern: "^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$"
+  }];
+
+  Metadata metadata = 2;
+  SubscriptionSpec spec = 3;
+  SubscriptionStatus status = 4;
+}
+
+// Desired state of a MaaS Subscription.
+message SubscriptionSpec {
+  // Identity subjects entitled by this subscription.
+  SubscriptionOwner owner = 1;
+
+  // Models this subscription applies to, with optional per-model rate limits.
+  repeated SubscriptionModelRef model_refs = 2;
+
+  // Relative priority among subscriptions (higher wins when policies conflict).
+  int32 priority = 3;
+}
+
+// SubscriptionOwner names the groups and users that own the entitlement.
+message SubscriptionOwner {
+  // IdP / Kubernetes group names.
+  repeated string groups = 1;
+
+  // User names (for example service accounts).
+  repeated string users = 2;
+}
+
+// SubscriptionModelRef references a model and optional token rate limits.
+message SubscriptionModelRef {
+  // Model name (DNS-1123 label).
+  string name = 1 [(buf.validate.field).string = {
+    min_len: 1
+    max_len: 63
+    pattern: "^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$"
+  }];
+
+  // Model namespace. Empty means the platform default model namespace.
+  string namespace = 2;
+
+  // Token rate limits for this model. Empty means no limits in the CR sense
+  // (platform mapping of "unlimited" is decided when storage is implemented).
+  repeated TokenRateLimit token_rate_limits = 3;
+}
+
+// TokenRateLimit caps token usage over a time window.
+message TokenRateLimit {
+  // Maximum tokens allowed in the window. CRD range is typically 1..1e9.
+  int64 limit = 1;
+
+  // Window duration, e.g. "1m", "30s", "2h". Pattern: ^[1-9]\d{0,3}(s|m|h)$.
+  string window = 2;
+}
+
+// Observed state of a MaaS Subscription.
+message SubscriptionStatus {
+  // Controller-reported phase (for example "Active"). Empty until reconciled.
+  string phase = 1;
+}

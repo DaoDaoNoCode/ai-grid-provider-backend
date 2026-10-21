@@ -2,7 +2,7 @@
   "swagger": "2.0",
   "info": {
     "title": "AI Grid API",
-    "description": "gRPC-Gateway REST surface for ai-grid-provider-backend (Ping, Clusters CRUD, Tenants CRUD).",
+    "description": "gRPC-Gateway REST surface for ai-grid-provider-backend (Ping, Clusters CRUD, Tenants CRUD, Subscriptions CRUD placeholder).",
     "version": "0.1.0",
     "contact": {
       "name": "AI Grid",
@@ -15,6 +15,9 @@
     },
     {
       "name": "Clusters"
+    },
+    {
+      "name": "Subscriptions"
     },
     {
       "name": "Tenants"
@@ -259,6 +262,208 @@
         ],
         "tags": [
           "AiGrid"
+        ]
+      }
+    },
+    "/api/v1/subscriptions": {
+      "get": {
+        "operationId": "Subscriptions_List",
+        "responses": {
+          "200": {
+            "description": "A successful response.",
+            "schema": {
+              "$ref": "#/definitions/v1SubscriptionsListResponse"
+            }
+          },
+          "default": {
+            "description": "An unexpected error response.",
+            "schema": {
+              "$ref": "#/definitions/rpcStatus"
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "offset",
+            "description": "Index of the first result. If not specified the default value will be zero.",
+            "in": "query",
+            "required": false,
+            "type": "integer",
+            "format": "int32"
+          },
+          {
+            "name": "limit",
+            "description": "Maximum number of results to be returned by the server. When not specified all\nthe results will be returned.",
+            "in": "query",
+            "required": false,
+            "type": "integer",
+            "format": "int32"
+          },
+          {
+            "name": "filter",
+            "description": "Filter criteria (CEL). Empty means no filter. Not evaluated yet.",
+            "in": "query",
+            "required": false,
+            "type": "string"
+          },
+          {
+            "name": "order",
+            "description": "Order criteria. Empty means undefined order. Not evaluated yet.",
+            "in": "query",
+            "required": false,
+            "type": "string"
+          }
+        ],
+        "tags": [
+          "Subscriptions"
+        ]
+      },
+      "post": {
+        "operationId": "Subscriptions_Create",
+        "responses": {
+          "200": {
+            "description": "",
+            "schema": {
+              "$ref": "#/definitions/v1Subscription"
+            }
+          },
+          "default": {
+            "description": "An unexpected error response.",
+            "schema": {
+              "$ref": "#/definitions/rpcStatus"
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "object",
+            "in": "body",
+            "required": true,
+            "schema": {
+              "$ref": "#/definitions/v1Subscription"
+            }
+          }
+        ],
+        "tags": [
+          "Subscriptions"
+        ]
+      }
+    },
+    "/api/v1/subscriptions/{id}": {
+      "get": {
+        "operationId": "Subscriptions_Get",
+        "responses": {
+          "200": {
+            "description": "",
+            "schema": {
+              "$ref": "#/definitions/v1Subscription"
+            }
+          },
+          "default": {
+            "description": "An unexpected error response.",
+            "schema": {
+              "$ref": "#/definitions/rpcStatus"
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "id",
+            "description": "Subscription id (equals metadata.name).",
+            "in": "path",
+            "required": true,
+            "type": "string"
+          }
+        ],
+        "tags": [
+          "Subscriptions"
+        ]
+      },
+      "delete": {
+        "operationId": "Subscriptions_Delete",
+        "responses": {
+          "200": {
+            "description": "A successful response.",
+            "schema": {
+              "$ref": "#/definitions/v1SubscriptionsDeleteResponse"
+            }
+          },
+          "default": {
+            "description": "An unexpected error response.",
+            "schema": {
+              "$ref": "#/definitions/rpcStatus"
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "id",
+            "description": "Subscription id (equals metadata.name).",
+            "in": "path",
+            "required": true,
+            "type": "string"
+          }
+        ],
+        "tags": [
+          "Subscriptions"
+        ]
+      }
+    },
+    "/api/v1/subscriptions/{object.id}": {
+      "patch": {
+        "operationId": "Subscriptions_Update",
+        "responses": {
+          "200": {
+            "description": "",
+            "schema": {
+              "$ref": "#/definitions/v1Subscription"
+            }
+          },
+          "default": {
+            "description": "An unexpected error response.",
+            "schema": {
+              "$ref": "#/definitions/rpcStatus"
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "object.id",
+            "description": "Unique identifier of the subscription. Equals metadata.name.",
+            "in": "path",
+            "required": true,
+            "type": "string"
+          },
+          {
+            "name": "object",
+            "in": "body",
+            "required": true,
+            "schema": {
+              "type": "object",
+              "properties": {
+                "metadata": {
+                  "$ref": "#/definitions/v1Metadata"
+                },
+                "spec": {
+                  "$ref": "#/definitions/v1SubscriptionSpec"
+                },
+                "status": {
+                  "$ref": "#/definitions/v1SubscriptionStatus"
+                }
+              },
+              "description": "Subscription is a MaaS entitlement that binds identity subjects to models\nwith token rate limits and a priority.\n\nIt maps to the spoke-cluster Kubernetes CR MaaSSubscription\n(apiVersion: maas.opendatahub.io/v1alpha1). It is not an OLM Subscription,\nnot an AAP license subscription, and not OSAC SERVICE_TIER_MAAS\n(\"Metal as a Service\").\n\nThe `spec` contains the desired details and may be modified by the user.\nThe `status` contains the current status and is provided by the system."
+            }
+          },
+          {
+            "name": "lock",
+            "description": "Lock enables optimistic locking against metadata.version. Not enforced yet.",
+            "in": "query",
+            "required": false,
+            "type": "boolean"
+          }
+        ],
+        "tags": [
+          "Subscriptions"
         ]
       }
     },
@@ -698,6 +903,150 @@
       },
       "description": "Metadata common to all kinds of objects."
     },
+    "v1Subscription": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Unique identifier of the subscription. Equals metadata.name."
+        },
+        "metadata": {
+          "$ref": "#/definitions/v1Metadata"
+        },
+        "spec": {
+          "$ref": "#/definitions/v1SubscriptionSpec"
+        },
+        "status": {
+          "$ref": "#/definitions/v1SubscriptionStatus"
+        }
+      },
+      "description": "Subscription is a MaaS entitlement that binds identity subjects to models\nwith token rate limits and a priority.\n\nIt maps to the spoke-cluster Kubernetes CR MaaSSubscription\n(apiVersion: maas.opendatahub.io/v1alpha1). It is not an OLM Subscription,\nnot an AAP license subscription, and not OSAC SERVICE_TIER_MAAS\n(\"Metal as a Service\").\n\nThe `spec` contains the desired details and may be modified by the user.\nThe `status` contains the current status and is provided by the system."
+    },
+    "v1SubscriptionModelRef": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "Model name (DNS-1123 label)."
+        },
+        "namespace": {
+          "type": "string",
+          "description": "Model namespace. Empty means the platform default model namespace."
+        },
+        "token_rate_limits": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "$ref": "#/definitions/v1TokenRateLimit"
+          },
+          "description": "Token rate limits for this model. Empty means no limits in the CR sense\n(platform mapping of \"unlimited\" is decided when storage is implemented)."
+        }
+      },
+      "description": "SubscriptionModelRef references a model and optional token rate limits."
+    },
+    "v1SubscriptionOwner": {
+      "type": "object",
+      "properties": {
+        "groups": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "IdP / Kubernetes group names."
+        },
+        "users": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "User names (for example service accounts)."
+        }
+      },
+      "description": "SubscriptionOwner names the groups and users that own the entitlement."
+    },
+    "v1SubscriptionSpec": {
+      "type": "object",
+      "properties": {
+        "owner": {
+          "$ref": "#/definitions/v1SubscriptionOwner",
+          "description": "Identity subjects entitled by this subscription."
+        },
+        "model_refs": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "$ref": "#/definitions/v1SubscriptionModelRef"
+          },
+          "description": "Models this subscription applies to, with optional per-model rate limits."
+        },
+        "priority": {
+          "type": "integer",
+          "format": "int32",
+          "description": "Relative priority among subscriptions (higher wins when policies conflict)."
+        }
+      },
+      "description": "Desired state of a MaaS Subscription."
+    },
+    "v1SubscriptionStatus": {
+      "type": "object",
+      "properties": {
+        "phase": {
+          "type": "string",
+          "description": "Controller-reported phase (for example \"Active\"). Empty until reconciled."
+        }
+      },
+      "description": "Observed state of a MaaS Subscription."
+    },
+    "v1SubscriptionsCreateResponse": {
+      "type": "object",
+      "properties": {
+        "object": {
+          "$ref": "#/definitions/v1Subscription"
+        }
+      }
+    },
+    "v1SubscriptionsDeleteResponse": {
+      "type": "object"
+    },
+    "v1SubscriptionsGetResponse": {
+      "type": "object",
+      "properties": {
+        "object": {
+          "$ref": "#/definitions/v1Subscription"
+        }
+      }
+    },
+    "v1SubscriptionsListResponse": {
+      "type": "object",
+      "properties": {
+        "size": {
+          "type": "integer",
+          "format": "int32",
+          "description": "Actual number of items returned."
+        },
+        "total": {
+          "type": "integer",
+          "format": "int32",
+          "description": "Total number of items that match the search criteria."
+        },
+        "items": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "$ref": "#/definitions/v1Subscription"
+          },
+          "description": "List of results."
+        }
+      }
+    },
+    "v1SubscriptionsUpdateResponse": {
+      "type": "object",
+      "properties": {
+        "object": {
+          "$ref": "#/definitions/v1Subscription"
+        }
+      }
+    },
     "v1Tenant": {
       "type": "object",
       "properties": {
@@ -832,6 +1181,21 @@
           "$ref": "#/definitions/v1Tenant"
         }
       }
+    },
+    "v1TokenRateLimit": {
+      "type": "object",
+      "properties": {
+        "limit": {
+          "type": "string",
+          "format": "int64",
+          "description": "Maximum tokens allowed in the window. CRD range is typically 1..1e9."
+        },
+        "window": {
+          "type": "string",
+          "description": "Window duration, e.g. \"1m\", \"30s\", \"2h\". Pattern: ^[1-9]\\d{0,3}(s|m|h)$."
+        }
+      },
+      "description": "TokenRateLimit caps token usage over a time window."
     }
   }
 }
