@@ -447,6 +447,7 @@ func TestUpdateCluster(t *testing.T) {
 			{"changed label", &aigridv1.Metadata{Labels: map[string]string{"name": "cluster-a", "vendor": "Other"}}, labels},
 			{"new label", &aigridv1.Metadata{Labels: map[string]string{"cluster.open-cluster-management.io/clusterset": "other"}}, labels},
 			{"changed annotation", &aigridv1.Metadata{Annotations: map[string]string{"open-cluster-management/created-via": "console"}}, annotations},
+			{"location annotation", &aigridv1.Metadata{Annotations: map[string]string{"location": "us-east"}}, annotations},
 		} {
 			_, err := server.Update(context.Background(), &aigridv1.ClustersUpdateRequest{
 				Object:     &aigridv1.ManagedCluster{Id: "cluster-a", Metadata: tc.meta},

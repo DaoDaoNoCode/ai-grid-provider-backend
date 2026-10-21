@@ -218,7 +218,7 @@ func (s *ClustersServer) Update(ctx context.Context, req *aigridv1.ClustersUpdat
 		if err := checkConsoleKeys("label", current.GetLabels(), object.GetMetadata().GetLabels()); err != nil {
 			return nil, err
 		}
-		patchMeta["labels"] = managedKeysPatch(current.GetLabels(), object.GetMetadata().GetLabels())
+		patchMeta["labels"] = managedKeysPatch("label", current.GetLabels(), object.GetMetadata().GetLabels())
 	}
 	if paths.annotations {
 		if err := checkConsoleKeys("annotation", current.GetAnnotations(), object.GetMetadata().GetAnnotations()); err != nil {
@@ -227,7 +227,7 @@ func (s *ClustersServer) Update(ctx context.Context, req *aigridv1.ClustersUpdat
 		if err := checkCoordinates(object.GetMetadata().GetAnnotations()); err != nil {
 			return nil, err
 		}
-		patchMeta["annotations"] = managedKeysPatch(current.GetAnnotations(), object.GetMetadata().GetAnnotations())
+		patchMeta["annotations"] = managedKeysPatch("annotation", current.GetAnnotations(), object.GetMetadata().GetAnnotations())
 	}
 	patchBody := map[string]interface{}{}
 	if len(patchMeta) > 0 {
@@ -364,9 +364,9 @@ func updatePaths(mask *fieldmaskpb.FieldMask, object *aigridv1.ManagedCluster) c
 }
 
 // isConsoleManagedKey reports whether the console owns a label or annotation
-// key: the ai-grid/* keys and ACM's placement label "location".
-func isConsoleManagedKey(key string) bool {
-	return strings.HasPrefix(key, "ai-grid/") || key == "location"
+// key: the ai-grid/* keys, and for labels ACM's placement label "location".
+func isConsoleManagedKey(kind, key string) bool {
+	return strings.HasPrefix(key, "ai-grid/") || (kind == "label" && key == "location")
 }
 
 // checkConsoleKeys refuses a request that adds or changes a label or
@@ -380,7 +380,7 @@ func checkConsoleKeys(kind string, current, requested map[string]string) error {
 	}
 	sort.Strings(keys)
 	for _, k := range keys {
-		if cur, ok := current[k]; !isConsoleManagedKey(k) && (!ok || cur != requested[k]) {
+		if cur, ok := current[k]; !isConsoleManagedKey(kind, k) && (!ok || cur != requested[k]) {
 			return status.Errorf(codes.InvalidArgument, "%s %q cannot be changed through the console; only ai-grid/* labels and annotations and the location label can", kind, k)
 		}
 	}
@@ -413,15 +413,15 @@ func checkCoordinates(annotations map[string]string) error {
 // "Remove from grid" can drop ai-grid/enabled. Other keys, such as the ones
 // ACM writes, are left as they are on the hub, even if they changed after
 // checkConsoleKeys read them.
-func managedKeysPatch(current, requested map[string]string) map[string]interface{} {
+func managedKeysPatch(kind string, current, requested map[string]string) map[string]interface{} {
 	patch := map[string]interface{}{}
 	for k := range current {
-		if _, ok := requested[k]; !ok && isConsoleManagedKey(k) {
+		if _, ok := requested[k]; !ok && isConsoleManagedKey(kind, k) {
 			patch[k] = nil
 		}
 	}
 	for k, v := range requested {
-		if isConsoleManagedKey(k) {
+		if isConsoleManagedKey(kind, k) {
 			patch[k] = v
 		}
 	}
