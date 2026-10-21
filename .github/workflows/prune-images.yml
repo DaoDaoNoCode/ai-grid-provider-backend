@@ -43,19 +43,26 @@ jobs:
       - name: Prune old PR images and orphans
         run: |
           set -euo pipefail
+          # Digests that a tagged index lists as children: the platform and
+          # attestation manifests of a multi-arch or attested release. ghcr
+          # shows them untagged, and a PR can push identical bytes and get them
+          # tagged pr-<number>, so they are never deleted. Reads the image's
+          # versions on stdin. A failed lookup fails the job instead of
+          # deleting with a partial list.
+          protected_digests() {
+            jq -r '.[] | select(.metadata.container.tags | length > 0) | .name' \
+              | while read -r digest; do
+                  skopeo inspect --raw "docker://ghcr.io/${OWNER}/$1@${digest}" \
+                    | jq -r '.manifests[]?.digest // empty' || exit 1
+                done | sort -u
+          }
           cutoff=$(date -u -d "${MAX_AGE_DAYS} days ago" +%s)
           echo "$GH_TOKEN" | skopeo login ghcr.io --username "$ACTOR" --password-stdin
 
           for image in $IMAGES; do
             versions=$(gh api "orgs/${OWNER}/packages/container/${image}/versions" --paginate)
 
-            # Digests that a tagged index references must survive.
-            protected=$(echo "$versions" \
-              | jq -r '.[] | select(.metadata.container.tags | length > 0) | .name' \
-              | while read -r digest; do
-                  skopeo inspect --raw "docker://ghcr.io/${OWNER}/${image}@${digest}" \
-                    | jq -r '.manifests[]?.digest // empty'
-                done | sort -u)
+            protected=$(protected_digests "$image" <<< "$versions")
 
             candidates=$(echo "$versions" | jq -r --argjson cutoff "$cutoff" '
               .[]
@@ -71,7 +78,10 @@ jobs:
 
             while IFS=$'\t' read -r id name tags; do
               [ -z "$id" ] && continue
-              if [ -n "$protected" ] && echo "$protected" | grep -qx "$name"; then
+              # A here-string, not echo | grep -q: under pipefail, grep exiting on
+              # the first match can SIGPIPE echo on a long list, and the check
+              # would fail open into the delete.
+              if grep -Fxq -- "$name" <<< "$protected"; then
                 echo "${image}: keeping ${name} (referenced by a tagged index)"
                 continue
               fi

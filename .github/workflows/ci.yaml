@@ -64,6 +64,9 @@ jobs:
       - name: Unit tests
         run: make unit
 
+      - name: PR-image delete logic
+        run: hack/test-image-workflows.sh
+
       - name: Install buf
         uses: bufbuild/buf-setup-action@a47c93e0b1648d5651a065437926377d060baa99 # v1
         with:
@@ -115,6 +118,10 @@ jobs:
             type=raw,value=latest,enable={{is_default_branch}}
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
+          # Only the default-branch rule above sets latest; the default
+          # latest=auto would also move it on every v* tag.
+          flavor: |
+            latest=false
 
       - name: Build and push
         uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
@@ -129,4 +136,7 @@ jobs:
             TARGETOS=linux
             TARGETARCH=amd64
           cache-from: type=gha,scope=ai-grid-provider-backend
-          cache-to: type=gha,mode=max,scope=ai-grid-provider-backend
+          cache-to: type=gha,mode=max,scope=ai-grid-provider-backend,ignore-error=true
+          # A plain manifest, not an index with an attestation child: ghcr
+          # lists that child as an untagged version.
+          provenance: false

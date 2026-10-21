@@ -359,6 +359,9 @@ verify). After Check passes, pushes, tags and manual runs publish the image to
 ghcr.io: `sha-<full sha>` every time (pin deployments to it), `latest` on
 `main`, and semver from `v*` tags. It pushes with `GITHUB_TOKEN`; no repository
 secrets are needed.
+A new ghcr package starts private: when CI first publishes a new image, an
+organization owner sets the package's visibility to Public, or clusters need a
+pull secret.
 
 Pull requests also get an image: `publish-image.yml` builds it without
 credentials, `publish-pr-image.yml` pushes it as `pr-<number>` (never `sha-*`,
