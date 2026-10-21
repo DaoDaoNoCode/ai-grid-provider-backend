@@ -20,12 +20,17 @@ The current API includes:
 - `ai_grid.v1.Tenants/Create`
 - `ai_grid.v1.Tenants/Update`
 - `ai_grid.v1.Tenants/Delete`
+- `ai_grid.v1.Subscriptions/List` (placeholder: empty list)
+- `ai_grid.v1.Subscriptions/Get` (placeholder: Unimplemented)
+- `ai_grid.v1.Subscriptions/Create` (placeholder: Unimplemented)
+- `ai_grid.v1.Subscriptions/Update` (placeholder: Unimplemented)
+- `ai_grid.v1.Subscriptions/Delete` (placeholder: Unimplemented)
 
 REST and Swagger UI are also exposed on HTTP `:8081`:
 
 - Swagger UI: `http://localhost:8081/docs/`
 - OpenAPI (Swagger 2.0): `http://localhost:8081/openapi.json`
-- REST routes: `/api/v1/ping`, `/api/v1/clusters`, `/api/v1/tenants`
+- REST routes: `/api/v1/ping`, `/api/v1/clusters`, `/api/v1/tenants`, `/api/v1/subscriptions`
 - UI handout (payloads + examples): [`docs/UI_API_REFERENCE.md`](docs/UI_API_REFERENCE.md)
 
 [vanguard](https://github.com/connectrpc/vanguard-go) serves REST by reading

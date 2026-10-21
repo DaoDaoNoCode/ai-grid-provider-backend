@@ -42,6 +42,11 @@ unwraps them via `response_body: "object"`.
 | `PATCH` | `/api/v1/tenants/{id}` | Update name and/or domains |
 | `DELETE` | `/api/v1/tenants/{id}` | Delete tenant |
 | `GET` | `/api/v1/tenants/{id}:listMembers` | List users in the tenant Organization |
+| `GET` | `/api/v1/subscriptions` | List subscriptions (placeholder: empty) |
+| `GET` | `/api/v1/subscriptions/{id}` | Get one subscription (placeholder: 501) |
+| `POST` | `/api/v1/subscriptions` | Create subscription (placeholder: 501) |
+| `PATCH` | `/api/v1/subscriptions/{id}` | Update subscription (placeholder: 501) |
+| `DELETE` | `/api/v1/subscriptions/{id}` | Delete subscription (placeholder: 501) |
 
 Also served (not resource APIs): `GET /openapi.json`, `GET /docs/`.
 
@@ -67,7 +72,7 @@ realm** — not a per-tenant identifier.
 | `tenant` | string | Reserved; often empty today |
 | `version` | int32 | Optimistic lock field; **not enforced yet** |
 
-### List query parameters (Clusters + Tenants)
+### List query parameters (Clusters + Tenants + Subscriptions)
 
 | Param | Type | Notes |
 | --- | --- | --- |
@@ -478,13 +483,47 @@ gRPC: `ai_grid.v1.Tenants/ListMembers` with `{"id":"<org-uuid>"}`.
 
 ---
 
-## 4. What is not in this API (yet)
+## 4. Subscriptions (MaaS entitlements — placeholder)
+
+Maps to spoke `MaaSSubscription` (`maas.opendatahub.io/v1alpha1`). OSAC shape:
+`id` + `metadata` + `spec` + `status`. `id` equals `metadata.name`.
+
+**Placeholder behavior today**
+
+| RPC | Behavior | REST |
+| --- | --- | --- |
+| `List` | Empty `{ size: 0, total: 0, items: [] }` | `200` |
+| `Get` / `Create` / `Update` / `Delete` | gRPC `Unimplemented` | `501` |
+
+### `Subscription.spec`
+
+| Field | Type | Notes |
+| --- | --- | --- |
+| `owner.groups` | string[] | IdP / Kubernetes group names |
+| `owner.users` | string[] | Optional user names |
+| `model_refs[]` | object | `name`, optional `namespace`, optional `token_rate_limits[{limit,window}]` |
+| `priority` | int32 | Relative priority among subscriptions |
+
+### `Subscription.status`
+
+| Field | Type | Notes |
+| --- | --- | --- |
+| `phase` | string | Controller phase (e.g. `Active`); empty until storage/reconcile exists |
+
+gRPC: `ai_grid.v1.Subscriptions/{List,Get,Create,Update,Delete}`.
+
+Planning notes: [`../context/maas-subscriptions-planning.md`](../context/maas-subscriptions-planning.md).
+
+---
+
+## 5. What is not in this API (yet)
 
 Do not expect these from provider-backend today:
 
 - Browser login / token exchange / session APIs
-- User create/update/delete, groups, subscriptions (read-only org member list exists)
+- User create/update/delete, groups (read-only org member list exists)
 - Models / placements / locations
+- Subscription storage / spoke CR reconciliation / AuthPolicy pairing / API keys
 - Nested collection URLs (everything is flat under `/api/v1/...`; member list uses `:listMembers`)
 - Evaluated `filter` / `order` / optimistic `lock`
 - PoC-shaped flat `GridCluster` arrays or PoC tenant + IdP config blobs
@@ -496,7 +535,7 @@ this file is the current contract snapshot).
 
 ---
 
-## 5. Local / OpenShift try-out
+## 6. Local / OpenShift try-out
 
 ```bash
 # Local (point KEYCLOAK_URL at a Keycloak with Organizations for Tenants)
@@ -515,6 +554,7 @@ Example curls:
 curl -sS 'http://localhost:8081/api/v1/ping?name=UI'
 curl -sS 'http://localhost:8081/api/v1/clusters'
 curl -sS 'http://localhost:8081/api/v1/tenants'
+curl -sS 'http://localhost:8081/api/v1/subscriptions'
 
 curl -sS -X POST 'http://localhost:8081/api/v1/clusters' \
   -H 'Content-Type: application/json' \
@@ -527,7 +567,7 @@ curl -sS -X PATCH 'http://localhost:8081/api/v1/clusters/demo-cluster' \
 
 ---
 
-## 6. gRPC names (optional)
+## 7. gRPC names (optional)
 
 If the BFF speaks gRPC instead of REST:
 
@@ -536,6 +576,7 @@ If the BFF speaks gRPC instead of REST:
 | `ai_grid.v1.AiGrid` | `Ping` |
 | `ai_grid.v1.Clusters` | `List`, `Get`, `Create`, `Update`, `Delete` |
 | `ai_grid.v1.Tenants` | `List`, `Get`, `Create`, `Update`, `Delete` |
+| `ai_grid.v1.Subscriptions` | `List`, `Get`, `Create`, `Update`, `Delete` (placeholder) |
 
 gRPC request/response messages wrap resources as `{ "object": { ... } }` for
 Get/Create/Update; List uses `{ size, total, items }`. REST unwraps
