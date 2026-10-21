@@ -71,6 +71,11 @@ func main() {
 		fmt.Fprintf(os.Stderr, "build Tenants server: %v\n", err)
 		os.Exit(1)
 	}
+	subscriptionsServer, err := servers.NewSubscriptionsServer().Build()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "build Subscriptions server: %v\n", err)
+		os.Exit(1)
+	}
 
 	// One *connect.Server holds every service. connecthttp serves Connect,
 	// gRPC and gRPC-Web from it; vanguard serves the google.api.http
@@ -79,13 +84,15 @@ func main() {
 	aigridv1connect.RegisterAiGridHandler(server, aiGridServer)
 	aigridv1connect.RegisterClustersHandler(server, clustersServer)
 	aigridv1connect.RegisterTenantsHandler(server, tenantsServer)
+	aigridv1connect.RegisterSubscriptionsHandler(server, subscriptionsServer)
 
 	grpchealth.Register(server, grpchealth.NewStaticChecker(
 		aigridv1connect.AiGridName,
 		aigridv1connect.ClustersName,
 		aigridv1connect.TenantsName,
+		aigridv1connect.SubscriptionsName,
 	))
-	// Reflection lists the three API services. It does not list grpc.health.v1.Health:
+	// Reflection lists the API services. It does not list grpc.health.v1.Health:
 	// grpchealth/v2 registers its methods without a protobuf Schema and grpcreflect
 	// skips schema-less methods. Health/Check by name and `grpcurl describe` both work,
 	// which is what hack/smoke-apis.sh relies on.

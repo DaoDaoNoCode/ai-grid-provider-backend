@@ -100,6 +100,33 @@ func TestRESTGatewayRoutes(t *testing.T) {
 		}
 	})
 
+	t.Run("list subscriptions", func(t *testing.T) {
+		body := mustGET(t, client, baseURL+"/api/v1/subscriptions")
+		var payload map[string]any
+		if err := json.Unmarshal([]byte(body), &payload); err != nil {
+			t.Fatalf("unmarshal list: %v (%s)", err, body)
+		}
+		if payload["size"] != float64(0) || payload["total"] != float64(0) {
+			t.Fatalf("size/total = %v/%v, want 0/0 (%s)", payload["size"], payload["total"], body)
+		}
+		items, _ := payload["items"].([]any)
+		if len(items) != 0 {
+			t.Fatalf("items len = %d, want 0 (%s)", len(items), body)
+		}
+	})
+
+	t.Run("get subscription unimplemented", func(t *testing.T) {
+		resp, err := client.Get(baseURL + "/api/v1/subscriptions/free-subscription")
+		if err != nil {
+			t.Fatalf("GET subscription: %v", err)
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode != http.StatusNotImplemented {
+			body, _ := io.ReadAll(resp.Body)
+			t.Fatalf("status = %d, want 501 (%s)", resp.StatusCode, body)
+		}
+	})
+
 	t.Run("openapi", func(t *testing.T) {
 		resp, err := client.Get(baseURL + "/openapi.json")
 		if err != nil {
@@ -337,11 +364,16 @@ func startGateway(t *testing.T, objects []runtime.Object, orgs organizationClien
 	if err != nil {
 		t.Fatalf("build Tenants server: %v", err)
 	}
+	subscriptionsServer, err := servers.NewSubscriptionsServer().Build()
+	if err != nil {
+		t.Fatalf("build Subscriptions server: %v", err)
+	}
 
 	server := connect.NewServer()
 	aigridv1connect.RegisterAiGridHandler(server, aiGridServer)
 	aigridv1connect.RegisterClustersHandler(server, clustersServer)
 	aigridv1connect.RegisterTenantsHandler(server, tenantsServer)
+	aigridv1connect.RegisterSubscriptionsHandler(server, subscriptionsServer)
 
 	gateway, err := restgateway.New("127.0.0.1:0", server)
 	if err != nil {
