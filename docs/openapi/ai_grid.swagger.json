@@ -200,6 +200,7 @@
           },
           {
             "name": "object",
+            "description": "Labels and annotations: the request holds the whole set of ai-grid/* keys\nand the location label, so one on the hub but left out is removed. Other\nkeys may be sent back as read; adding or changing one is InvalidArgument,\nand so is an ai-grid/latitude or ai-grid/longitude annotation that isn't\na number within -90..90 or -180..180.",
             "in": "body",
             "required": true,
             "schema": {
@@ -215,12 +216,12 @@
                   "$ref": "#/definitions/v1ManagedClusterStatus"
                 }
               },
-              "description": "Hub-side ACM/OCM ManagedCluster inventory object.\n\nThe `spec` contains the desired details and may be modified by the user.\nThe `status` contains the current status and is provided by the system."
+              "title": "Labels and annotations: the request holds the whole set of ai-grid/* keys\nand the location label, so one on the hub but left out is removed. Other\nkeys may be sent back as read; adding or changing one is InvalidArgument,\nand so is an ai-grid/latitude or ai-grid/longitude annotation that isn't\na number within -90..90 or -180..180."
             }
           },
           {
             "name": "lock",
-            "description": "Lock enables optimistic locking against metadata.version. Not enforced yet.",
+            "description": "Lock requires object.metadata.version: without one the request is\nInvalidArgument. A non-zero version is checked against the hub's\nresourceVersion with or without lock, before the labels, so a stale one\nis Aborted whatever the request changes, even nothing.",
             "in": "query",
             "required": false,
             "type": "boolean"
@@ -446,6 +447,10 @@
         "available_condition": {
           "type": "string",
           "description": "Raw Available condition status (\"True\", \"False\", \"Unknown\", …). Empty when absent.\nUsed by the Clusters presentation layer to derive Ready/Offline/Unknown."
+        },
+        "provisioning": {
+          "type": "string",
+          "description": "AI Grid provisioning, from the cluster's compliance with the hub's\nai-grid-ready Policy (by default ai-grid-policies/ai-grid-ready):\n\"Compliant\" (provisioned), \"NonCompliant\", or \"Pending\" (placed, no\nresult yet). Empty when the Policy doesn't cover the cluster, for\nexample because it isn't labelled ai-grid/enabled=true, or when the\nPolicy can't be read."
         }
       },
       "description": "Observed state of a hub ManagedCluster."

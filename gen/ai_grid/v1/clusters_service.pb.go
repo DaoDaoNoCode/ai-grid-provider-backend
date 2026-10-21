@@ -336,10 +336,18 @@ func (x *ClustersCreateResponse) GetObject() *ManagedCluster {
 }
 
 type ClustersUpdateRequest struct {
-	state      protoimpl.MessageState `protogen:"open.v1"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Labels and annotations: the request holds the whole set of ai-grid/* keys
+	// and the location label, so one on the hub but left out is removed. Other
+	// keys may be sent back as read; adding or changing one is InvalidArgument,
+	// and so is an ai-grid/latitude or ai-grid/longitude annotation that isn't
+	// a number within -90..90 or -180..180.
 	Object     *ManagedCluster        `protobuf:"bytes,1,opt,name=object,proto3" json:"object,omitempty"`
 	UpdateMask *fieldmaskpb.FieldMask `protobuf:"bytes,2,opt,name=update_mask,json=updateMask,proto3" json:"update_mask,omitempty"`
-	// Lock enables optimistic locking against metadata.version. Not enforced yet.
+	// Lock requires object.metadata.version: without one the request is
+	// InvalidArgument. A non-zero version is checked against the hub's
+	// resourceVersion with or without lock, before the labels, so a stale one
+	// is Aborted whatever the request changes, even nothing.
 	Lock          bool `protobuf:"varint,3,opt,name=lock,proto3" json:"lock,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache

@@ -98,15 +98,15 @@ func TestClientClusterCRUD(t *testing.T) {
 	updated, err := c.UpdateCluster(ctx, &aigridv1.ManagedCluster{
 		Id: id,
 		Metadata: &aigridv1.Metadata{
-			Labels: map[string]string{"environment": "staging", "ai-grid/enabled": "true"},
+			Labels: map[string]string{"location": "staging", "ai-grid/enabled": "true"},
 		},
 		Spec: &aigridv1.ManagedClusterSpec{HubAcceptsClient: false},
 	}, nil)
 	if err != nil {
 		t.Fatalf("UpdateCluster() error = %v", err)
 	}
-	if updated.GetMetadata().GetLabels()["environment"] != "staging" {
-		t.Fatalf("updated environment = %q", updated.GetMetadata().GetLabels()["environment"])
+	if updated.GetMetadata().GetLabels()["location"] != "staging" {
+		t.Fatalf("updated location = %q", updated.GetMetadata().GetLabels()["location"])
 	}
 	if updated.GetMetadata().GetLabels()["ai-grid/enabled"] != "true" {
 		t.Fatalf("updated ai-grid/enabled = %q", updated.GetMetadata().GetLabels()["ai-grid/enabled"])
@@ -118,15 +118,15 @@ func TestClientClusterCRUD(t *testing.T) {
 	masked, err := c.UpdateCluster(ctx, &aigridv1.ManagedCluster{
 		Id: id,
 		Metadata: &aigridv1.Metadata{
-			Labels: map[string]string{"environment": "prod"},
+			Labels: map[string]string{"location": "prod"},
 		},
 		Spec: &aigridv1.ManagedClusterSpec{HubAcceptsClient: true},
 	}, &fieldmaskpb.FieldMask{Paths: []string{"metadata.labels"}})
 	if err != nil {
 		t.Fatalf("UpdateCluster(mask) error = %v", err)
 	}
-	if masked.GetMetadata().GetLabels()["environment"] != "prod" {
-		t.Fatalf("masked environment = %q", masked.GetMetadata().GetLabels()["environment"])
+	if masked.GetMetadata().GetLabels()["location"] != "prod" {
+		t.Fatalf("masked location = %q", masked.GetMetadata().GetLabels()["location"])
 	}
 	if masked.GetSpec().GetHubAcceptsClient() {
 		t.Fatal("hubAcceptsClient changed despite labels-only mask")
@@ -145,7 +145,7 @@ func TestClientClusterErrors(t *testing.T) {
 	t.Parallel()
 
 	c, cleanup := startTestClient(t, []runtime.Object{
-		managedCluster("existing", map[string]string{"environment": "prod"}, true),
+		managedCluster("existing", map[string]string{"location": "prod"}, true),
 	}, fakeOrganizationLister{})
 	defer cleanup()
 	ctx := context.Background()

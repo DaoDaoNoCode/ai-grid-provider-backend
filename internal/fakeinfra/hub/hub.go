@@ -47,6 +47,7 @@ type Hub struct {
 	rv          int64
 	scenarios   []*scenario
 	detaches    map[string]time.Time
+	enabledAt   map[string]time.Time
 	access      Access
 	speed       float64
 	detachAfter time.Duration
@@ -72,6 +73,7 @@ func New(fx *Fixtures, opts ...Option) (*Hub, error) {
 	h := &Hub{
 		clusters:    map[string]*ManagedCluster{},
 		detaches:    map[string]time.Time{},
+		enabledAt:   map[string]time.Time{},
 		access:      fx.Access,
 		speed:       1,
 		detachAfter: DefaultDetachAfter,
@@ -138,6 +140,7 @@ func (h *Hub) Handler() http.Handler {
 	mux.HandleFunc("PUT "+managedClustersPath+"/{name}", h.update)
 	mux.HandleFunc("PATCH "+managedClustersPath+"/{name}", h.patch)
 	mux.HandleFunc("DELETE "+managedClustersPath+"/{name}", h.delete)
+	mux.HandleFunc("GET "+policiesPath+"/{namespace}/policies/{name}", h.getPolicy)
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		if _, ok := h.authenticate(w, r); !ok {
 			return
@@ -589,6 +592,7 @@ func (h *Hub) commit(cur, next *ManagedCluster) (*ManagedCluster, bool) {
 	next.ResourceVersion = h.nextResourceVersion()
 	stored := next.DeepCopy()
 	h.clusters[stored.Name] = stored
+	h.trackEnabled(cur, stored)
 	return stored, true
 }
 

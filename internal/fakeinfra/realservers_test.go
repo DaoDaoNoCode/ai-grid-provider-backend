@@ -8,12 +8,16 @@ import (
 	"context"
 	"crypto/tls"
 	"log/slog"
+	"maps"
 	"net"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
 	"slices"
+	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	aigridv1 "github.com/osac-project/ai-grid-provider-backend/gen/ai_grid/v1"
 	"github.com/osac-project/ai-grid-provider-backend/internal/fakeinfra/devserve"
@@ -219,5 +223,168 @@ func TestRealTenantsServerOnFakeKeycloak(t *testing.T) {
 	}
 	if _, err := tenants("wrong").List(context.Background(), &aigridv1.TenantsListRequest{}); err == nil {
 		t.Fatal("List() with a wrong password succeeded")
+	}
+}
+
+// TestRealClustersServerUpdateVersion covers the console's Add to and Remove
+// from AI Grid writes: metadata.version is the hub resourceVersion, a stale
+// one is Aborted, and the request's labels are the whole set of console keys.
+func TestRealClustersServerUpdateVersion(t *testing.T) {
+	h, srv := startHub(t)
+	s := clustersServer(t, &rest.Config{Host: srv.URL, BearerToken: h.ServiceAccountToken()})
+	ctx := context.Background()
+	mask := &fieldmaskpb.FieldMask{Paths: []string{"metadata.labels"}}
+
+	got, err := s.Get(ctx, &aigridv1.ClustersGetRequest{Id: "site-oslo-1"})
+	if err != nil {
+		t.Fatalf("Get() error = %v", err)
+	}
+	read := got.GetObject().GetMetadata()
+	if read.GetVersion() == 0 {
+		t.Fatal("Get() version = 0, want the hub resourceVersion")
+	}
+	add := maps.Clone(read.GetLabels())
+	add["ai-grid/enabled"] = "true"
+	added, err := s.Update(ctx, &aigridv1.ClustersUpdateRequest{
+		Object:     &aigridv1.ManagedCluster{Id: "site-oslo-1", Metadata: &aigridv1.Metadata{Labels: add, Version: read.GetVersion()}},
+		UpdateMask: mask,
+	})
+	if err != nil {
+		t.Fatalf("Update(add) error = %v", err)
+	}
+	if added.GetObject().GetMetadata().GetLabels()["ai-grid/enabled"] != "true" || added.GetObject().GetMetadata().GetVersion() == read.GetVersion() {
+		t.Fatalf("Update(add) = %v", added.GetObject().GetMetadata())
+	}
+
+	// The read version is stale now.
+	_, err = s.Update(ctx, &aigridv1.ClustersUpdateRequest{
+		Object:     &aigridv1.ManagedCluster{Id: "site-oslo-1", Metadata: &aigridv1.Metadata{Labels: read.GetLabels(), Version: read.GetVersion()}},
+		UpdateMask: mask,
+	})
+	if status.Code(err) != codes.Aborted {
+		t.Fatalf("Update(stale version) error = %v, want Aborted", err)
+	}
+	// A stale version is Aborted before the labels are checked, so a label ACM
+	// changed since the read gives Aborted, not InvalidArgument; and so is a
+	// request that selects no field.
+	changed := maps.Clone(add)
+	changed["vendor"] = "Other"
+	for name, req := range map[string]*aigridv1.ClustersUpdateRequest{
+		"changed ACM label": {Object: &aigridv1.ManagedCluster{Id: "site-oslo-1", Metadata: &aigridv1.Metadata{Labels: changed, Version: read.GetVersion()}}, UpdateMask: mask},
+		"no field":          {Object: &aigridv1.ManagedCluster{Id: "site-oslo-1", Metadata: &aigridv1.Metadata{Version: read.GetVersion()}}},
+	} {
+		if _, err := s.Update(ctx, req); status.Code(err) != codes.Aborted {
+			t.Fatalf("Update(stale version, %s) error = %v, want Aborted", name, err)
+		}
+	}
+	// At the current version the changed label is refused.
+	if _, err := s.Update(ctx, &aigridv1.ClustersUpdateRequest{
+		Object:     &aigridv1.ManagedCluster{Id: "site-oslo-1", Metadata: &aigridv1.Metadata{Labels: changed, Version: added.GetObject().GetMetadata().GetVersion()}},
+		UpdateMask: mask,
+	}); status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("Update(current version, changed ACM label) error = %v, want InvalidArgument", err)
+	}
+
+	// Remove from AI Grid: the console sends the labels without ai-grid/enabled
+	// and without the ACM labels it doesn't own.
+	remove := map[string]string{}
+	for k, v := range added.GetObject().GetMetadata().GetLabels() {
+		if strings.HasPrefix(k, "ai-grid/") || k == "location" {
+			remove[k] = v
+		}
+	}
+	delete(remove, "ai-grid/enabled")
+	removed, err := s.Update(ctx, &aigridv1.ClustersUpdateRequest{
+		Object:     &aigridv1.ManagedCluster{Id: "site-oslo-1", Metadata: &aigridv1.Metadata{Labels: remove, Version: added.GetObject().GetMetadata().GetVersion()}},
+		UpdateMask: mask,
+	})
+	if err != nil {
+		t.Fatalf("Update(remove) error = %v", err)
+	}
+	labels := removed.GetObject().GetMetadata().GetLabels()
+	if _, ok := labels["ai-grid/enabled"]; ok || labels["name"] != "site-oslo-1" || labels["location"] != read.GetLabels()["location"] {
+		t.Fatalf("Update(remove) labels = %v", labels)
+	}
+
+	// lock without a version is refused.
+	if _, err := s.Update(ctx, &aigridv1.ClustersUpdateRequest{
+		Object: &aigridv1.ManagedCluster{Id: "site-oslo-1", Metadata: &aigridv1.Metadata{Labels: remove}}, UpdateMask: mask, Lock: true,
+	}); status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("Update(lock, no version) error = %v, want InvalidArgument", err)
+	}
+}
+
+// TestRealClustersServerProvisioning reads status.provisioning from the
+// ai-grid-ready Policy: fixtures keep their ai-grid/provisioned state, a
+// cluster added to the grid is Pending, NonCompliant while it installs, then
+// Compliant, and removing it clears the state.
+func TestRealClustersServerProvisioning(t *testing.T) {
+	fx, err := hub.LoadFixtures(fixturesDir)
+	if err != nil {
+		t.Fatalf("hub.LoadFixtures() error = %v", err)
+	}
+	now := time.Date(2026, 10, 20, 12, 0, 0, 0, time.UTC)
+	var mu sync.Mutex
+	clock := func() time.Time { mu.Lock(); defer mu.Unlock(); return now }
+	h, err := hub.New(fx, hub.WithLogger(slog.New(slog.DiscardHandler)), hub.WithClock(clock))
+	if err != nil {
+		t.Fatalf("hub.New() error = %v", err)
+	}
+	srv := httptest.NewServer(h.Handler())
+	t.Cleanup(srv.Close)
+	s := clustersServer(t, &rest.Config{Host: srv.URL, BearerToken: h.ServiceAccountToken()})
+	ctx := context.Background()
+
+	state := func(id string) string {
+		t.Helper()
+		got, err := s.Get(ctx, &aigridv1.ClustersGetRequest{Id: id})
+		if err != nil {
+			t.Fatalf("Get(%s) error = %v", id, err)
+		}
+		return got.GetObject().GetStatus().GetProvisioning()
+	}
+	list, err := s.List(ctx, &aigridv1.ClustersListRequest{})
+	if err != nil {
+		t.Fatalf("List() error = %v", err)
+	}
+	got := map[string]string{}
+	for _, c := range list.GetItems() {
+		got[c.GetId()] = c.GetStatus().GetProvisioning()
+	}
+	if got["site-paris-1"] != "Compliant" || got["site-ashburn-1"] != "NonCompliant" || got["site-oslo-1"] != "" || got["local-cluster"] != "" {
+		t.Fatalf("List() provisioning = %v", got)
+	}
+
+	mask := &fieldmaskpb.FieldMask{Paths: []string{"metadata.labels"}}
+	if _, err := s.Update(ctx, &aigridv1.ClustersUpdateRequest{
+		Object:     &aigridv1.ManagedCluster{Id: "site-oslo-1", Metadata: &aigridv1.Metadata{Labels: map[string]string{"ai-grid/enabled": "true", "location": "oslo"}}},
+		UpdateMask: mask,
+	}); err != nil {
+		t.Fatalf("Update(add) error = %v", err)
+	}
+	if p := state("site-oslo-1"); p != "Pending" {
+		t.Fatalf("after add, provisioning = %q, want Pending", p)
+	}
+	mu.Lock()
+	now = now.Add(hub.DefaultEvaluateAfter)
+	mu.Unlock()
+	if p := state("site-oslo-1"); p != "NonCompliant" {
+		t.Fatalf("after %v, provisioning = %q, want NonCompliant", hub.DefaultEvaluateAfter, p)
+	}
+	mu.Lock()
+	now = now.Add(hub.DefaultProvisionAfter - hub.DefaultEvaluateAfter)
+	mu.Unlock()
+	if p := state("site-oslo-1"); p != "Compliant" {
+		t.Fatalf("after %v, provisioning = %q, want Compliant", hub.DefaultProvisionAfter, p)
+	}
+
+	if _, err := s.Update(ctx, &aigridv1.ClustersUpdateRequest{
+		Object:     &aigridv1.ManagedCluster{Id: "site-oslo-1", Metadata: &aigridv1.Metadata{Labels: map[string]string{"location": "oslo"}}},
+		UpdateMask: mask,
+	}); err != nil {
+		t.Fatalf("Update(remove) error = %v", err)
+	}
+	if p := state("site-oslo-1"); p != "" {
+		t.Fatalf("after remove, provisioning = %q, want empty", p)
 	}
 }

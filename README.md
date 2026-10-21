@@ -403,6 +403,13 @@ EXTERNAL_KEYCLOAK=1 \
 APPLY_SAMPLES=0 make openshift-up
 ```
 
+Clusters `List`, `Get` and `Update` report each cluster's `status.provisioning`
+from the hub Policy named by `AI_GRID_READY_POLICY` (`namespace/name`, default
+`ai-grid-policies/ai-grid-ready`). The ClusterRole in
+`deploy/openshift/rbac.yaml` grants `get` on Policies with that name only, in
+any namespace; change its `resourceNames` if you change the variable. Without
+that permission, or without the Policy, `provisioning` is empty.
+
 If Keycloak or Postgres pods are rejected by SCC, re-run with
 `GRANT_ANYUID=1` (or grant `anyuid` to the `default` SA in `ai-grid`).
 
