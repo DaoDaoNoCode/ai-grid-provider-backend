@@ -1,0 +1,95 @@
+name: prune-images
+
+# Weekly registry cleanup: delete package versions MAX_AGE_DAYS old or older
+# that are either
+#   - tagged only pr-*: a missed close-time cleanup, or an open PR untouched
+#     for a month (its next push republishes the image), or
+#   - untagged: orphaned digests, such as from a push that failed midway.
+#
+# sha-*, semver and latest are never deleted, whatever their age, and a
+# digest that a tagged index references is skipped, so this stays safe if the
+# image ever goes multi-arch.
+#
+# GitHub suspends scheduled workflows after about 60 days without repository
+# activity; a push re-enables them.
+
+on:
+  schedule:
+    - cron: "17 3 * * 1" # Mondays 03:17 UTC
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: Only report what would be deleted
+        type: boolean
+        default: true
+
+permissions: {}
+
+jobs:
+  prune:
+    runs-on: ubuntu-latest
+    permissions:
+      packages: write
+    env:
+      # Keep in step with publish-image.
+      IMAGES: ai-grid-provider-backend
+      MAX_AGE_DAYS: 30
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      OWNER: ${{ github.repository_owner }}
+      ACTOR: ${{ github.actor }}
+      # Empty on scheduled runs, which therefore delete for real.
+      DRY_RUN: ${{ inputs.dry_run }}
+    steps:
+      - name: Prune old PR images and orphans
+        run: |
+          set -euo pipefail
+          # Digests that a tagged index lists as children: the platform and
+          # attestation manifests of a multi-arch or attested release. ghcr
+          # shows them untagged, and a PR can push identical bytes and get them
+          # tagged pr-<number>, so they are never deleted. Reads the image's
+          # versions on stdin. A failed lookup fails the job instead of
+          # deleting with a partial list.
+          protected_digests() {
+            jq -r '.[] | select(.metadata.container.tags | length > 0) | .name' \
+              | while read -r digest; do
+                  skopeo inspect --raw "docker://ghcr.io/${OWNER}/$1@${digest}" \
+                    | jq -r '.manifests[]?.digest // empty' || exit 1
+                done | sort -u
+          }
+          cutoff=$(date -u -d "${MAX_AGE_DAYS} days ago" +%s)
+          echo "$GH_TOKEN" | skopeo login ghcr.io --username "$ACTOR" --password-stdin
+
+          for image in $IMAGES; do
+            versions=$(gh api "orgs/${OWNER}/packages/container/${image}/versions" --paginate)
+
+            protected=$(protected_digests "$image" <<< "$versions")
+
+            candidates=$(echo "$versions" | jq -r --argjson cutoff "$cutoff" '
+              .[]
+              | select((.updated_at | fromdateiso8601) <= $cutoff)
+              | select((.metadata.container.tags | length == 0)
+                       or (.metadata.container.tags | all(startswith("pr-"))))
+              | "\(.id)\t\(.name)\t\(.metadata.container.tags | join(","))"')
+
+            if [ -z "$candidates" ]; then
+              echo "${image}: nothing ${MAX_AGE_DAYS}+ days old to prune."
+              continue
+            fi
+
+            while IFS=$'\t' read -r id name tags; do
+              [ -z "$id" ] && continue
+              # A here-string, not echo | grep -q: under pipefail, grep exiting on
+              # the first match can SIGPIPE echo on a long list, and the check
+              # would fail open into the delete.
+              if grep -Fxq -- "$name" <<< "$protected"; then
+                echo "${image}: keeping ${name} (referenced by a tagged index)"
+                continue
+              fi
+              if [ "$DRY_RUN" = "true" ]; then
+                echo "${image}: DRY RUN, would delete version ${id} (${tags:-untagged}) ${name}"
+              else
+                echo "${image}: deleting version ${id} (${tags:-untagged}) ${name}"
+                gh api --method DELETE "orgs/${OWNER}/packages/container/${image}/versions/${id}"
+              fi
+            done <<< "$candidates"
+          done

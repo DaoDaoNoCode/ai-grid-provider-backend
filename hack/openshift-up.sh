@@ -11,7 +11,7 @@
 #     KEYCLOAK_ADMIN_PASSWORD=... bash hack/openshift-up.sh
 #
 # Environment:
-#   IMAGE                 full image ref (default quay.io/rh-ee-rjjohnso/ai-grid-provider-backend:latest)
+#   IMAGE                 full image ref (default ghcr.io/ai-grid-cloud/ai-grid-provider-backend:latest)
 #   IMAGE_TAG             overrides tag when IMAGE is unset (default latest)
 #   BUILD_IMAGE           1 to podman build + push IMAGE before apply
 #   PLATFORM              build platform (default linux/amd64; required for Apple Silicon → OpenShift)
@@ -31,7 +31,7 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 MANIFESTS="${ROOT}/deploy/openshift"
 NAMESPACE="${NAMESPACE:-ai-grid}"
 IMAGE_TAG="${IMAGE_TAG:-latest}"
-IMAGE="${IMAGE:-quay.io/rh-ee-rjjohnso/ai-grid-provider-backend:${IMAGE_TAG}}"
+IMAGE="${IMAGE:-ghcr.io/ai-grid-cloud/ai-grid-provider-backend:${IMAGE_TAG}}"
 BUILD_IMAGE="${BUILD_IMAGE:-0}"
 PLATFORM="${PLATFORM:-linux/amd64}"
 EXTERNAL_KEYCLOAK="${EXTERNAL_KEYCLOAK:-0}"
@@ -39,7 +39,7 @@ APPLY_SAMPLES="${APPLY_SAMPLES:-1}"
 GRANT_ANYUID="${GRANT_ANYUID:-0}"
 KEYCLOAK_REALM="${KEYCLOAK_REALM:-ai-grid}"
 KEYCLOAK_ADMIN_REALM="${KEYCLOAK_ADMIN_REALM:-master}"
-DEFAULT_IMAGE="quay.io/rh-ee-rjjohnso/ai-grid-provider-backend:latest"
+DEFAULT_IMAGE="ghcr.io/ai-grid-cloud/ai-grid-provider-backend:latest"
 
 for arg in "$@"; do
   case "$arg" in

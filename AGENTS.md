@@ -110,10 +110,10 @@ make keycloak-up      # local Keycloak on :8180 + seed tenant-a/tenant-b
 make keycloak-seed    # re-seed ai-grid realm / Organizations (idempotent)
 make keycloak-down    # remove local Keycloak container
 make kind-test        # full Kind integration (KIND_EXPERIMENTAL_PROVIDER=podman)
-make image            # build container image (IMAGE/TAG, default Quay :latest)
-make push             # push container (podman login quay.io first)
+make image            # build container image (IMAGE/TAG, default ghcr.io :latest)
+make push             # push container (podman login ghcr.io first)
 make build-and-push   # image + push
-make openshift-up     # deploy to current oc context (Quay image by default)
+make openshift-up     # deploy to current oc context (ghcr.io image by default)
 make openshift-down   # remove OpenShift deploy
 make acm-hub-up       # RHACM via Helm/OLM + playground ManagedClusters
 make acm-hub-down     # tear down ACM hub Helm release
@@ -187,12 +187,20 @@ make dev-fake-poc     # the same on fixtures/poc; override ports with DEV_*_PORT
 ## CI
 
 [`.github/workflows/ci.yaml`](.github/workflows/ci.yaml) runs Check on pull
-requests and on pushes to `main` / `development` (`make build`, `fmt-check`,
+requests and on pushes to `main` and `v*` tags (`make build`, `fmt-check`,
 `vet`, pinned golangci-lint + `.golangci.yml`, `unit`, `make generate` dirty
-diff). Image build/push to Quay runs only on push (never on PRs).
+diff). After Check passes, pushes, tags and manual runs publish the image to
+`ghcr.io/ai-grid-cloud/ai-grid-provider-backend` (never on PRs).
 
-Tags: `latest` on `main`, `development` on `development`, plus branch and
-`sha-*` tags. Repo secrets required: `QUAY_USERNAME`, `QUAY_PASSWORD`.
+Tags: `sha-<full sha>` on every publish (deploy this one), `latest` on `main`,
+and semver from `v*` tags. No repository secrets: the job pushes with
+`GITHUB_TOKEN` (`packages: write`).
+
+Pull requests also get an image: `publish-image.yml` builds it without
+credentials, `publish-pr-image.yml` pushes it as `pr-<number>` (never `sha-*`,
+`latest` or semver), `cleanup-pr-image.yml` deletes it when the PR closes, and
+`prune-images.yml` removes `pr-*` and untagged versions older than 30 days
+every Monday.
 
 ## Security
 

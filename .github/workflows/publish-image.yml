@@ -1,0 +1,70 @@
+name: publish-image
+
+# First half of the PR image pipeline. A pull request builds the image and
+# uploads it as an OCI-archive artifact instead of pushing it. The
+# publish-pr-image workflow (workflow_run) pushes the artifact as pr-<number>.
+#
+# The split exists because a fork's pull_request run gets a read-only
+# GITHUB_TOKEN. This workflow holds no credentials at all (the base images are
+# public), and the half that can push never runs PR code. PR builds only ever
+# become pr-<number>, never sha-*, latest or semver.
+#
+# Publishing from main, v* tags and manual runs is the last job of ci.yaml,
+# after every check.
+#
+# The workflow name is load-bearing: publish-pr-image triggers on
+# workflow_run of `publish-image`.
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: publish-image-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+
+      - id: meta
+        name: Derive OCI labels
+        uses: docker/metadata-action@c299e40c65443455700f0fdfc63efafe5b349051 # v5
+        with:
+          images: ghcr.io/ai-grid-cloud/ai-grid-provider-backend
+
+      # Deliberately untagged: each tag becomes a separate entry in the
+      # archive's index and skopeo then refuses to pick one. publish-pr-image
+      # applies the destination tag.
+      - name: Build to OCI archive
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: .
+          file: Containerfile
+          platforms: linux/amd64
+          build-args: |
+            TARGETOS=linux
+            TARGETARCH=amd64
+          outputs: type=oci,dest=/tmp/ai-grid-provider-backend.tar
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha,scope=ai-grid-provider-backend
+          provenance: false
+
+      - name: Upload image artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: pr-image-ai-grid-provider-backend
+          path: /tmp/ai-grid-provider-backend.tar
+          # Only has to survive until publish-pr-image downloads it.
+          retention-days: 1
+          # The layers inside are already compressed.
+          compression-level: 0

@@ -1,0 +1,80 @@
+name: cleanup-pr-image
+
+# Delete the pr-<number> image once its pull request closes, so PR images
+# don't pile up in ghcr.io. sha-*, semver and latest are never touched: PR
+# pushes only ever create pr-<number>.
+#
+# pull_request_target, because a fork's pull_request token is read-only and
+# can't delete package versions. It's safe here because this workflow never
+# checks out or runs PR code.
+
+on:
+  pull_request_target:
+    types: [closed]
+
+permissions: {}
+
+concurrency:
+  # Shared with publish-pr-image, so a close waits for a running push of the
+  # same PR and then deletes what it pushed. A fork's workflow_run payload has
+  # no PR number, so both workflows key on the head repository and branch.
+  group: pr-image-${{ github.event.pull_request.head.repo.full_name }}-${{ github.event.pull_request.head.ref }}
+  cancel-in-progress: false
+
+jobs:
+  delete:
+    runs-on: ubuntu-latest
+    permissions:
+      packages: write
+    env:
+      # Keep in step with publish-image.
+      IMAGES: ai-grid-provider-backend
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      OWNER: ${{ github.repository_owner }}
+      ACTOR: ${{ github.actor }}
+      PR_NUMBER: ${{ github.event.number }}
+    steps:
+      - name: Delete pr-${{ github.event.number }} package versions
+        run: |
+          set -euo pipefail
+          # Digests that a tagged index lists as children: the platform and
+          # attestation manifests of a multi-arch or attested release. ghcr
+          # shows them untagged, and a PR can push identical bytes and get them
+          # tagged pr-<number>, so they are never deleted. Reads the image's
+          # versions on stdin. A failed lookup fails the job instead of
+          # deleting with a partial list.
+          protected_digests() {
+            jq -r '.[] | select(.metadata.container.tags | length > 0) | .name' \
+              | while read -r digest; do
+                  skopeo inspect --raw "docker://ghcr.io/${OWNER}/$1@${digest}" \
+                    | jq -r '.manifests[]?.digest // empty' || exit 1
+                done | sort -u
+          }
+
+          echo "$GH_TOKEN" | skopeo login ghcr.io --username "$ACTOR" --password-stdin
+          for image in $IMAGES; do
+            versions=$(gh api "orgs/${OWNER}/packages/container/${image}/versions" --paginate)
+            protected=$(protected_digests "$image" <<< "$versions")
+            # Delete only a version whose sole tag is pr-<number>. A PR controls
+            # its own build, so it can produce an image byte-identical to a
+            # published one; the push then adds pr-<number> to that
+            # sha-*/latest version, which must survive the PR closing.
+            jq -r --arg tag "pr-${PR_NUMBER}" '.[]
+              | select((.metadata.container.tags | index($tag)) and (.metadata.container.tags | length > 1))
+              | "::warning::keeping \(.name): \($tag) shares it with \(.metadata.container.tags | join(","))"' \
+              <<< "$versions"
+            only=$(jq -r --arg tag "pr-${PR_NUMBER}" \
+              '.[] | select(.metadata.container.tags == [$tag]) | "\(.id)\t\(.name)"' <<< "$versions")
+            if [ -z "$only" ]; then
+              echo "No version of ${image} tagged only pr-${PR_NUMBER} to delete."
+              continue
+            fi
+            while IFS=$'\t' read -r id name; do
+              if grep -Fxq -- "$name" <<< "$protected"; then
+                echo "::warning::keeping ${image}@${name}: a tagged index lists it"
+                continue
+              fi
+              echo "Deleting ${image} version ${id} (pr-${PR_NUMBER})"
+              gh api --method DELETE "orgs/${OWNER}/packages/container/${image}/versions/${id}"
+            done <<< "$only"
+          done
