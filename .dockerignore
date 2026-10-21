@@ -1,0 +1,13 @@
+# The image build needs only the module files and the packages the server is built from
+# (Containerfile). Everything else, such as .git, bin/, a local .env or kubeconfig, stays out
+# of the image build context. This doesn't limit an OpenShift binary build's upload:
+# oc start-build --from-dir sends everything but .git to the cluster. Use --from-repo=.
+# (committed files only) or --exclude to keep local files off the cluster.
+*
+!go.mod
+!go.sum
+!cmd/
+!gen/
+!internal/
+**/.env
+**/.env.*
