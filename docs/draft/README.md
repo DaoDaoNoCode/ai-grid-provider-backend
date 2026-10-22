@@ -51,6 +51,9 @@ Three rules hold while the draft lives here:
    this backend, `make dev-fake` runs the real server for it against the fake hub and the fake
    Keycloak (`internal/fakeinfra/hub`, `internal/fakeinfra/keycloak`); nothing fakes the
    real server itself. The draft fake exists only for the areas that have no real server yet.
+   One temporary overlap: Tenants is real since #3, and the draft's tenant RPCs stay until the
+   console's Organizations page moves to the real ones (ai-grid-cloud/ai-grid-provider-console#42).
+   They keep their own state, separate from the fake Keycloak's Organizations.
 
 ### When an area moves to the real backend
 

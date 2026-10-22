@@ -17,6 +17,9 @@ add-ons, lease loss and recovery, API-server outage, detaching and removal again
 clock with a `speed` factor; the hub controllers' reactions are applied as each event fires
 (taint controller, add-on discovery and health check, autodetect, gc controller; see
 `scenarios.go`). `GetManagedCluster` answers `NotFound` with the conventions' message.
+`status.provisioning` (the cluster's compliance with the hub's `ai-grid-ready` Policy) is left
+unset: the fake doesn't report it, so the console reads the `ai-grid/provisioned` label instead;
+an empty string would mean the Policy doesn't cover the cluster.
 `UpdateManagedCluster` validates the field mask (`labels`, `annotations`; `hub_accepts_client`
 is refused, see below), replaces maps as a whole and then puts back what the hub's webhook and
 controllers own (`name`, `cluster.open-cluster-management.io/clusterset=default` when empty, the
