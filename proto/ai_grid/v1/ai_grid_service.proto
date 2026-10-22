@@ -11,7 +11,7 @@ option (grpc.gateway.protoc_gen_openapiv2.options.openapiv2_swagger) = {
   info: {
     title: "AI Grid API"
     version: "0.1.0"
-    description: "gRPC-Gateway REST surface for ai-grid-provider-backend (Ping, Clusters CRUD, Tenants CRUD)."
+    description: "gRPC-Gateway REST surface for ai-grid-provider-backend (Ping, Clusters, Tenants, Subscriptions, Models CRUD)."
     contact: {
       name: "AI Grid"
       url: "https://github.com/osac-project/ai-grid-provider-backend"

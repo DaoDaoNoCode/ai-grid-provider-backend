@@ -1,0 +1,250 @@
+syntax = "proto3";
+
+package ai_grid.v1;
+
+import "ai_grid/v1/condition_type.proto";
+import "ai_grid/v1/metadata_type.proto";
+import "buf/validate/validate.proto";
+
+option go_package = "github.com/osac-project/ai-grid-provider-backend/gen/ai_grid/v1;aigridv1";
+
+// Model is a deployable LLM inference workload on the AI Grid.
+//
+// It maps to a hub LLMInferenceService (serving.kserve.io/v1alpha2) plus an
+// optional ACM Placement and ManifestWorkReplicaSet that distribute the
+// workload to managed clusters, and a MaaSModelRef for catalog registration.
+//
+// The `spec` contains the desired details and may be modified by the user.
+// The `status` contains the current status and is provided by the system.
+message Model {
+  // Unique identifier. Equals metadata.name (DNS-1123 label).
+  string id = 1 [(buf.validate.field).string = {
+    min_len: 1
+    max_len: 63
+    pattern: "^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$"
+  }];
+
+  Metadata metadata = 2;
+  ModelSpec spec = 3;
+  ModelStatus status = 4;
+}
+
+// Desired state of a Model (trimmed LLMInferenceService.spec + ACM placement).
+message ModelSpec {
+  // Where the artifact comes from and the name clients send.
+  ModelSource model = 1;
+
+  // Static replica count. Mutually exclusive with scaling.
+  optional int32 replicas = 2;
+
+  // LLMInferenceServiceConfig preset names merged under the spec.
+  repeated string base_refs = 3;
+
+  // Optional ServingRuntime / ClusterServingRuntime name.
+  string runtime = 4;
+
+  // Router / gateway configuration.
+  ModelRouter router = 5;
+
+  // Main container of the workload template.
+  ModelContainer main = 6;
+
+  // Autoscaling. Mutually exclusive with replicas.
+  ModelScaling scaling = 7;
+
+  // Where to deploy. Unset: hub-only LLMInferenceService.
+  // Set: ACM Placement + ManifestWorkReplicaSet named model-<id>.
+  ModelPlacement placement = 8;
+
+  // ManifestWorkReplicaSet rollout. Only meaningful with placement; unset means All.
+  ModelRollout rollout = 9;
+}
+
+// Model artifact source (spec.model).
+message ModelSource {
+  // Artifact URI (hf://, oci://, s3://, pvc://, http(s)://).
+  string uri = 1 [(buf.validate.field).string = {
+    min_len: 1
+    max_len: 2048
+  }];
+
+  // Identifier clients send in the request model field. Defaults to id.
+  string name = 2;
+}
+
+// Router configuration (spec.router).
+message ModelRouter {
+  // Gateway refs. Empty uses the product default
+  // (openshift-ingress/openshift-ai-inference).
+  repeated ModelGatewayRef gateway_refs = 1;
+
+  // When true, controller manages the HTTPRoute (spec.router.route: {}).
+  bool managed_route = 2;
+
+  // When true, inference scheduler is created (spec.router.scheduler: {}).
+  bool scheduler = 3;
+}
+
+// One gateway reference.
+message ModelGatewayRef {
+  string name = 1;
+  string namespace = 2;
+  string section_name = 3;
+}
+
+// Main container resources and environment.
+message ModelContainer {
+  // Runtime image. Empty uses the preset's.
+  string image = 1;
+
+  // Resource requests (cpu, memory, nvidia.com/gpu, ...).
+  map<string, string> requests = 2;
+
+  // Resource limits.
+  map<string, string> limits = 3;
+
+  // Environment variables (for example VLLM_ADDITIONAL_ARGS).
+  repeated ModelEnvVar env = 4;
+}
+
+// One environment variable.
+message ModelEnvVar {
+  string name = 1;
+  string value = 2;
+}
+
+// KEDA-based autoscaling.
+message ModelScaling {
+  // Minimum replicas (default 1 when unset / zero).
+  int32 min_replicas = 1;
+
+  // Maximum replicas (required when scaling is set).
+  int32 max_replicas = 2;
+
+  // Whether KEDA scaling is enabled. Must be true when scaling is set.
+  bool keda = 3;
+
+  // KEDA scale triggers (at least one required when keda is true).
+  repeated ModelKedaTrigger triggers = 4;
+}
+
+// One KEDA scale trigger.
+message ModelKedaTrigger {
+  string type = 1;
+  map<string, string> metadata = 2;
+}
+
+// ACM Placement desired state (subset used by the Models API).
+message ModelPlacement {
+  // Cluster sets to draw from. Empty means every bound set.
+  repeated string cluster_sets = 1;
+
+  // Label selector over ManagedCluster labels.
+  ModelLabelSelector label_selector = 2;
+
+  // Cap on selected clusters. Unset means all matching.
+  optional int32 number_of_clusters = 3;
+}
+
+// Label selector for Placement predicates.
+message ModelLabelSelector {
+  map<string, string> match_labels = 1;
+  repeated ModelLabelSelectorRequirement match_expressions = 2;
+}
+
+// One label selector requirement.
+message ModelLabelSelectorRequirement {
+  string key = 1;
+  // In, NotIn, Exists, or DoesNotExist.
+  string operator = 2;
+  repeated string values = 3;
+}
+
+// ManifestWorkReplicaSet rollout strategy.
+message ModelRollout {
+  ModelRolloutStrategy strategy = 1;
+  // Progressive only: clusters at once (integer or percent like "20%").
+  string max_concurrency = 2;
+  // Failed/timed-out clusters tolerated (integer or percent).
+  string max_failures = 3;
+  // Progress deadline (e.g. "5m", "None").
+  string progress_deadline = 4;
+  // Hold succeeded slot before next (Progressive).
+  string min_success_time = 5;
+}
+
+// Rollout strategy type.
+enum ModelRolloutStrategy {
+  MODEL_ROLLOUT_STRATEGY_UNSPECIFIED = 0;
+  MODEL_ROLLOUT_STRATEGY_ALL = 1;
+  MODEL_ROLLOUT_STRATEGY_PROGRESSIVE = 2;
+  MODEL_ROLLOUT_STRATEGY_PROGRESSIVE_PER_GROUP = 3;
+}
+
+// Observed state of a Model.
+message ModelStatus {
+  // External URL when known.
+  string url = 1;
+
+  // LLMInferenceService conditions.
+  repeated Condition conditions = 2;
+
+  // Derived summary phase.
+  ModelPhase phase = 3;
+
+  // Reason of the condition that decided phase.
+  string reason = 4;
+
+  // Message of the condition that decided phase.
+  string message = 5;
+
+  // Placement status when placement is set.
+  ModelPlacementStatus placement = 6;
+
+  // ManifestWorkReplicaSet status when placement is set.
+  ModelRolloutStatus rollout = 7;
+
+  // Observed generation from the LLMInferenceService.
+  int64 observed_generation = 8;
+}
+
+// Derived model phase.
+enum ModelPhase {
+  MODEL_PHASE_UNSPECIFIED = 0;
+  MODEL_PHASE_PENDING = 1;
+  MODEL_PHASE_READY = 2;
+  MODEL_PHASE_FAILED = 3;
+}
+
+// Placement observed state.
+message ModelPlacementStatus {
+  // Number of clusters selected.
+  int32 number_of_selected_clusters = 1;
+  // Selected cluster names.
+  repeated string selected_clusters = 2;
+  // Placement conditions when present.
+  repeated Condition conditions = 3;
+}
+
+// ManifestWorkReplicaSet observed state.
+message ModelRolloutStatus {
+  // True when PlacementRolledOut is True.
+  bool rolled_out = 1;
+  // True when ManifestworkApplied is True.
+  bool applied = 2;
+  // Reason from the deciding condition.
+  string reason = 3;
+  // Per-cluster work summaries when available.
+  repeated ModelWorkStatus works = 4;
+  // MWRS conditions.
+  repeated Condition conditions = 5;
+}
+
+// One generated ManifestWork summary.
+message ModelWorkStatus {
+  string cluster = 1;
+  string applied = 2;
+  string available = 3;
+  string progressing = 4;
+  string degraded = 5;
+}

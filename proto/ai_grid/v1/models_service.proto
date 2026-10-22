@@ -1,0 +1,110 @@
+syntax = "proto3";
+
+package ai_grid.v1;
+
+import "ai_grid/v1/model_type.proto";
+import "google/api/annotations.proto";
+import "google/protobuf/field_mask.proto";
+
+option go_package = "github.com/osac-project/ai-grid-provider-backend/gen/ai_grid/v1;aigridv1";
+
+message ModelsListRequest {
+  // Index of the first result. Default zero.
+  optional int32 offset = 1;
+
+  // Maximum number of results. Omitted means all; zero means count only;
+  // negative is InvalidArgument.
+  optional int32 limit = 2;
+
+  // CEL over `this` (a Model, proto field names) and `now` (server time),
+  // with cel-go's standard library plus its strings extension. Empty means all.
+  optional string filter = 3;
+
+  // Sort key. Empty means `id` ascending. Allowed: id, -id, metadata.name,
+  // -metadata.name. Any other value is InvalidArgument.
+  optional string order = 4;
+}
+
+message ModelsListResponse {
+  int32 size = 1;
+  int32 total = 2;
+  repeated Model items = 3;
+}
+
+message ModelsGetRequest {
+  // Model id (equals metadata.name).
+  string id = 1;
+}
+
+message ModelsGetResponse {
+  Model object = 1;
+}
+
+message ModelsCreateRequest {
+  // id / metadata.name and spec.model.uri are required. status is ignored.
+  Model object = 1;
+}
+
+message ModelsCreateResponse {
+  Model object = 1;
+}
+
+message ModelsUpdateRequest {
+  Model object = 1;
+  // Supported paths: spec.replicas, spec.main.image, spec.main.env,
+  // spec.placement, spec.rollout, metadata.labels, metadata.annotations.
+  // A path replaces that field as a whole. Empty mask is InvalidArgument.
+  google.protobuf.FieldMask update_mask = 2;
+  // When true, update fails with Aborted unless metadata.version matches.
+  bool lock = 3;
+}
+
+message ModelsUpdateResponse {
+  Model object = 1;
+}
+
+message ModelsDeleteRequest {
+  string id = 1;
+  // Expected version: when set (non-zero), delete fails with Aborted unless
+  // it equals the stored metadata.version. Zero skips the check.
+  int32 resource_version = 2;
+}
+
+message ModelsDeleteResponse {}
+
+// Models manage LLMInferenceService deployments (optionally placed via ACM).
+// Create also writes a MaaSModelRef for catalog registration.
+service Models {
+  rpc List(ModelsListRequest) returns (ModelsListResponse) {
+    option (google.api.http) = {get: "/api/v1/models"};
+  }
+
+  rpc Get(ModelsGetRequest) returns (ModelsGetResponse) {
+    option (google.api.http) = {
+      get: "/api/v1/models/{id}"
+      response_body: "object"
+    };
+  }
+
+  // Creates (= deploys) a model: LLMInferenceService, optional Placement +
+  // ManifestWorkReplicaSet, and MaaSModelRef.
+  rpc Create(ModelsCreateRequest) returns (ModelsCreateResponse) {
+    option (google.api.http) = {
+      post: "/api/v1/models"
+      body: "object"
+      response_body: "object"
+    };
+  }
+
+  rpc Update(ModelsUpdateRequest) returns (ModelsUpdateResponse) {
+    option (google.api.http) = {
+      patch: "/api/v1/models/{object.id}"
+      body: "object"
+      response_body: "object"
+    };
+  }
+
+  rpc Delete(ModelsDeleteRequest) returns (ModelsDeleteResponse) {
+    option (google.api.http) = {delete: "/api/v1/models/{id}"};
+  }
+}
