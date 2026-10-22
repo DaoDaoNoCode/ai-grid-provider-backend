@@ -167,6 +167,12 @@ message ManagedClusterStatus {
   // is this proposal's choice: the ACM console shows a message only for
   // importing, importfailed, offline and unknown.
   string state_message = 7;
+  // AI Grid provisioning, from the cluster's compliance with the hub's
+  // ai-grid-ready Policy: "Compliant", "NonCompliant", "Pending" (placed, no
+  // result yet), or empty when the Policy doesn't cover the cluster. Unset
+  // when the backend doesn't report it; the console then reads the
+  // ai-grid/provisioned label.
+  optional string provisioning = 8;
 }
 
 // `status.clusterClaims[]`.
