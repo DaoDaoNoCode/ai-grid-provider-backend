@@ -127,7 +127,7 @@ check-generated: ## fail when the committed output differs from what proto/ gene
 	  echo "check-generated: an out: path in proto/buf.gen.yaml was not redirected; the check would compare the real output with itself" >&2; \
 	  exit 1; \
 	fi && \
-	(cd proto && buf generate --template "$$tmp/buf.gen.yaml") && \
+	(cd proto && $(BUF) generate --template "$$tmp/buf.gen.yaml") && \
 	diff -r "$$tmp/gen/ai_grid/v1" gen/ai_grid/v1 && \
 	diff -r "$$tmp/openapi" docs/openapi && \
 	diff "$$tmp/openapi/ai_grid.swagger.json" internal/restgateway/openapi/ai_grid.swagger.json && \
