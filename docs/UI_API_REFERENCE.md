@@ -42,6 +42,11 @@ unwraps them via `response_body: "object"`.
 | `PATCH` | `/api/v1/tenants/{id}` | Update name and/or domains |
 | `DELETE` | `/api/v1/tenants/{id}` | Delete tenant |
 | `GET` | `/api/v1/tenants/{id}:listMembers` | List users in the tenant Organization |
+| `GET` | `/api/v1/models` | List models (LLMInferenceService) |
+| `GET` | `/api/v1/models/{id}` | Get one model |
+| `POST` | `/api/v1/models` | Create (= deploy) model |
+| `PATCH` | `/api/v1/models/{id}` | Update model (FieldMask) |
+| `DELETE` | `/api/v1/models/{id}` | Delete model (+ placement / MWRS / MaaSModelRef) |
 
 Also served (not resource APIs): `GET /openapi.json`, `GET /docs/`.
 
@@ -67,14 +72,14 @@ realm** — not a per-tenant identifier.
 | `tenant` | string | Reserved; often empty today |
 | `version` | int32 | Optimistic lock field; **not enforced yet** |
 
-### List query parameters (Clusters + Tenants)
+### List query parameters (Clusters + Tenants + Models)
 
 | Param | Type | Notes |
 | --- | --- | --- |
 | `offset` | int32 | Start index; default `0` |
 | `limit` | int32 | Max items; omit = all |
-| `filter` | string | CEL filter — **accepted, not evaluated yet** |
-| `order` | string | Sort — **accepted, not evaluated yet** |
+| `filter` | string | CEL filter. **Models evaluates it**. Clusters and Tenants accept but do not evaluate yet. |
+| `order` | string | Sort. **Models uses an allowlist**. Clusters and Tenants accept but do not evaluate yet. |
 
 ### Error body
 
@@ -478,16 +483,75 @@ gRPC: `ai_grid.v1.Tenants/ListMembers` with `{"id":"<org-uuid>"}`.
 
 ---
 
-## 4. What is not in this API (yet)
+
+## 4. Models (LLMInferenceService deploy)
+
+Models live in `AI_GRID_MODELS_NAMESPACE` (default `ai-grid-internal-models`).
+**Create is deploy:** it writes an `LLMInferenceService` and a `MaaSModelRef`
+(`kind: LLMInferenceService`). When `spec.placement` is set it also writes
+`Placement` / `ManifestWorkReplicaSet` named `model-<id>` (fails with
+FailedPrecondition if MWRS is unavailable on the hub).
+
+| Method | Path | Notes |
+| --- | --- | --- |
+| GET | `/api/v1/models` | List; CEL `filter`; `order` allowlist `id`, `-id`, `metadata.name`, `-metadata.name` |
+| GET | `/api/v1/models/{id}` | Get one (unwraps to the Model object) |
+| POST | `/api/v1/models` | Create (= deploy); body is the Model object |
+| PATCH | `/api/v1/models/{id}` | FieldMask update (`spec.replicas`, `spec.main.image`, `spec.main.env`, `spec.placement`, `spec.rollout`, `metadata.labels`, `metadata.annotations`) |
+| DELETE | `/api/v1/models/{id}` | Refuses while a Subscription or AuthPolicy references the model |
+
+### Create body (key fields)
+
+```json
+{
+  "id": "facebook-opt-125m",
+  "metadata": {
+    "name": "facebook-opt-125m",
+    "annotations": {
+      "openshift.io/display-name": "Facebook OPT 125M"
+    }
+  },
+  "spec": {
+    "model": {"uri": "hf://facebook/opt-125m", "name": "facebook/opt-125m"},
+    "replicas": 1,
+    "base_refs": ["v3-6-0-kserve-config-llm-template-cpu"],
+    "main": {
+      "image": "quay.io/example/vllm:latest",
+      "requests": {"cpu": "100m", "memory": "8Gi"},
+      "limits": {"cpu": "1", "memory": "10Gi"}
+    },
+    "placement": {
+      "label_selector": {
+        "match_expressions": [
+          {"key": "location", "operator": "In", "values": ["paris", "berlin"]}
+        ]
+      }
+    }
+  }
+}
+```
+
+Without `placement`, the model is hub-only. Gateway defaults to
+`openshift-ingress/openshift-ai-inference`. Display name / description live in
+`openshift.io/display-name` and `openshift.io/description` annotations.
+
+gRPC: `ai_grid.v1.Models/{List,Get,Create,Update,Delete}`.
+
+---
+
+## 6. What is not in this API (yet)
 
 Do not expect these from provider-backend today:
 
 - Browser login / token exchange / session APIs
-- User create/update/delete, groups, subscriptions (read-only org member list exists)
-- Models / placements / locations
+- User create/update/delete, groups (read-only org member list exists)
+- Separate AuthPolicies / Subscriptions RPCs (see `feat/subscriptions_api`)
+- API keys (dataplane `maas-api`)
 - Nested collection URLs (everything is flat under `/api/v1/...`; member list uses `:listMembers`)
-- Evaluated `filter` / `order` / optimistic `lock`
+- Evaluated `filter` / `order` on Clusters and Tenants (Models evaluates both)
+- Console PoC-flat Model shapes (OSAC `id`/`metadata`/`spec`/`status` is the API)
 - PoC-shaped flat `GridCluster` arrays or PoC tenant + IdP config blobs
+- Per-model ExternalModel / grid-gateway publication (platform bootstrap via acm-models)
 
 For PoC → production mapping notes see
 [`POC_API_PAYLOAD_UI_MAPPING.md`](./POC_API_PAYLOAD_UI_MAPPING.md) and
@@ -496,10 +560,13 @@ this file is the current contract snapshot).
 
 ---
 
-## 5. Local / OpenShift try-out
+## 7. Local / OpenShift try-out
 
 ```bash
-# Local (point KEYCLOAK_URL at a Keycloak with Organizations for Tenants)
+# Local without a cluster (fake hub seeds model / MaaS CRs for Models)
+make dev-fake
+
+# Local against a real kubeconfig + Keycloak (needs LLMInferenceService / MaaS CRDs for Models)
 KEYCLOAK_URL=http://127.0.0.1:8180 make run
 # Swagger: http://localhost:8081/docs/
 
@@ -527,7 +594,7 @@ curl -sS -X PATCH 'http://localhost:8081/api/v1/clusters/demo-cluster' \
 
 ---
 
-## 6. gRPC names (optional)
+## 8. gRPC names (optional)
 
 If the BFF speaks gRPC instead of REST:
 
@@ -536,6 +603,7 @@ If the BFF speaks gRPC instead of REST:
 | `ai_grid.v1.AiGrid` | `Ping` |
 | `ai_grid.v1.Clusters` | `List`, `Get`, `Create`, `Update`, `Delete` |
 | `ai_grid.v1.Tenants` | `List`, `Get`, `Create`, `Update`, `Delete` |
+| `ai_grid.v1.Models` | `List`, `Get`, `Create`, `Update`, `Delete` |
 
 gRPC request/response messages wrap resources as `{ "object": { ... } }` for
 Get/Create/Update; List uses `{ size, total, items }`. REST unwraps

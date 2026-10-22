@@ -20,12 +20,17 @@ The current API includes:
 - `ai_grid.v1.Tenants/Create`
 - `ai_grid.v1.Tenants/Update`
 - `ai_grid.v1.Tenants/Delete`
+- `ai_grid.v1.Models/List`
+- `ai_grid.v1.Models/Get`
+- `ai_grid.v1.Models/Create` (deploys: LLMInferenceService + MaaSModelRef; optional Placement + ManifestWorkReplicaSet)
+- `ai_grid.v1.Models/Update`
+- `ai_grid.v1.Models/Delete`
 
 REST and Swagger UI are also exposed on HTTP `:8081`:
 
 - Swagger UI: `http://localhost:8081/docs/`
 - OpenAPI (Swagger 2.0): `http://localhost:8081/openapi.json`
-- REST routes: `/api/v1/ping`, `/api/v1/clusters`, `/api/v1/tenants`
+- REST routes: `/api/v1/ping`, `/api/v1/clusters`, `/api/v1/tenants`, `/api/v1/models`
 - UI handout (payloads + examples): [`docs/UI_API_REFERENCE.md`](docs/UI_API_REFERENCE.md)
 
 [vanguard](https://github.com/connectrpc/vanguard-go) serves REST by reading
@@ -41,6 +46,27 @@ ManagedCluster RPCs use the Kubernetes dynamic client against:
 ```text
 cluster.open-cluster-management.io/v1/managedclusters
 ```
+
+
+Models RPCs use the same dynamic client against LLMInferenceService (and
+optional ACM Placement / ManifestWorkReplicaSet) plus a MaaSModelRef for
+catalog registration. Default namespace `ai-grid-internal-models` (override
+with `AI_GRID_MODELS_NAMESPACE`):
+
+```text
+serving.kserve.io/v1alpha2/llminferenceservices
+cluster.open-cluster-management.io/v1beta1/placements          # when placement set
+work.open-cluster-management.io/v1alpha1/manifestworkreplicasets
+maas.opendatahub.io/v1alpha1/maasmodelrefs
+```
+
+Create is deploy: it applies those objects to the hub. Without `spec.placement`
+the workload stays hub-only; with placement, Create fails with
+`FailedPrecondition` when ManifestWorkReplicaSet is unavailable on the hub.
+
+Point `--kubeconfig` at a cluster that has those CRDs (for example an RHOAI
+spoke with MaaS). Delete refuses while a MaaSSubscription or MaaSAuthPolicy in
+`AI_GRID_SUBSCRIPTION_NAMESPACE` still references the model.
 
 The service runs in-cluster using its Kubernetes ServiceAccount. Its RBAC role
 allows `get`, `list`, `watch`, `create`, `update`, `patch`, and `delete` on
@@ -326,7 +352,8 @@ preset contains and where it comes from.
 
 ```sh
 make dev-fake                         # fixtures/default: ten clusters in every ACM state, six organizations,
-                                      # and a timeline (a cluster joins at 20s, one detaches at 30s, ...)
+                                      # MaaS subscriptions/auth policies/model refs, and a timeline
+                                      # (a cluster joins at 20s, one detaches at 30s, ...)
 make dev-fake-poc                     # fixtures/poc: the PoC's four sites and three organizations, static
                                       # (and fixtures/draft/poc for the draft fake)
 make dev-fake DEV_GRPC_PORT=19090 DEV_HUB_PORT=19091 DEV_HTTP_PORT=19092 DEV_KEYCLOAK_PORT=19093 DEV_DRAFT_PORT=19094
