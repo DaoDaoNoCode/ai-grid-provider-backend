@@ -1,0 +1,63 @@
+{
+  "_comment": "LLMInferenceService CRs for Models List/Get against make dev-fake. Namespace ai-grid-internal-models matches AI_GRID_MODELS_NAMESPACE. Shape matches Models Create (hub-only, replicas=1).",
+  "apiVersion": "serving.kserve.io/v1alpha2",
+  "kind": "LLMInferenceServiceList",
+  "metadata": {},
+  "items": [
+    {
+      "apiVersion": "serving.kserve.io/v1alpha2",
+      "kind": "LLMInferenceService",
+      "metadata": {
+        "name": "fixture-cpu-llm",
+        "namespace": "ai-grid-internal-models",
+        "uid": "b1000001-0000-4000-8000-000000000001",
+        "resourceVersion": "1",
+        "generation": 1,
+        "creationTimestamp": "2026-09-10T12:00:00Z",
+        "labels": {
+          "ai-grid/model": "fixture-cpu-llm",
+          "app.kubernetes.io/managed-by": "ai-grid-provider-backend"
+        },
+        "annotations": {
+          "openshift.io/display-name": "Fixture CPU LLM"
+        }
+      },
+      "spec": {
+        "model": {
+          "uri": "hf://facebook/opt-125m",
+          "name": "facebook/opt-125m"
+        },
+        "replicas": 1,
+        "baseRefs": [
+          { "name": "v3-6-0-kserve-config-llm-template-cpu" }
+        ],
+        "router": {
+          "route": {},
+          "gateway": {
+            "refs": [
+              {
+                "name": "openshift-ai-inference",
+                "namespace": "openshift-ingress"
+              }
+            ]
+          }
+        },
+        "template": {
+          "containers": [
+            {
+              "name": "main",
+              "image": "quay.io/example/vllm:latest",
+              "resources": {
+                "requests": { "cpu": "100m", "memory": "8Gi" },
+                "limits": { "cpu": "1", "memory": "10Gi" }
+              }
+            }
+          ]
+        }
+      },
+      "status": {
+        "url": "https://fixture-cpu-llm.example.com"
+      }
+    }
+  ]
+}

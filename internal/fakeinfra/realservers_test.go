@@ -387,3 +387,116 @@ func TestRealClustersServerProvisioning(t *testing.T) {
 		t.Fatalf("after remove, provisioning = %q, want empty", p)
 	}
 }
+
+func modelsServer(t *testing.T, cfg *rest.Config) *servers.ModelsServer {
+	t.Helper()
+	cfg.QPS, cfg.Burst = 1000, 1000
+	client, err := dynamic.NewForConfig(cfg)
+	if err != nil {
+		t.Fatalf("dynamic.NewForConfig() error = %v", err)
+	}
+	s, err := servers.NewModelsServer().
+		SetLogger(slog.New(slog.DiscardHandler)).
+		SetDynamicClient(client).
+		SetNamespace("ai-grid-internal-models").
+		SetSubscriptionNamespace("models-as-a-service").
+		SetManifestWorkReplicaSetEnabled(true).
+		Build()
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+	return s
+}
+
+func TestRealModelsServerOnFakeHub(t *testing.T) {
+	h, srv := startHub(t)
+	s := modelsServer(t, &rest.Config{Host: srv.URL, BearerToken: h.ServiceAccountToken()})
+	ctx := context.Background()
+
+	list, err := s.List(ctx, &aigridv1.ModelsListRequest{})
+	if err != nil {
+		t.Fatalf("List() error = %v", err)
+	}
+	if list.GetTotal() < 1 {
+		t.Fatalf("List() total = %d, want seeded fixture-cpu-llm", list.GetTotal())
+	}
+	gotFixture, err := s.Get(ctx, &aigridv1.ModelsGetRequest{Id: "fixture-cpu-llm"})
+	if err != nil {
+		t.Fatalf("Get(fixture-cpu-llm) error = %v", err)
+	}
+	if gotFixture.GetObject().GetSpec().GetModel().GetUri() != "hf://facebook/opt-125m" {
+		t.Fatalf("fixture uri = %q", gotFixture.GetObject().GetSpec().GetModel().GetUri())
+	}
+	if gotFixture.GetObject().GetMetadata().GetAnnotations()["openshift.io/display-name"] != "Fixture CPU LLM" {
+		t.Fatalf("fixture display-name = %v", gotFixture.GetObject().GetMetadata().GetAnnotations())
+	}
+
+	replicas := int32(1)
+	created, err := s.Create(ctx, &aigridv1.ModelsCreateRequest{
+		Object: &aigridv1.Model{
+			Id: "smoke-opt",
+			Metadata: &aigridv1.Metadata{
+				Name: "smoke-opt",
+				Annotations: map[string]string{
+					"openshift.io/display-name": "Smoke OPT",
+				},
+			},
+			Spec: &aigridv1.ModelSpec{
+				Model: &aigridv1.ModelSource{
+					Uri:  "hf://facebook/opt-125m",
+					Name: "facebook/opt-125m",
+				},
+				Replicas: &replicas,
+				Main: &aigridv1.ModelContainer{
+					Image:    "quay.io/example/vllm:test",
+					Requests: map[string]string{"cpu": "100m", "memory": "1Gi"},
+					Limits:   map[string]string{"cpu": "1", "memory": "2Gi"},
+				},
+				Placement: &aigridv1.ModelPlacement{
+					LabelSelector: &aigridv1.ModelLabelSelector{
+						MatchExpressions: []*aigridv1.ModelLabelSelectorRequirement{
+							{Key: "location", Operator: "In", Values: []string{"paris"}},
+						},
+					},
+				},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	if created.GetObject().GetId() != "smoke-opt" {
+		t.Fatalf("Create id = %q", created.GetObject().GetId())
+	}
+	if created.GetObject().GetSpec().GetPlacement() == nil {
+		t.Fatal("Create missing placement enrichment")
+	}
+
+	got, err := s.Get(ctx, &aigridv1.ModelsGetRequest{Id: "smoke-opt"})
+	if err != nil {
+		t.Fatalf("Get() error = %v", err)
+	}
+	if got.GetObject().GetSpec().GetModel().GetUri() != "hf://facebook/opt-125m" {
+		t.Fatalf("uri = %q", got.GetObject().GetSpec().GetModel().GetUri())
+	}
+
+	replicas = 2
+	got.GetObject().Spec.Replicas = &replicas
+	updated, err := s.Update(ctx, &aigridv1.ModelsUpdateRequest{
+		Object:     got.GetObject(),
+		UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.replicas"}},
+	})
+	if err != nil {
+		t.Fatalf("Update() error = %v", err)
+	}
+	if updated.GetObject().GetSpec().GetReplicas() != 2 {
+		t.Fatalf("updated replicas = %v", updated.GetObject().GetSpec().Replicas)
+	}
+
+	if _, err := s.Delete(ctx, &aigridv1.ModelsDeleteRequest{Id: "smoke-opt"}); err != nil {
+		t.Fatalf("Delete() error = %v", err)
+	}
+	if _, err := s.Get(ctx, &aigridv1.ModelsGetRequest{Id: "smoke-opt"}); connect.CodeOf(err) != connect.CodeNotFound {
+		t.Fatalf("Get after delete = %v, want NotFound", err)
+	}
+}
