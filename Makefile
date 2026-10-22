@@ -17,6 +17,8 @@ DEV_HUB_PORT ?= 9091
 DEV_HTTP_PORT ?= 9092
 DEV_KEYCLOAK_PORT ?= 9093
 DEV_DRAFT_PORT ?= 9094
+# make dev-fake DEV_DRAFT_ADDRESS= runs without the draft fake.
+DEV_DRAFT_ADDRESS ?= $(DEV_HOST):$(DEV_DRAFT_PORT)
 DEV_FIXTURES ?= fixtures/default
 DEV_DRAFT_FIXTURES ?= fixtures/draft/default
 DEV_KUBECONFIG ?= $(BIN_DIR)/fake-kubeconfig
@@ -80,7 +82,7 @@ build-fake-infra: ## Build the fake hub, Keycloak and draft API (cmd/ai-grid-fak
 dev-fake: build build-fake-infra ## Run the real backend on a fake hub and Keycloak, plus the draft fake
 	@DEV_HOST="$(DEV_HOST)" DEV_GRPC_PORT="$(DEV_GRPC_PORT)" DEV_HUB_PORT="$(DEV_HUB_PORT)" \
 		DEV_HTTP_PORT="$(DEV_HTTP_PORT)" DEV_KEYCLOAK_PORT="$(DEV_KEYCLOAK_PORT)" \
-		DEV_DRAFT_PORT="$(DEV_DRAFT_PORT)" DEV_DRAFT_FIXTURES="$(DEV_DRAFT_FIXTURES)" \
+		DEV_DRAFT_PORT="$(DEV_DRAFT_PORT)" DEV_DRAFT_ADDRESS="$(DEV_DRAFT_ADDRESS)" DEV_DRAFT_FIXTURES="$(DEV_DRAFT_FIXTURES)" \
 		DEV_FIXTURES="$(DEV_FIXTURES)" DEV_KUBECONFIG="$(DEV_KUBECONFIG)" \
 		FAKE_INFRA_BIN="$(FAKE_INFRA_BIN)" BACKEND_BIN="$(BACKEND_BIN)" \
 		bash hack/dev-fake.sh

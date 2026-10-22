@@ -12,6 +12,8 @@ DEV_HUB_PORT="${DEV_HUB_PORT:-9091}"
 DEV_HTTP_PORT="${DEV_HTTP_PORT:-9092}"
 DEV_KEYCLOAK_PORT="${DEV_KEYCLOAK_PORT:-9093}"
 DEV_DRAFT_PORT="${DEV_DRAFT_PORT:-9094}"
+# Set but empty turns the draft fake off (cmd/ai-grid-fake-infra --draft-address "").
+DEV_DRAFT_ADDRESS="${DEV_DRAFT_ADDRESS-$DEV_HOST:$DEV_DRAFT_PORT}"
 DEV_FIXTURES="${DEV_FIXTURES:-fixtures/default}"
 DEV_DRAFT_FIXTURES="${DEV_DRAFT_FIXTURES:-fixtures/draft/default}"
 DEV_KUBECONFIG="${DEV_KUBECONFIG:-bin/fake-kubeconfig}"
@@ -58,7 +60,7 @@ fi
   --fixtures "$DEV_FIXTURES" \
   --hub-address "$DEV_HOST:$DEV_HUB_PORT" \
   --keycloak-address "$DEV_HOST:$DEV_KEYCLOAK_PORT" \
-  --draft-address "$DEV_HOST:$DEV_DRAFT_PORT" \
+  --draft-address "$DEV_DRAFT_ADDRESS" \
   --draft-fixtures "$DEV_DRAFT_FIXTURES" \
   --kubeconfig-out "$DEV_KUBECONFIG" \
   --keycloak-admin-realm "$KC_ADMIN_REALM" \
@@ -99,7 +101,7 @@ dev-fake: fixtures $DEV_FIXTURES, draft fixtures $DEV_DRAFT_FIXTURES
   fake hub API      https://$DEV_HOST:$DEV_HUB_PORT for the backend ($DEV_KUBECONFIG),
                     http://$DEV_HOST:$DEV_HUB_PORT for the console BFF (same port)
   fake Keycloak     http://$DEV_HOST:$DEV_KEYCLOAK_PORT
-  draft API (fake)  $DEV_HOST:$DEV_DRAFT_PORT  gRPC ai_grid.draft.v1, own state from $DEV_DRAFT_FIXTURES
+  draft API (fake)  ${DEV_DRAFT_ADDRESS:-off}  gRPC ai_grid.draft.v1, own state from $DEV_DRAFT_FIXTURES
 Press Ctrl-C to stop both.
 EOF
 

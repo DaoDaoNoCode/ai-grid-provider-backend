@@ -385,7 +385,7 @@ the missing APIs is the **draft**, package `ai_grid.draft.v1`
 (`proto/ai_grid/draft/v1`, generated into `gen/ai_grid/draft/v1`), with a fake
 that implements it in memory (`internal/fakeinfra/draft`, fixtures in
 `fixtures/draft/`). `make dev-fake` serves it on `127.0.0.1:9094`
-(`DEV_DRAFT_PORT`). Both moved here from the console repository at `ac80c25`
+(`DEV_DRAFT_PORT`; `make dev-fake DEV_DRAFT_ADDRESS=` runs without it). Both moved here from the console repository at `ac80c25`
 so the proposal lives next to the real API; [docs/draft/README.md](docs/draft/README.md)
 has the details, the research behind it and a page per area.
 

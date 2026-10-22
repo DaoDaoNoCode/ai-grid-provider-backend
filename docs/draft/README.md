@@ -157,7 +157,8 @@ draft fake   :9094 gRPC (ai_grid.draft.v1, own state from fixtures/draft/*)
 ```
 
 Every port is overridable (`DEV_GRPC_PORT`, `DEV_HUB_PORT`, `DEV_HTTP_PORT`,
-`DEV_KEYCLOAK_PORT`, `DEV_DRAFT_PORT`), and `DEV_DRAFT_FIXTURES` picks the draft fixtures.
+`DEV_KEYCLOAK_PORT`, `DEV_DRAFT_PORT`), `DEV_DRAFT_ADDRESS=` (empty) runs without the draft, and
+`DEV_DRAFT_FIXTURES` picks the draft fixtures.
 `cmd/ai-grid-fake-infra` serves the draft on `--draft-address` (empty disables it) from
 `--draft-fixtures`. No `oc login`, no cluster. The console runs its BFF and frontend in a
 second terminal (see the console's README for the targets; pointing its BFF's draft calls at the draft
