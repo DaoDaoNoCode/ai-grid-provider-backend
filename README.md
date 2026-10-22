@@ -33,7 +33,7 @@ the `google.api.http` annotations off the descriptors at runtime, so there is
 no generated gateway code. The same routes answer on `:8080` as well.
 
 Regenerate protobuf, RPC stubs and OpenAPI with `make generate` (requires [buf](https://buf.build);
-without it, `make generate BUF='go run github.com/bufbuild/buf/cmd/buf@v1.57.2'`). It also
+without it, `make generate BUF='go run github.com/bufbuild/buf/cmd/buf@v1.50.0'`). It also
 generates the console's draft API (see [The console's draft API](#the-consoles-draft-api-ai_griddraftv1)).
 
 ManagedCluster RPCs use the Kubernetes dynamic client against:

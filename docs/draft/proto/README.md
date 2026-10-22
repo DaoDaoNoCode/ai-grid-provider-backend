@@ -12,7 +12,7 @@ shapes it starts from are in `docs/draft/research/backend-conventions.md` sectio
 
 ## What it is
 
-The backend's proto has three RPCs. The console needs more than that, so it carries a
+This backend's real API, `ai_grid.v1`, covers clusters and tenants so far. The console needs more than that, so it carries a
 **draft** of the next proto in `proto/ai_grid/draft/v1/`, split by type as the style guide in
 `docs/draft/research/backend-conventions.md` section 5 says (`ai_grid.proto`, `condition_type.proto`,
 `metadata_type.proto`, `managed_cluster_type.proto`, `managed_clusters_service.proto`,
@@ -43,7 +43,7 @@ backend's `ai_grid.v1`.
   (`buf.build/protocolbuffers/go`, `buf.build/grpc/go`, the same pinned remote plugins as the
   real API) into `gen/ai_grid/draft/v1`. The draft has no HTTP annotations, so there is no
   grpc-gateway or OpenAPI output and nothing in `docs/openapi`. Without `buf` on `PATH`:
-  `make generate BUF='go run github.com/bufbuild/buf/cmd/buf@v1.57.2'`. Run it twice and
+  `make generate BUF='go run github.com/bufbuild/buf/cmd/buf@v1.50.0'`. Run it twice and
   require `git diff --exit-code`, as for the real API.
 - **Lint.** The draft is in the same buf module as `ai_grid.v1` (`proto/buf.yaml`) and passes
   its lint configuration (STANDARD minus `PACKAGE_VERSION_SUFFIX` and `SERVICE_SUFFIX`)

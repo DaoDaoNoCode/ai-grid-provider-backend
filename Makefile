@@ -1,7 +1,7 @@
 SHELL := /usr/bin/env bash
 
 GO := go
-# buf on PATH by default; without it: make generate BUF='go run github.com/bufbuild/buf/cmd/buf@v1.57.2'
+# buf on PATH by default (CI pins 1.50.0 in .github/workflows/ci.yaml); without it: make generate BUF='go run github.com/bufbuild/buf/cmd/buf@v1.50.0'
 BUF ?= buf
 BIN_DIR := bin
 BACKEND_BIN := $(BIN_DIR)/ai-grid-provider-backend

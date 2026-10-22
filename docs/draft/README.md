@@ -272,8 +272,8 @@ assumed do not exist; Istio ones are wired but empty, and GPU utilisation arrive
 `TelemetryPolicy` or the Praxis metering service exists. The POC's overview JSON and its
 deterministic demo generator are transcribed so the fake can reproduce them sample for sample.
 
-**Backend conventions** (`research/backend-conventions.md`). The backend is a single-file
-proto with three RPCs, generated code committed by hand, no interceptors and errors returned
+**Backend conventions** (`research/backend-conventions.md`). When that research was written,
+the backend was a single-file proto with three RPCs, generated code committed by hand, no interceptors and errors returned
 as plain Go errors. It says it is aligned with OSAC's fulfillment-service, whose conventions
 are precise:
 `List/Get/Create/Update/Delete`, offset and limit paging with `size` and `total`, CEL
