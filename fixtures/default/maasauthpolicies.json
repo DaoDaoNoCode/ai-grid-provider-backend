@@ -1,0 +1,72 @@
+{
+  "_comment": "Managed MaaSAuthPolicy objects paired with the seeded subscriptions (<id>-policy), labelled as the Subscriptions server creates them.",
+  "apiVersion": "maas.opendatahub.io/v1alpha1",
+  "kind": "MaaSAuthPolicyList",
+  "metadata": {},
+  "items": [
+    {
+      "apiVersion": "maas.opendatahub.io/v1alpha1",
+      "kind": "MaaSAuthPolicy",
+      "metadata": {
+        "name": "engineering-policy",
+        "namespace": "models-as-a-service",
+        "uid": "a1000002-0000-4000-8000-000000000001",
+        "resourceVersion": "1",
+        "generation": 1,
+        "creationTimestamp": "2026-09-01T09:00:00Z",
+        "labels": {
+          "app.kubernetes.io/managed-by": "ai-grid-provider-backend",
+          "ai-grid/subscription": "engineering"
+        },
+        "annotations": {
+          "openshift.io/display-name": "Engineering",
+          "openshift.io/description": "Production models for the engineering team."
+        }
+      },
+      "spec": {
+        "subjects": {
+          "groups": [{ "name": "engineering" }],
+          "users": []
+        },
+        "modelRefs": [
+          { "name": "granite-8b-instruct", "namespace": "llm" }
+        ]
+      },
+      "status": {
+        "phase": "Active"
+      }
+    },
+    {
+      "apiVersion": "maas.opendatahub.io/v1alpha1",
+      "kind": "MaaSAuthPolicy",
+      "metadata": {
+        "name": "onboarding-policy",
+        "namespace": "models-as-a-service",
+        "uid": "a1000002-0000-4000-8000-000000000002",
+        "resourceVersion": "1",
+        "generation": 1,
+        "creationTimestamp": "2026-09-04T09:00:00Z",
+        "labels": {
+          "app.kubernetes.io/managed-by": "ai-grid-provider-backend",
+          "ai-grid/subscription": "onboarding"
+        },
+        "annotations": {
+          "openshift.io/display-name": "Onboarding",
+          "openshift.io/description": "Trial access for new teams."
+        }
+      },
+      "spec": {
+        "subjects": {
+          "groups": [{ "name": "onboarding" }],
+          "users": []
+        },
+        "modelRefs": [
+          { "name": "tiny-llm", "namespace": "llm" }
+        ]
+      },
+      "status": {
+        "phase": "Active"
+      }
+    }
+  ]
+}

@@ -1,0 +1,60 @@
+{
+  "_comment": "MaaSModelRef catalog entries referenced by the seeded subscriptions. Namespace llm is the backend default for model refs.",
+  "apiVersion": "maas.opendatahub.io/v1alpha1",
+  "kind": "MaaSModelRefList",
+  "metadata": {},
+  "items": [
+    {
+      "apiVersion": "maas.opendatahub.io/v1alpha1",
+      "kind": "MaaSModelRef",
+      "metadata": {
+        "name": "granite-8b-instruct",
+        "namespace": "llm",
+        "uid": "a1000003-0000-4000-8000-000000000001",
+        "resourceVersion": "1",
+        "generation": 1,
+        "creationTimestamp": "2026-08-15T09:00:00Z",
+        "annotations": {
+          "openshift.io/display-name": "Granite 8B Instruct",
+          "openshift.io/description": "Enterprise language model"
+        }
+      },
+      "spec": {
+        "modelRef": {
+          "name": "granite-8b-instruct",
+          "kind": "LLMInferenceService"
+        }
+      },
+      "status": {
+        "phase": "Ready",
+        "endpoint": "https://maas-default-gateway.models-as-a-service.example.com"
+      }
+    },
+    {
+      "apiVersion": "maas.opendatahub.io/v1alpha1",
+      "kind": "MaaSModelRef",
+      "metadata": {
+        "name": "tiny-llm",
+        "namespace": "llm",
+        "uid": "a1000003-0000-4000-8000-000000000002",
+        "resourceVersion": "1",
+        "generation": 1,
+        "creationTimestamp": "2026-08-15T09:00:00Z",
+        "annotations": {
+          "openshift.io/display-name": "Tiny LLM (CPU)",
+          "openshift.io/description": "Small CPU model for trials"
+        }
+      },
+      "spec": {
+        "modelRef": {
+          "name": "tiny-llm",
+          "kind": "LLMInferenceService"
+        }
+      },
+      "status": {
+        "phase": "Ready",
+        "endpoint": "https://maas-default-gateway.models-as-a-service.example.com"
+      }
+    }
+  ]
+}

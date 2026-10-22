@@ -21,6 +21,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	apivalidation "k8s.io/apimachinery/pkg/api/validation"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
@@ -44,6 +45,7 @@ const (
 type Hub struct {
 	mu          sync.Mutex
 	clusters    map[string]*ManagedCluster
+	maas        map[string]map[string]*unstructured.Unstructured // resource -> ns/name -> object
 	rv          int64
 	scenarios   []*scenario
 	detaches    map[string]time.Time
@@ -72,6 +74,7 @@ func WithLogger(logger *slog.Logger) Option { return func(h *Hub) { h.logger = l
 func New(fx *Fixtures, opts ...Option) (*Hub, error) {
 	h := &Hub{
 		clusters:    map[string]*ManagedCluster{},
+		maas:        map[string]map[string]*unstructured.Unstructured{},
 		detaches:    map[string]time.Time{},
 		enabledAt:   map[string]time.Time{},
 		access:      fx.Access,
@@ -122,6 +125,9 @@ func New(fx *Fixtures, opts ...Option) (*Hub, error) {
 		return nil, err
 	}
 	h.scenarios = scenarios
+	if err := seedMAASFixtures(h, fx); err != nil {
+		return nil, err
+	}
 	h.start = h.clock()
 	return h, nil
 }
@@ -141,6 +147,7 @@ func (h *Hub) Handler() http.Handler {
 	mux.HandleFunc("PATCH "+managedClustersPath+"/{name}", h.patch)
 	mux.HandleFunc("DELETE "+managedClustersPath+"/{name}", h.delete)
 	mux.HandleFunc("GET "+policiesPath+"/{namespace}/policies/{name}", h.getPolicy)
+	h.registerMAAS(mux)
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		if _, ok := h.authenticate(w, r); !ok {
 			return
