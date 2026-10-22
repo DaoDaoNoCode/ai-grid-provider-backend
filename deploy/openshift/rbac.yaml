@@ -31,6 +31,27 @@ rules:
     resources: ["policies"]
     resourceNames: ["ai-grid-ready"]
     verbs: ["get"]
+  # Models Delete guards: refuse while MaaSSubscription/MaaSAuthPolicy still reference the model.
+  # Objects live in AI_GRID_SUBSCRIPTION_NAMESPACE (default models-as-a-service).
+  - apiGroups: ["maas.opendatahub.io"]
+    resources: ["maassubscriptions", "maasauthpolicies"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  # Get/List enrich model_refs and return model_registrations from MaaSModelRef.
+  # Models Create/Update/Delete also write MaaSModelRef in AI_GRID_MODELS_NAMESPACE.
+  - apiGroups: ["maas.opendatahub.io"]
+    resources: ["maasmodelrefs"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  # Models CRUD: LLMInferenceService (+ optional Placement / ManifestWorkReplicaSet).
+  # Objects live in AI_GRID_MODELS_NAMESPACE (default ai-grid-internal-models).
+  - apiGroups: ["serving.kserve.io"]
+    resources: ["llminferenceservices"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["cluster.open-cluster-management.io"]
+    resources: ["placements", "placementdecisions"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["work.open-cluster-management.io"]
+    resources: ["manifestworkreplicasets"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
