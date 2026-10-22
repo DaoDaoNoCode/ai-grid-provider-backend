@@ -304,6 +304,70 @@ func TestSubscriptionsUpdateSkipsMissingManagedPolicy(t *testing.T) {
 	}
 }
 
+func TestSubscriptionsListFilterOrderAndPaging(t *testing.T) {
+	t.Parallel()
+
+	srv := mustSubscriptionsServer(t, newSubscriptionClient())
+	ctx := context.Background()
+	for _, tc := range []struct {
+		id       string
+		priority int32
+	}{
+		{"alpha", 10},
+		{"bravo", 30},
+		{"charlie", 20},
+	} {
+		obj := sampleSubscription(tc.id)
+		obj.Spec.Priority = tc.priority
+		if _, err := srv.Create(ctx, &aigridv1.SubscriptionsCreateRequest{Object: obj}); err != nil {
+			t.Fatalf("Create(%s) error = %v", tc.id, err)
+		}
+	}
+
+	filtered, err := srv.List(ctx, &aigridv1.SubscriptionsListRequest{
+		Filter: ptrString(`this.id == "bravo"`),
+	})
+	if err != nil {
+		t.Fatalf("List filter error = %v", err)
+	}
+	if filtered.GetTotal() != 1 || filtered.GetSize() != 1 || filtered.GetItems()[0].GetId() != "bravo" {
+		t.Fatalf("filter by id = %#v", filtered)
+	}
+
+	byPriority, err := srv.List(ctx, &aigridv1.SubscriptionsListRequest{
+		Filter: ptrString(`this.spec.priority >= 20`),
+		Order:  ptrString("-priority"),
+	})
+	if err != nil {
+		t.Fatalf("List priority filter error = %v", err)
+	}
+	if byPriority.GetTotal() != 2 || byPriority.GetItems()[0].GetId() != "bravo" || byPriority.GetItems()[1].GetId() != "charlie" {
+		t.Fatalf("filter+order = %#v", byPriority)
+	}
+
+	limit := int32(1)
+	offset := int32(0)
+	page, err := srv.List(ctx, &aigridv1.SubscriptionsListRequest{
+		Filter: ptrString(`this.spec.priority >= 10`),
+		Order:  ptrString("id"),
+		Limit:  &limit,
+		Offset: &offset,
+	})
+	if err != nil {
+		t.Fatalf("List page error = %v", err)
+	}
+	if page.GetTotal() != 3 || page.GetSize() != 1 || page.GetItems()[0].GetId() != "alpha" {
+		t.Fatalf("paged = size=%d total=%d items=%v", page.GetSize(), page.GetTotal(), page.GetItems())
+	}
+
+	_, err = srv.List(ctx, &aigridv1.SubscriptionsListRequest{Order: ptrString("created_at")})
+	assertConnectCode(t, err, connect.CodeInvalidArgument)
+	_, err = srv.List(ctx, &aigridv1.SubscriptionsListRequest{Filter: ptrString(`this.id ==`)})
+	assertConnectCode(t, err, connect.CodeInvalidArgument)
+}
+
+func ptrString(s string) *string { return &s }
+
 func mustSubscriptionsServer(t *testing.T, client *fake.FakeDynamicClient) *SubscriptionsServer {
 	t.Helper()
 	srv, err := NewSubscriptionsServer().SetDynamicClient(client).Build()

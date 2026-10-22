@@ -16,10 +16,15 @@ message SubscriptionsListRequest {
   // the results will be returned.
   optional int32 limit = 2;
 
-  // Filter criteria (CEL). Empty means no filter. Not evaluated yet.
+  // CEL over `this` (a Subscription, proto field names) and `now` (server time),
+  // with cel-go's standard library plus its strings extension. Empty means all.
+  // Evaluated in memory before order and paging. Indexing a missing map key is
+  // an error (use the `in` guard), not false.
   optional string filter = 3;
 
-  // Order criteria. Empty means undefined order. Not evaluated yet.
+  // Sort key. Empty means `id` ascending. Allowed: id, -id, priority, -priority,
+  // metadata.name, -metadata.name (`-` = descending). Any other value is
+  // InvalidArgument. Applied after filter and before offset/limit.
   optional string order = 4;
 }
 

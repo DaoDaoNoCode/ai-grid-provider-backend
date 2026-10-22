@@ -7,10 +7,12 @@ import (
 	"log/slog"
 	"strconv"
 	"strings"
+	"time"
 
 	connect "connectrpc.com/connect/v2"
 	aigridv1 "github.com/osac-project/ai-grid-provider-backend/gen/ai_grid/v1"
 	"github.com/osac-project/ai-grid-provider-backend/gen/ai_grid/v1/aigridv1connect"
+	"github.com/osac-project/ai-grid-provider-backend/internal/celfilter"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -79,6 +81,7 @@ func (b *SubscriptionsServerBuilder) Build() (*SubscriptionsServer, error) {
 }
 
 // List returns MaaSSubscription objects from the configured namespace.
+// Pipeline: map CRs → CEL filter → allowlisted order → offset/limit → enrich page.
 func (s *SubscriptionsServer) List(ctx context.Context, req *aigridv1.SubscriptionsListRequest) (*aigridv1.SubscriptionsListResponse, error) {
 	list, err := s.client.Resource(maasSubscriptionsResource).Namespace(s.namespace).List(ctx, metav1.ListOptions{})
 	if err != nil {
@@ -91,6 +94,30 @@ func (s *SubscriptionsServer) List(ctx context.Context, req *aigridv1.Subscripti
 	for _, item := range list.Items {
 		items = append(items, subscriptionFromUnstructured(item))
 	}
+
+	filter, err := celfilter.Compile(req.GetFilter(), &aigridv1.Subscription{})
+	if err != nil {
+		return nil, err
+	}
+	if filter != nil {
+		now := time.Now().UTC()
+		matched := make([]*aigridv1.Subscription, 0, len(items))
+		for _, sub := range items {
+			ok, matchErr := filter.Match(ctx, sub, subscriptionSortID(sub), now)
+			if matchErr != nil {
+				return nil, matchErr
+			}
+			if ok {
+				matched = append(matched, sub)
+			}
+		}
+		items = matched
+	}
+
+	if err := applySubscriptionOrder(items, req.Order); err != nil {
+		return nil, err
+	}
+
 	page, total := applyListWindow(items, req.Offset, req.Limit)
 	for _, sub := range page {
 		enrichModelRefsFromAnnotations(sub, s.loadModelRefs(ctx, sub))

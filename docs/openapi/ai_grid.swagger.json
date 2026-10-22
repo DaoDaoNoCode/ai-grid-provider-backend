@@ -301,14 +301,14 @@
           },
           {
             "name": "filter",
-            "description": "Filter criteria (CEL). Empty means no filter. Not evaluated yet.",
+            "description": "CEL over `this` (a Subscription, proto field names) and `now` (server time),\nwith cel-go's standard library plus its strings extension. Empty means all.\nEvaluated in memory before order and paging. Indexing a missing map key is\nan error (use the `in` guard), not false.",
             "in": "query",
             "required": false,
             "type": "string"
           },
           {
             "name": "order",
-            "description": "Order criteria. Empty means undefined order. Not evaluated yet.",
+            "description": "Sort key. Empty means `id` ascending. Allowed: id, -id, priority, -priority,\nmetadata.name, -metadata.name (`-` = descending). Any other value is\nInvalidArgument. Applied after filter and before offset/limit.",
             "in": "query",
             "required": false,
             "type": "string"

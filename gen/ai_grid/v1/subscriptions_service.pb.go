@@ -30,9 +30,14 @@ type SubscriptionsListRequest struct {
 	// Maximum number of results to be returned by the server. When not specified all
 	// the results will be returned.
 	Limit *int32 `protobuf:"varint,2,opt,name=limit,proto3,oneof" json:"limit,omitempty"`
-	// Filter criteria (CEL). Empty means no filter. Not evaluated yet.
+	// CEL over `this` (a Subscription, proto field names) and `now` (server time),
+	// with cel-go's standard library plus its strings extension. Empty means all.
+	// Evaluated in memory before order and paging. Indexing a missing map key is
+	// an error (use the `in` guard), not false.
 	Filter *string `protobuf:"bytes,3,opt,name=filter,proto3,oneof" json:"filter,omitempty"`
-	// Order criteria. Empty means undefined order. Not evaluated yet.
+	// Sort key. Empty means `id` ascending. Allowed: id, -id, priority, -priority,
+	// metadata.name, -metadata.name (`-` = descending). Any other value is
+	// InvalidArgument. Applied after filter and before offset/limit.
 	Order         *string `protobuf:"bytes,4,opt,name=order,proto3,oneof" json:"order,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
