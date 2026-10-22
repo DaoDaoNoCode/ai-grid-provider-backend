@@ -26,7 +26,9 @@ backend's `ai_grid.v1`.
 
 ## In this repository
 
-- **Package and paths.** The files are the console's, byte for byte, except for three kinds of
+- **Package and paths.** The files are the console's, with every message, field, number and type
+  unchanged. What differs: the comment header at the top of each file (rewritten for this
+  repository), two comments that mentioned the console's drift test, and three kinds of
   line: `package ai_grid.draft.v1;`, `option go_package =
   "github.com/osac-project/ai-grid-provider-backend/gen/ai_grid/draft/v1;aigriddraftv1";`,
   and imports of `ai_grid/draft/v1/...`. The package had to change: `ai_grid.v1` here already
@@ -43,8 +45,9 @@ backend's `ai_grid.v1`.
   (`buf.build/protocolbuffers/go`, `buf.build/grpc/go`, the same pinned remote plugins as the
   real API) into `gen/ai_grid/draft/v1`. The draft has no HTTP annotations, so there is no
   grpc-gateway or OpenAPI output and nothing in `docs/openapi`. Without `buf` on `PATH`:
-  `make generate BUF='go run github.com/bufbuild/buf/cmd/buf@v1.50.0'`. Run it twice and
-  require `git diff --exit-code`, as for the real API.
+  `make generate BUF='go run github.com/bufbuild/buf/cmd/buf@v1.50.0'`. `make check-generated`
+  (which CI runs) regenerates both the real API and the draft into a temporary directory and
+  fails on any difference, including a generated file the proto no longer produces.
 - **Lint.** The draft is in the same buf module as `ai_grid.v1` (`proto/buf.yaml`) and passes
   its lint configuration (STANDARD minus `PACKAGE_VERSION_SUFFIX` and `SERVICE_SUFFIX`)
   unchanged: `cd proto && buf lint`.

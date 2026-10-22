@@ -31,7 +31,8 @@ The draft's package is `ai_grid.draft.v1`, not `ai_grid.v1`: this backend's `ai_
 already has files at the same paths (`managed_cluster_type.proto`, `metadata_type.proto`,
 `tenant_type.proto`, `tenants_service.proto`) and messages with the same names, and
 protobuf-go refuses to link two registrations of one name. Every message, field, number and
-comment is otherwise the console's, so the protojson and the field encoding are unchanged;
+type is otherwise the console's (only the file headers and two comments about the console's drift
+test were rewritten for this repository), so the protojson and the field encoding are unchanged;
 the gRPC method paths (`/ai_grid.draft.v1.Models/ListModels`) and the qualified names in CEL
 filters (`ai_grid.draft.v1.ModelPhase.MODEL_PHASE_READY`) carry the new package. The pages
 below were written in the console, where the draft was "`ai_grid.v1`"; read that as
