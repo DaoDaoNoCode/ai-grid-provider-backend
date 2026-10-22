@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"sync"
 	"syscall"
 	"time"
 
@@ -102,7 +103,15 @@ func main() {
 	protocols := new(http.Protocols)
 	protocols.SetHTTP1(true)
 	protocols.SetUnencryptedHTTP2(true)
-	apiServer := &http.Server{Handler: mux, Protocols: protocols}
+	apiServer := &http.Server{
+		Handler:   mux,
+		Protocols: protocols,
+		// grpc-go applied its own limits to slow and idle connections. A bare
+		// net/http server waits on a slow client indefinitely. No WriteTimeout:
+		// it would cut long-running streams.
+		ReadHeaderTimeout: 10 * time.Second,
+		IdleTimeout:       120 * time.Second,
+	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -124,8 +133,13 @@ func main() {
 		slog.Info("shutting down ai-grid-provider-backend")
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
-		_ = gateway.Shutdown(shutdownCtx)
-		_ = apiServer.Shutdown(shutdownCtx)
+		// Concurrently: run in sequence and a REST drain that uses the whole
+		// deadline leaves the RPC server none, cutting calls still in flight.
+		var wg sync.WaitGroup
+		wg.Add(2)
+		go func() { defer wg.Done(); _ = gateway.Shutdown(shutdownCtx) }()
+		go func() { defer wg.Done(); _ = apiServer.Shutdown(shutdownCtx) }()
+		wg.Wait()
 	}()
 
 	go func() {

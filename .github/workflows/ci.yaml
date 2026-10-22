@@ -73,13 +73,11 @@ jobs:
           version: ${{ env.BUF_VERSION }}
 
       - name: Verify generated files are up to date
-        run: |
-          make generate
-          git add -N gen docs/openapi internal/restgateway/openapi || true
-          if ! git diff --exit-code -- gen docs/openapi/ai_grid.swagger.json internal/restgateway/openapi/ai_grid.swagger.json; then
-            echo "::error::Generated files are out of date. Run 'make generate' and commit the results."
-            exit 1
-          fi
+        # check-generated generates into a temporary directory and compares, so
+        # it also catches a file the protobuf no longer produces — which a diff
+        # of the worktree cannot, because an orphaned generated file is
+        # committed and unmodified.
+        run: make check-generated
 
   # Last job: needs the checks, so a merge whose checks failed never ships.
   # sha-<full sha> is the tag to deploy; latest tracks main; semver comes

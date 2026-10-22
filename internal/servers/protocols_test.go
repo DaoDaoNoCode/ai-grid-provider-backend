@@ -2,12 +2,10 @@ package servers
 
 import (
 	"context"
-	"crypto/tls"
 	"encoding/json"
 	"errors"
 	"github.com/osac-project/ai-grid-provider-backend/internal/keycloak"
 	"io"
-	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -18,7 +16,6 @@ import (
 	aigridv1 "github.com/osac-project/ai-grid-provider-backend/gen/ai_grid/v1"
 	"github.com/osac-project/ai-grid-provider-backend/gen/ai_grid/v1/aigridv1connect"
 	"github.com/osac-project/ai-grid-provider-backend/internal/restgateway"
-	"golang.org/x/net/http2"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -143,14 +140,11 @@ func startBackendWithTenants(t *testing.T, tenants organizationClient, objects .
 	backend.Start()
 	t.Cleanup(backend.Close)
 
-	// Plaintext HTTP/2, which is what the deployed service listens for.
-	httpClient := &http.Client{Transport: &http2.Transport{
-		AllowHTTP: true,
-		DialTLSContext: func(ctx context.Context, network, addr string, _ *tls.Config) (net.Conn, error) {
-			var dialer net.Dialer
-			return dialer.DialContext(ctx, network, addr)
-		},
-	}}
+	// Plaintext HTTP/2, which is what the deployed service listens for. The
+	// standard library handles this now; x/net/http2.Transport is deprecated.
+	clientProtocols := new(http.Protocols)
+	clientProtocols.SetUnencryptedHTTP2(true)
+	httpClient := &http.Client{Transport: &http.Transport{Protocols: clientProtocols}}
 	return backend.URL, httpClient
 }
 
@@ -269,5 +263,93 @@ func TestRESTCustomVerbRoutes(t *testing.T) {
 	body, status := get(t, httpClient, baseURL+"/api/v1/tenants/11111111-1111-4111-8111-111111111111:listMembers")
 	if status != http.StatusOK {
 		t.Fatalf("status = %d, want 200 for the custom verb, body = %s", status, body)
+	}
+}
+
+// A REST PATCH that names only some fields must leave the rest alone.
+// grpc-gateway inferred the field mask from the JSON body; vanguard does not,
+// so the handler sees an empty mask and has to infer it the way the Clusters
+// handler already does. Without that, a name-only PATCH wipes the domains.
+func TestRESTPatchWithoutMaskKeepsUnnamedFields(t *testing.T) {
+	t.Parallel()
+
+	const id = "11111111-1111-4111-8111-111111111111"
+	store := newFakeOrganizationStore(keycloak.Organization{
+		ID: id, Name: "acme", Domains: []keycloak.OrganizationDomain{{Name: "acme.example.com"}},
+	})
+	baseURL, httpClient := startBackendWithTenants(t, store)
+
+	body, status := patch(t, httpClient, baseURL+"/api/v1/tenants/"+id, `{"metadata":{"name":"acme-two"}}`)
+	if status != http.StatusOK {
+		t.Fatalf("PATCH status = %d, want 200, body = %s", status, body)
+	}
+	if !strings.Contains(body, "acme.example.com") {
+		t.Errorf("PATCH response dropped the domains: %s", body)
+	}
+
+	body, status = get(t, httpClient, baseURL+"/api/v1/tenants/"+id)
+	if status != http.StatusOK {
+		t.Fatalf("GET status = %d, want 200, body = %s", status, body)
+	}
+	if !strings.Contains(body, "acme.example.com") {
+		t.Errorf("a name-only PATCH cleared the stored domains: %s", body)
+	}
+	if !strings.Contains(body, "acme-two") {
+		t.Errorf("the PATCH did not apply the new name: %s", body)
+	}
+}
+
+func patch(t *testing.T, client connecthttp.HTTPClient, url, body string) (string, int) {
+	t.Helper()
+	request, err := http.NewRequest(http.MethodPatch, url, strings.NewReader(body))
+	if err != nil {
+		t.Fatalf("new request: %v", err)
+	}
+	request.Header.Set("Content-Type", "application/json")
+	response, err := client.Do(request)
+	if err != nil {
+		t.Fatalf("PATCH %s: %v", url, err)
+	}
+	defer response.Body.Close()
+	out, err := io.ReadAll(response.Body)
+	if err != nil {
+		t.Fatalf("read body: %v", err)
+	}
+	return string(out), response.StatusCode
+}
+
+// A browser sends Connect over HTTP/1.1, not the plaintext HTTP/2 the other
+// cases here use. Connect is a plain POST with a JSON body, so this is the
+// shape the console actually produces.
+func TestConnectOverHTTP1(t *testing.T) {
+	t.Parallel()
+
+	baseURL, _ := startBackend(t)
+
+	request, err := http.NewRequest(http.MethodPost,
+		baseURL+"/ai_grid.v1.AiGrid/Ping", strings.NewReader(`{"name":"browser"}`))
+	if err != nil {
+		t.Fatalf("new request: %v", err)
+	}
+	request.Header.Set("Content-Type", "application/json")
+
+	// Default transport: HTTP/1.1, no prior knowledge of HTTP/2.
+	response, err := (&http.Client{}).Do(request)
+	if err != nil {
+		t.Fatalf("POST: %v", err)
+	}
+	defer response.Body.Close()
+	if response.ProtoMajor != 1 {
+		t.Fatalf("served over HTTP/%d, want HTTP/1.x", response.ProtoMajor)
+	}
+	body, err := io.ReadAll(response.Body)
+	if err != nil {
+		t.Fatalf("read body: %v", err)
+	}
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200, body = %s", response.StatusCode, body)
+	}
+	if !strings.Contains(string(body), "Welcome, browser!") {
+		t.Errorf("body = %s, want the greeting", body)
 	}
 }

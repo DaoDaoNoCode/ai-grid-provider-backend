@@ -166,7 +166,7 @@ func (s *TenantsServer) Update(ctx context.Context, req *aigridv1.TenantsUpdateR
 		return nil, mapTenantKeycloakError("get", id, err)
 	}
 
-	updateName, updateDomains, nameRequired, err := tenantUpdatePaths(req.GetUpdateMask())
+	updateName, updateDomains, nameRequired, err := tenantUpdatePaths(req.GetUpdateMask(), req.GetObject())
 	if err != nil {
 		return nil, err
 	}
@@ -298,9 +298,15 @@ func domainsFromTenantSpec(spec *aigridv1.TenantSpec) ([]keycloak.OrganizationDo
 // id is accepted as a no-op (REST PATCH body masks often include it).
 // Unsupported paths are rejected. nameRequired is true when an explicit mask
 // selects the name (empty mask updates name but may preserve when absent).
-func tenantUpdatePaths(mask *fieldmaskpb.FieldMask) (name, domains, nameRequired bool, err error) {
+// tenantUpdatePaths decides which fields an Update writes.
+//
+// An empty mask is inferred from the object, as the Clusters handler does: a
+// REST PATCH arrives without one, because vanguard does not synthesise a mask
+// from the JSON body the way grpc-gateway did. Treating an empty mask as "write
+// everything" made a name-only PATCH clear the tenant's domains.
+func tenantUpdatePaths(mask *fieldmaskpb.FieldMask, object *aigridv1.Tenant) (name, domains, nameRequired bool, err error) {
 	if mask == nil || len(mask.GetPaths()) == 0 {
-		return true, true, false, nil
+		return object.GetMetadata() != nil, object.GetSpec() != nil, false, nil
 	}
 	for _, path := range mask.GetPaths() {
 		p := strings.TrimPrefix(path, "object.")
