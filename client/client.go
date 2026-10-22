@@ -172,7 +172,7 @@ func (c *Client) ListTenantMembers(ctx context.Context, id string) ([]*aigridv1.
 	return response.GetItems(), nil
 }
 
-// ListSubscriptions returns Subscription objects (empty until storage is implemented).
+// ListSubscriptions returns Subscription objects from the MaaS namespace.
 func (c *Client) ListSubscriptions(ctx context.Context) ([]*aigridv1.Subscription, error) {
 	response, err := c.subscriptions.List(ctx, &aigridv1.SubscriptionsListRequest{})
 	if err != nil {

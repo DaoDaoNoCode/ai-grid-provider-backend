@@ -27,6 +27,18 @@ var managedClustersResource = schema.GroupVersionResource{
 	Group: "cluster.open-cluster-management.io", Version: "v1", Resource: "managedclusters",
 }
 
+var maasSubscriptionsResource = schema.GroupVersionResource{
+	Group: "maas.opendatahub.io", Version: "v1alpha1", Resource: "maassubscriptions",
+}
+
+var maasAuthPoliciesResource = schema.GroupVersionResource{
+	Group: "maas.opendatahub.io", Version: "v1alpha1", Resource: "maasauthpolicies",
+}
+
+var maasModelRefsResource = schema.GroupVersionResource{
+	Group: "maas.opendatahub.io", Version: "v1alpha1", Resource: "maasmodelrefs",
+}
+
 func TestBuilderValidation(t *testing.T) {
 	t.Parallel()
 
@@ -206,7 +218,7 @@ func TestClientListTenants(t *testing.T) {
 	}
 }
 
-func TestClientSubscriptionsPlaceholder(t *testing.T) {
+func TestClientSubscriptionsCRUD(t *testing.T) {
 	t.Parallel()
 
 	c, cleanup := startTestClient(t, nil, fakeOrganizationLister{})
@@ -221,21 +233,47 @@ func TestClientSubscriptionsPlaceholder(t *testing.T) {
 		t.Fatalf("ListSubscriptions() len = %d, want 0", len(items))
 	}
 
+	created, err := c.CreateSubscription(ctx, &aigridv1.Subscription{
+		Id:       "free-subscription",
+		Metadata: &aigridv1.Metadata{Name: "free-subscription"},
+		Spec: &aigridv1.SubscriptionSpec{
+			Owner: &aigridv1.SubscriptionOwner{Groups: []string{"system:authenticated"}},
+			ModelRefs: []*aigridv1.SubscriptionModelRef{
+				{Name: "sim-model", TokenRateLimits: []*aigridv1.TokenRateLimit{{Limit: 100, Window: "1m"}}},
+			},
+			Priority: 10,
+		},
+	})
+	if err != nil {
+		t.Fatalf("CreateSubscription() error = %v", err)
+	}
+	if created.GetId() != "free-subscription" {
+		t.Fatalf("CreateSubscription id = %q", created.GetId())
+	}
+
+	got, err := c.GetSubscription(ctx, "free-subscription")
+	if err != nil {
+		t.Fatalf("GetSubscription() error = %v", err)
+	}
+	if got.GetSpec().GetPriority() != 10 {
+		t.Fatalf("priority = %d", got.GetSpec().GetPriority())
+	}
+
+	got.Spec.Priority = 20
+	updated, err := c.UpdateSubscription(ctx, got, nil)
+	if err != nil {
+		t.Fatalf("UpdateSubscription() error = %v", err)
+	}
+	if updated.GetSpec().GetPriority() != 20 {
+		t.Fatalf("updated priority = %d", updated.GetSpec().GetPriority())
+	}
+
+	if err := c.DeleteSubscription(ctx, "free-subscription"); err != nil {
+		t.Fatalf("DeleteSubscription() error = %v", err)
+	}
 	_, err = c.GetSubscription(ctx, "free-subscription")
-	if status.Code(err) != codes.Unimplemented {
-		t.Fatalf("GetSubscription() code = %v, want Unimplemented (%v)", status.Code(err), err)
-	}
-	_, err = c.CreateSubscription(ctx, &aigridv1.Subscription{Id: "free-subscription"})
-	if status.Code(err) != codes.Unimplemented {
-		t.Fatalf("CreateSubscription() code = %v, want Unimplemented (%v)", status.Code(err), err)
-	}
-	_, err = c.UpdateSubscription(ctx, &aigridv1.Subscription{Id: "free-subscription"}, nil)
-	if status.Code(err) != codes.Unimplemented {
-		t.Fatalf("UpdateSubscription() code = %v, want Unimplemented (%v)", status.Code(err), err)
-	}
-	err = c.DeleteSubscription(ctx, "free-subscription")
-	if status.Code(err) != codes.Unimplemented {
-		t.Fatalf("DeleteSubscription() code = %v, want Unimplemented (%v)", status.Code(err), err)
+	if status.Code(err) != codes.NotFound {
+		t.Fatalf("Get after delete code = %v (%v)", status.Code(err), err)
 	}
 }
 
@@ -365,7 +403,10 @@ func startTestClient(t *testing.T, objects []runtime.Object, orgs organizationCl
 	dynamicClient := fake.NewSimpleDynamicClientWithCustomListKinds(
 		runtime.NewScheme(),
 		map[schema.GroupVersionResource]string{
-			managedClustersResource: "ManagedClusterList",
+			managedClustersResource:   "ManagedClusterList",
+			maasSubscriptionsResource: "MaaSSubscriptionList",
+			maasAuthPoliciesResource:  "MaaSAuthPolicyList",
+			maasModelRefsResource:     "MaaSModelRefList",
 		},
 		objects...,
 	)
@@ -386,7 +427,9 @@ func startTestClient(t *testing.T, objects []runtime.Object, orgs organizationCl
 	if err != nil {
 		t.Fatalf("build Tenants server: %v", err)
 	}
-	subscriptionsServer, err := servers.NewSubscriptionsServer().Build()
+	subscriptionsServer, err := servers.NewSubscriptionsServer().
+		SetDynamicClient(dynamicClient).
+		Build()
 	if err != nil {
 		t.Fatalf("build Subscriptions server: %v", err)
 	}

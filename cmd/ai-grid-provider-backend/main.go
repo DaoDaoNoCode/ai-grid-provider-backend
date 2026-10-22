@@ -71,7 +71,10 @@ func main() {
 		fmt.Fprintf(os.Stderr, "build Tenants server: %v\n", err)
 		os.Exit(1)
 	}
-	subscriptionsServer, err := servers.NewSubscriptionsServer().Build()
+	subscriptionsServer, err := servers.NewSubscriptionsServer().
+		SetDynamicClient(kubeClient).
+		SetNamespace(getEnv("AI_GRID_SUBSCRIPTION_NAMESPACE", "models-as-a-service")).
+		Build()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "build Subscriptions server: %v\n", err)
 		os.Exit(1)

@@ -31,6 +31,15 @@ rules:
     resources: ["policies"]
     resourceNames: ["ai-grid-ready"]
     verbs: ["get"]
+  # Subscriptions CRUD (+ managed AuthPolicy side-effect) against MaaS CRs.
+  # Objects live in AI_GRID_SUBSCRIPTION_NAMESPACE (default models-as-a-service).
+  - apiGroups: ["maas.opendatahub.io"]
+    resources: ["maassubscriptions", "maasauthpolicies"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  # Get/List enrich model_refs and return model_registrations from MaaSModelRef.
+  - apiGroups: ["maas.opendatahub.io"]
+    resources: ["maasmodelrefs"]
+    verbs: ["get", "list", "watch"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding

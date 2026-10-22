@@ -26,6 +26,18 @@ var managedClustersResource = schema.GroupVersionResource{
 	Group: "cluster.open-cluster-management.io", Version: "v1", Resource: "managedclusters",
 }
 
+var maasSubscriptionsResource = schema.GroupVersionResource{
+	Group: "maas.opendatahub.io", Version: "v1alpha1", Resource: "maassubscriptions",
+}
+
+var maasAuthPoliciesResource = schema.GroupVersionResource{
+	Group: "maas.opendatahub.io", Version: "v1alpha1", Resource: "maasauthpolicies",
+}
+
+var maasModelRefsResource = schema.GroupVersionResource{
+	Group: "maas.opendatahub.io", Version: "v1alpha1", Resource: "maasmodelrefs",
+}
+
 func TestRESTGatewayRoutes(t *testing.T) {
 	t.Parallel()
 
@@ -115,15 +127,15 @@ func TestRESTGatewayRoutes(t *testing.T) {
 		}
 	})
 
-	t.Run("get subscription unimplemented", func(t *testing.T) {
+	t.Run("get subscription not found", func(t *testing.T) {
 		resp, err := client.Get(baseURL + "/api/v1/subscriptions/free-subscription")
 		if err != nil {
 			t.Fatalf("GET subscription: %v", err)
 		}
 		defer resp.Body.Close()
-		if resp.StatusCode != http.StatusNotImplemented {
+		if resp.StatusCode != http.StatusNotFound {
 			body, _ := io.ReadAll(resp.Body)
-			t.Fatalf("status = %d, want 501 (%s)", resp.StatusCode, body)
+			t.Fatalf("status = %d, want 404 (%s)", resp.StatusCode, body)
 		}
 	})
 
@@ -343,7 +355,10 @@ func startGateway(t *testing.T, objects []runtime.Object, orgs organizationClien
 	dynamicClient := fake.NewSimpleDynamicClientWithCustomListKinds(
 		runtime.NewScheme(),
 		map[schema.GroupVersionResource]string{
-			managedClustersResource: "ManagedClusterList",
+			managedClustersResource:   "ManagedClusterList",
+			maasSubscriptionsResource: "MaaSSubscriptionList",
+			maasAuthPoliciesResource:  "MaaSAuthPolicyList",
+			maasModelRefsResource:     "MaaSModelRefList",
 		},
 		objects...,
 	)
@@ -364,7 +379,9 @@ func startGateway(t *testing.T, objects []runtime.Object, orgs organizationClien
 	if err != nil {
 		t.Fatalf("build Tenants server: %v", err)
 	}
-	subscriptionsServer, err := servers.NewSubscriptionsServer().Build()
+	subscriptionsServer, err := servers.NewSubscriptionsServer().
+		SetDynamicClient(dynamicClient).
+		Build()
 	if err != nil {
 		t.Fatalf("build Subscriptions server: %v", err)
 	}
