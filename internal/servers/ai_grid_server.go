@@ -1,8 +1,8 @@
 package servers
 
 import (
+	connect "connectrpc.com/connect/v2"
 	"context"
-	"errors"
 	"fmt"
 	"log/slog"
 
@@ -46,7 +46,7 @@ func (b *AiGridServerBuilder) Build() (*AiGridServer, error) {
 // Ping returns a greeting for the requested name.
 func (s *AiGridServer) Ping(_ context.Context, request *aigridv1.AiGridPingRequest) (*aigridv1.AiGridPingResponse, error) {
 	if request == nil {
-		return nil, errors.New("request is required")
+		return nil, connect.Errorf(connect.CodeInvalidArgument, "request is required")
 	}
 	name := request.GetName()
 	if name == "" {

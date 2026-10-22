@@ -84,7 +84,10 @@ func main() {
 		aigridv1connect.ClustersName,
 		aigridv1connect.TenantsName,
 	))
-	// Reflection reports whatever is registered on the server, health included.
+	// Reflection lists the three API services. It does not list grpc.health.v1.Health:
+	// grpchealth/v2 registers its methods without a protobuf Schema and grpcreflect
+	// skips schema-less methods. Health/Check by name and `grpcurl describe` both work,
+	// which is what hack/smoke-apis.sh relies on.
 	grpcreflect.Register(server)
 
 	mux := http.NewServeMux()
@@ -110,7 +113,13 @@ func main() {
 		os.Exit(1)
 	}
 
+	// http.Server.Shutdown makes Serve return ErrServerClosed immediately, so main
+	// must wait for the drain itself: "Make sure the program doesn't exit and waits
+	// instead for Shutdown to return." grpc-go's Serve used to block until
+	// GracefulStop finished, so without this a pod termination cuts off live RPCs.
+	drained := make(chan struct{})
 	go func() {
+		defer close(drained)
 		<-ctx.Done()
 		slog.Info("shutting down ai-grid-provider-backend")
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -131,6 +140,7 @@ func main() {
 		fmt.Fprintf(os.Stderr, "RPC server: %v\n", err)
 		os.Exit(1)
 	}
+	<-drained
 }
 
 func getEnv(name, fallback string) string {

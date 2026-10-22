@@ -4,7 +4,6 @@ import (
 	connect "connectrpc.com/connect/v2"
 	"context"
 	"errors"
-	"fmt"
 	"log/slog"
 	"regexp"
 	"strings"
@@ -88,7 +87,7 @@ func (b *TenantsServerBuilder) Build() (*TenantsServer, error) {
 // List returns Keycloak Organizations from the configured realm.
 func (s *TenantsServer) List(ctx context.Context, req *aigridv1.TenantsListRequest) (*aigridv1.TenantsListResponse, error) {
 	if s.tenants == nil {
-		return nil, fmt.Errorf("keycloak tenant client is not configured")
+		return nil, connect.Errorf(connect.CodeInternal, "keycloak tenant client is not configured")
 	}
 	organizations, err := s.tenants.ListOrganizations(ctx)
 	if err != nil {
@@ -374,22 +373,25 @@ func mapTenantKeycloakError(op, id string, err error) error {
 	switch {
 	case keycloak.IsNotFound(err):
 		if id == "" {
-			return connect.Errorf(connect.CodeNotFound, "tenant not found")
+			return connect.Errorf(connect.CodeNotFound, "tenant not found").WithCause(err)
 		}
-		return connect.Errorf(connect.CodeNotFound, "tenant %q not found", id)
+		return connect.Errorf(connect.CodeNotFound, "tenant %q not found", id).WithCause(err)
 	case keycloak.IsConflict(err):
 		if id == "" {
-			return connect.Errorf(connect.CodeAlreadyExists, "tenant already exists")
+			return connect.Errorf(connect.CodeAlreadyExists, "tenant already exists").WithCause(err)
 		}
-		return connect.Errorf(connect.CodeAlreadyExists, "tenant %q already exists", id)
+		return connect.Errorf(connect.CodeAlreadyExists, "tenant %q already exists", id).WithCause(err)
 	case keycloak.IsBadRequest(err):
-		return connect.Errorf(connect.CodeInvalidArgument, "%s tenant %q: %v", op, id, err)
+		return connect.Errorf(connect.CodeInvalidArgument, "%s tenant %q: %v", op, id, err).WithCause(err)
 	case keycloak.IsForbidden(err):
-		return connect.Errorf(connect.CodePermissionDenied, "%s tenant %q: %v", op, id, err)
+		return connect.Errorf(connect.CodePermissionDenied, "%s tenant %q: %v", op, id, err).WithCause(err)
 	default:
+		// Coded, not bare: connect-go v2 scrubs an uncoded error to "unknown"
+		// with an empty message, so a Keycloak outage would reach the console
+		// blank.
 		if id == "" {
-			return fmt.Errorf("%s tenants: %w", op, err)
+			return connect.Errorf(connect.CodeInternal, "%s tenants: %v", op, err).WithCause(err)
 		}
-		return fmt.Errorf("%s tenant %q: %w", op, id, err)
+		return connect.Errorf(connect.CodeInternal, "%s tenant %q: %v", op, id, err).WithCause(err)
 	}
 }

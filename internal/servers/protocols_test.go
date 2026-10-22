@@ -4,6 +4,8 @@ import (
 	"context"
 	"crypto/tls"
 	"encoding/json"
+	"errors"
+	"github.com/osac-project/ai-grid-provider-backend/internal/keycloak"
 	"io"
 	"net"
 	"net/http"
@@ -108,6 +110,14 @@ func TestEveryProtocol(t *testing.T) {
 
 func startBackend(t *testing.T, objects ...runtime.Object) (string, connecthttp.HTTPClient) {
 	t.Helper()
+	return startBackendWithTenants(t, newFakeOrganizationStore(), objects...)
+}
+
+// startBackendWithTenants registers every service the binary does. Tenants is
+// registered too: without it nothing here exercises the Tenants handlers over
+// the wire, which is how a plain Go error reaching a client went unnoticed.
+func startBackendWithTenants(t *testing.T, tenants organizationClient, objects ...runtime.Object) (string, connecthttp.HTTPClient) {
+	t.Helper()
 
 	aiGridServer, err := NewAiGridServer().Build()
 	if err != nil {
@@ -117,6 +127,7 @@ func startBackend(t *testing.T, objects ...runtime.Object) (string, connecthttp.
 	server := connect.NewServer()
 	aigridv1connect.RegisterAiGridHandler(server, aiGridServer)
 	aigridv1connect.RegisterClustersHandler(server, mustClustersServer(t, newManagedClusterClient(objects...)))
+	aigridv1connect.RegisterTenantsHandler(server, mustTenantsServer(t, tenants))
 
 	mux := http.NewServeMux()
 	connecthttp.Mount(mux, server)
@@ -202,5 +213,61 @@ func TestUnmappedKubernetesErrorKeepsItsMessage(t *testing.T) {
 	// The assertion that matters: an uncoded error would arrive empty here.
 	if !strings.Contains(err.Error(), "ManagedCluster") {
 		t.Errorf("error = %q, want it to name the resource; an uncoded error is scrubbed to an empty message", err)
+	}
+}
+
+// A backend failure on a list path must reach the caller with its message.
+// connect-go v2 scrubs an uncoded handler error to "unknown" with an empty wire
+// message, so a plain fmt.Errorf here showed the console a blank error. Covers
+// both list paths, which had no wire-level coverage at all.
+func TestListFailuresKeepTheirMessage(t *testing.T) {
+	t.Parallel()
+
+	store := newFakeOrganizationStore()
+	store.listErr = errors.New("keycloak is unreachable")
+	baseURL, httpClient := startBackendWithTenants(t, store)
+	client := connect.NewClient(connecthttp.NewTransport(httpClient, baseURL))
+
+	_, err := aigridv1connect.NewTenantsClient(client).List(context.Background(), &aigridv1.TenantsListRequest{})
+	if err == nil {
+		t.Fatal("Tenants.List() error = nil, want the Keycloak failure to surface")
+	}
+	if got := connect.CodeOf(err); got != connect.CodeInternal {
+		t.Errorf("code = %v, want %v", got, connect.CodeInternal)
+	}
+	if !strings.Contains(err.Error(), "keycloak is unreachable") {
+		t.Errorf("error = %q, want the cause in the message; an uncoded error arrives empty", err)
+	}
+}
+
+// grpc-gateway skipped a query parameter it could not map. vanguard rejects one
+// unless told otherwise, so a cache-buster or a tracking parameter would turn a
+// working request into a 400.
+func TestRESTIgnoresUnknownQueryParameters(t *testing.T) {
+	t.Parallel()
+
+	baseURL, httpClient := startBackend(t, managedCluster("cluster-a", nil, true))
+
+	body, status := get(t, httpClient, baseURL+"/api/v1/clusters?_=1730000000&utm_source=test")
+	if status != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (unknown query parameters must be ignored), body = %s", status, body)
+	}
+	if !strings.Contains(body, "cluster-a") {
+		t.Errorf("body = %s, want it to list cluster-a", body)
+	}
+}
+
+// A custom verb (":listMembers") is a path shape net/http cannot route and a
+// transcoder has to handle itself. It is the one route form in this contract
+// that is not plain CRUD.
+func TestRESTCustomVerbRoutes(t *testing.T) {
+	t.Parallel()
+
+	store := newFakeOrganizationStore(keycloak.Organization{ID: "11111111-1111-4111-8111-111111111111", Name: "acme"})
+	baseURL, httpClient := startBackendWithTenants(t, store)
+
+	body, status := get(t, httpClient, baseURL+"/api/v1/tenants/11111111-1111-4111-8111-111111111111:listMembers")
+	if status != http.StatusOK {
+		t.Fatalf("status = %d, want 200 for the custom verb, body = %s", status, body)
 	}
 }

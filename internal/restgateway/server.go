@@ -90,7 +90,15 @@ func (s *Server) Shutdown(ctx context.Context) error {
 // listener that offers REST goes through here, so they all answer the same
 // JSON.
 func Mount(mux connecthttp.ServeMux, server *connect.Server) error {
-	if err := vanguard.Mount(mux, server, vanguard.WithCodec(newRESTCodec)); err != nil {
+	// DiscardUnknownQueryParams keeps grpc-gateway's behaviour: it skipped a
+	// parameter it could not map, reasoning it "could just be an extra query
+	// parameter that isn't part of the request". vanguard rejects one by
+	// default, so without this a cache-buster or a tracking parameter turns a
+	// working request into a 400.
+	if err := vanguard.Mount(mux, server,
+		vanguard.WithCodec(newRESTCodec),
+		vanguard.WithDiscardUnknownQueryParams(true),
+	); err != nil {
 		return fmt.Errorf("mount REST handlers: %w", err)
 	}
 	return nil

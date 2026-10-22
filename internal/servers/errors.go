@@ -7,8 +7,12 @@ import (
 
 // Every error a handler returns must be a *connect.Error, built here or with
 // connect.Errorf: connect-go reads the code and the wire message from nothing
-// else. An ordinary Go error reaches the caller as "unknown" with no message,
-// its text kept only as a local cause.
+// else. An ordinary Go error reaches the caller as "unknown" with no message.
+//
+// connect.Errorf formats with Sprintf and attaches nothing, so WithCause carries
+// the original error alongside: the wire message is unchanged, and errors.Is and
+// errors.As still reach the cause from an interceptor or a log line. AGENTS.md
+// and docs/API.md require that chain to survive.
 
 // staleClusterError is the Aborted error for a write against an old version.
 func staleClusterError(op, id string) *connect.Error {
@@ -29,16 +33,16 @@ func staleClusterError(op, id string) *connect.Error {
 func mapManagedClusterAPIError(op, id string, err error) error {
 	switch {
 	case apierrors.IsNotFound(err):
-		return connect.Errorf(connect.CodeNotFound, "ManagedCluster %q not found", id)
+		return connect.Errorf(connect.CodeNotFound, "ManagedCluster %q not found", id).WithCause(err)
 	case apierrors.IsAlreadyExists(err):
-		return connect.Errorf(connect.CodeAlreadyExists, "ManagedCluster %q already exists", id)
+		return connect.Errorf(connect.CodeAlreadyExists, "ManagedCluster %q already exists", id).WithCause(err)
 	case apierrors.IsInvalid(err), apierrors.IsBadRequest(err):
-		return connect.Errorf(connect.CodeInvalidArgument, "%s ManagedCluster %q: %v", op, id, err)
+		return connect.Errorf(connect.CodeInvalidArgument, "%s ManagedCluster %q: %v", op, id, err).WithCause(err)
 	case apierrors.IsConflict(err):
-		return staleClusterError(op, id)
+		return staleClusterError(op, id).WithCause(err)
 	case apierrors.IsForbidden(err), apierrors.IsUnauthorized(err):
-		return connect.Errorf(connect.CodePermissionDenied, "%s ManagedCluster %q: %v", op, id, err)
+		return connect.Errorf(connect.CodePermissionDenied, "%s ManagedCluster %q: %v", op, id, err).WithCause(err)
 	default:
-		return connect.Errorf(connect.CodeInternal, "%s ManagedCluster %q: %v", op, id, err)
+		return connect.Errorf(connect.CodeInternal, "%s ManagedCluster %q: %v", op, id, err).WithCause(err)
 	}
 }

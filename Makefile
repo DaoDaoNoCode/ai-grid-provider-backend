@@ -115,6 +115,10 @@ check-generated: ## fail when the committed output differs from what proto/ gene
 	sed -e "s#out: \.\./gen\$$#out: $$tmp/gen#" \
 	    -e "s#out: \.\./docs/openapi\$$#out: $$tmp/openapi#" \
 	    proto/buf.gen.yaml > "$$tmp/buf.gen.yaml" && \
+	if grep -q "out: \.\./" "$$tmp/buf.gen.yaml"; then \
+	  echo "check-generated: an out: path in proto/buf.gen.yaml was not redirected; the check would compare the real output with itself" >&2; \
+	  exit 1; \
+	fi && \
 	(cd proto && buf generate --template "$$tmp/buf.gen.yaml") && \
 	diff -r "$$tmp/gen/ai_grid/v1" gen/ai_grid/v1 && \
 	diff -r "$$tmp/openapi" docs/openapi && \

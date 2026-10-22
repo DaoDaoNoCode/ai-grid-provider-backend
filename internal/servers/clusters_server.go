@@ -108,7 +108,7 @@ func (s *ClustersServer) List(ctx context.Context, req *aigridv1.ClustersListReq
 		if apierrors.IsNotFound(err) {
 			return &aigridv1.ClustersListResponse{}, nil
 		}
-		return nil, fmt.Errorf("list ManagedCluster resources: %w", err)
+		return nil, connect.Errorf(connect.CodeInternal, "list ManagedCluster resources: %v", err).WithCause(err)
 	}
 
 	provisioning := s.provisioning(ctx)
@@ -258,7 +258,7 @@ func (s *ClustersServer) Update(ctx context.Context, req *aigridv1.ClustersUpdat
 
 	patchBytes, err := json.Marshal(patchBody)
 	if err != nil {
-		return nil, fmt.Errorf("marshal ManagedCluster patch: %w", err)
+		return nil, connect.Errorf(connect.CodeInternal, "marshal ManagedCluster patch: %v", err).WithCause(err)
 	}
 
 	updated, err := s.client.Resource(managedClustersResource).Patch(
