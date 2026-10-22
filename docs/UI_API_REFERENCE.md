@@ -78,8 +78,8 @@ realm** — not a per-tenant identifier.
 | --- | --- | --- |
 | `offset` | int32 | Start index; default `0` |
 | `limit` | int32 | Max items; omit = all |
-| `filter` | string | CEL filter — **accepted, not evaluated yet** |
-| `order` | string | Sort — **accepted, not evaluated yet** |
+| `filter` | string | CEL filter. **Subscriptions evaluate it** (see below). Clusters and Tenants accept but do not evaluate yet. |
+| `order` | string | Sort. **Subscriptions use an allowlist** (see below). Clusters and Tenants accept but do not evaluate yet. |
 
 ### Error body
 
@@ -521,6 +521,18 @@ Display name / description for the subscription itself stay in
 
 Subscription ids must leave room for the `-policy` suffix (max 56 chars).
 
+**List `filter` / `order`:** applied as filter → order → offset/limit, then
+ModelRef enrichment on the page only. `total` is the match count after filter.
+
+- `filter`: CEL over `this` (a Subscription, proto field names) and `now`, with
+  cel-go plus `ext.Strings()`. Empty means all. Example:
+  `this.spec.priority >= 10 && this.id.lowerAscii().contains("eng")`.
+  Indexing a missing map key fails the whole List (`InvalidArgument`); guard with
+  `"k" in this.metadata.labels && …`.
+- `order`: empty means `id` ascending. Allowed: `id`, `-id`, `priority`,
+  `-priority`, `metadata.name`, `-metadata.name` (`-` = descending). Anything
+  else is `InvalidArgument`.
+
 ### `Subscription.spec`
 
 | Field | Type | Notes |
@@ -593,7 +605,8 @@ Do not expect these from provider-backend today:
 - Separate AuthPolicies RPC / optional `create_auth_policy=false`
 - API keys (dataplane `maas-api`)
 - Nested collection URLs (everything is flat under `/api/v1/...`; member list uses `:listMembers`)
-- Evaluated `filter` / `order` (Subscriptions accept but ignore them)
+- Evaluated `filter` / `order` on Clusters and Tenants (Subscriptions evaluate both)
+- Console PoC-flat Subscription shape (OSAC `id`/`metadata`/`spec`/`status` is the API)
 - PoC-shaped flat `GridCluster` arrays or PoC tenant + IdP config blobs
 - `flowControlStatuses` on Subscription status
 
