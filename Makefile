@@ -183,7 +183,7 @@ run: ## Run the API locally (gRPC :8080, REST/Swagger :8081)
 		--kubeconfig=$(KUBECONFIG_PATH)
 
 # Requires a running API (make run) plus hub kubeconfig + Keycloak for full coverage.
-# SKIP_CLUSTERS=1 / SKIP_TENANTS=1 to exercise a subset.
+# SKIP_CLUSTERS=1 / SKIP_TENANTS=1 / SKIP_SUBSCRIPTIONS=1 to exercise a subset.
 smoke: ## Live gRPC/REST smoke against localhost:8080/:8081
 	GRPC_ADDR=$(GRPC_ADDR) HTTP_ADDR=$(HTTP_ADDR) bash hack/smoke-apis.sh
 	@if [[ "$(SKIP_CLUSTERS)" != "1" ]]; then \

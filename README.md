@@ -20,11 +20,11 @@ The current API includes:
 - `ai_grid.v1.Tenants/Create`
 - `ai_grid.v1.Tenants/Update`
 - `ai_grid.v1.Tenants/Delete`
-- `ai_grid.v1.Subscriptions/List` (placeholder: empty list)
-- `ai_grid.v1.Subscriptions/Get` (placeholder: Unimplemented)
-- `ai_grid.v1.Subscriptions/Create` (placeholder: Unimplemented)
-- `ai_grid.v1.Subscriptions/Update` (placeholder: Unimplemented)
-- `ai_grid.v1.Subscriptions/Delete` (placeholder: Unimplemented)
+- `ai_grid.v1.Subscriptions/List`
+- `ai_grid.v1.Subscriptions/Get` (joins covering AuthPolicies + ModelRegistrations)
+- `ai_grid.v1.Subscriptions/Create` (managed `MaaSAuthPolicy` `<id>-policy`; returned in response)
+- `ai_grid.v1.Subscriptions/Update` (syncs managed AuthPolicy when present)
+- `ai_grid.v1.Subscriptions/Delete` (deletes managed AuthPolicy when present)
 
 REST and Swagger UI are also exposed on HTTP `:8081`:
 
@@ -46,6 +46,19 @@ ManagedCluster RPCs use the Kubernetes dynamic client against:
 ```text
 cluster.open-cluster-management.io/v1/managedclusters
 ```
+
+Subscriptions RPCs use the same dynamic client against namespaced MaaS CRs
+(default namespace `models-as-a-service`, override with
+`AI_GRID_SUBSCRIPTION_NAMESPACE`):
+
+```text
+maas.opendatahub.io/v1alpha1/maassubscriptions
+maas.opendatahub.io/v1alpha1/maasauthpolicies   # managed <id>-policy side-effect
+```
+
+Point `--kubeconfig` at a cluster that has those CRDs (for example an RHOAI
+spoke with MaaS). Create/Update/Delete always maintain a paired AuthPolicy
+named `<subscription-id>-policy` when managed by this service.
 
 The service runs in-cluster using its Kubernetes ServiceAccount. Its RBAC role
 allows `get`, `list`, `watch`, `create`, `update`, `patch`, and `delete` on
@@ -331,7 +344,8 @@ preset contains and where it comes from.
 
 ```sh
 make dev-fake                         # fixtures/default: ten clusters in every ACM state, six organizations,
-                                      # and a timeline (a cluster joins at 20s, one detaches at 30s, ...)
+                                      # MaaS subscriptions/auth policies/model refs, and a timeline
+                                      # (a cluster joins at 20s, one detaches at 30s, ...)
 make dev-fake-poc                     # fixtures/poc: the PoC's four sites and three organizations, static
                                       # (and fixtures/draft/poc for the draft fake)
 make dev-fake DEV_GRPC_PORT=19090 DEV_HUB_PORT=19091 DEV_HTTP_PORT=19092 DEV_KEYCLOAK_PORT=19093 DEV_DRAFT_PORT=19094
@@ -339,7 +353,9 @@ make dev-fake DEV_GRPC_PORT=19090 DEV_HUB_PORT=19091 DEV_HTTP_PORT=19092 DEV_KEY
 
 curl -s http://127.0.0.1:9092/api/v1/clusters
 curl -s http://127.0.0.1:9092/api/v1/tenants
+curl -s http://127.0.0.1:9092/api/v1/subscriptions
 grpcurl -plaintext -d '{"id":"site-paris-1"}' 127.0.0.1:9090 ai_grid.v1.Clusters/Get
+grpcurl -plaintext -d '{"id":"engineering"}' 127.0.0.1:9090 ai_grid.v1.Subscriptions/Get
 ```
 
 Writes go to the fakes' memory and are gone on restart. A cluster deleted
