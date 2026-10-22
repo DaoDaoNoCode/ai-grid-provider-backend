@@ -462,3 +462,67 @@ func TestOrganizationIDFromLocation(t *testing.T) {
 		t.Fatalf("empty got %q", got)
 	}
 }
+
+// TestUpdateOrganizationRoundTripsUnmodelledKeys reads an organization shaped
+// like a Keycloak 26 one with a linked identity provider and writes it back
+// with no domains: the keys Organization doesn't model go back unchanged, and
+// the domains key is an empty list, because Keycloak keeps the stored domains
+// when a PUT leaves the key out.
+func TestUpdateOrganizationRoundTripsUnmodelledKeys(t *testing.T) {
+	t.Parallel()
+
+	stored := `{"id":"org-1","name":"org1","alias":"org1","enabled":true,` +
+		`"attributes":{"billing-id":["keep-me"]},` +
+		`"domains":[{"name":"org1.example.com","verified":false,"identityProviderAlias":"org1-idp","autoRedirect":false}],` +
+		`"identityProviders":[{"alias":"org1-idp","hideOnLogin":true,"config":{"kc.org.domain":"org1.example.com"}}],` +
+		`"futureField":{"nested":[1,2]}}`
+	var putBody []byte
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.Contains(r.URL.Path, "/token"):
+			_ = json.NewEncoder(w).Encode(map[string]string{"access_token": "test-token"})
+		case r.Method == http.MethodGet:
+			_, _ = io.WriteString(w, stored)
+		case r.Method == http.MethodPut:
+			putBody, _ = io.ReadAll(r.Body)
+			w.WriteHeader(http.StatusNoContent)
+		default:
+			http.Error(w, "method", http.StatusMethodNotAllowed)
+		}
+	}))
+	t.Cleanup(server.Close)
+	client := New(Config{
+		BaseURL: server.URL, AdminRealm: "master", Realm: "ai-grid",
+		Username: "admin", Password: "admin", HTTPClient: server.Client(),
+	})
+	ctx := context.Background()
+
+	current, err := client.GetOrganization(ctx, "org-1")
+	if err != nil {
+		t.Fatalf("GetOrganization() error = %v", err)
+	}
+	if _, err := client.UpdateOrganization(ctx, current); err != nil {
+		t.Fatalf("UpdateOrganization() error = %v", err)
+	}
+	var want, got map[string]any
+	if err := json.Unmarshal([]byte(stored), &want); err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(putBody, &got); err != nil {
+		t.Fatalf("decode PUT body: %v (%s)", err, putBody)
+	}
+	if fmt.Sprint(got) != fmt.Sprint(want) {
+		t.Fatalf("PUT body changed the representation:\n got %v\nwant %v", got, want)
+	}
+
+	current.Domains = nil
+	if _, err := client.UpdateOrganization(ctx, current); err != nil {
+		t.Fatalf("UpdateOrganization(no domains) error = %v", err)
+	}
+	if !strings.Contains(string(putBody), `"domains":[]`) {
+		t.Fatalf("PUT without domains = %s, want \"domains\":[]", putBody)
+	}
+	if !strings.Contains(string(putBody), `"identityProviders"`) {
+		t.Fatalf("PUT dropped identityProviders: %s", putBody)
+	}
+}

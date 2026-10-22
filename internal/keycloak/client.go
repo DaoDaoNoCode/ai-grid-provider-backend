@@ -9,6 +9,8 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"reflect"
+	"slices"
 	"strconv"
 	"strings"
 )
@@ -53,10 +55,32 @@ type tokenResponse struct {
 	AccessToken string `json:"access_token"`
 }
 
-// OrganizationDomain is a domain on a Keycloak Organization.
+// OrganizationDomain is a domain on a Keycloak Organization. Keys this type
+// doesn't model (such as identityProviderAlias) are kept in Extra and written
+// back unchanged.
 type OrganizationDomain struct {
-	Name     string `json:"name"`
-	Verified bool   `json:"verified,omitempty"`
+	Name     string                     `json:"name"`
+	Verified bool                       `json:"verified"`
+	Extra    map[string]json.RawMessage `json:"-"`
+}
+
+type organizationDomainFields OrganizationDomain
+
+// UnmarshalJSON keeps the keys OrganizationDomain doesn't model in Extra.
+func (d *OrganizationDomain) UnmarshalJSON(data []byte) error {
+	var fields organizationDomainFields
+	extra, err := unmarshalWithExtra(data, &fields)
+	if err != nil {
+		return err
+	}
+	*d = OrganizationDomain(fields)
+	d.Extra = extra
+	return nil
+}
+
+// MarshalJSON writes Extra back beside the modelled keys.
+func (d OrganizationDomain) MarshalJSON() ([]byte, error) {
+	return marshalWithExtra(organizationDomainFields(d), d.Extra)
 }
 
 // OrganizationMember is a Keycloak user belonging to an Organization.
@@ -73,16 +97,98 @@ type OrganizationMember struct {
 
 // Organization is a Keycloak Organization in the configured realm.
 // Extra fields (Enabled, Description, RedirectURL, Attributes) are preserved
-// through GET→modify→PUT so Keycloak replacement semantics do not clear them.
+// through GET→modify→PUT so Keycloak replacement semantics do not clear them,
+// and so are the keys this type doesn't model, in Extra.
+//
+// Domains is always written, as [] when empty: Keycloak leaves the stored
+// domains unchanged when a PUT has no domains key, so an update that removes
+// the last domain must send an empty list.
 type Organization struct {
-	ID          string               `json:"id,omitempty"`
-	Name        string               `json:"name"`
-	Alias       string               `json:"alias,omitempty"`
-	Enabled     *bool                `json:"enabled,omitempty"`
-	Description string               `json:"description,omitempty"`
-	RedirectURL string               `json:"redirectUrl,omitempty"`
-	Attributes  map[string][]string  `json:"attributes,omitempty"`
-	Domains     []OrganizationDomain `json:"domains,omitempty"`
+	ID          string                     `json:"id,omitempty"`
+	Name        string                     `json:"name"`
+	Alias       string                     `json:"alias,omitempty"`
+	Enabled     *bool                      `json:"enabled,omitempty"`
+	Description string                     `json:"description,omitempty"`
+	RedirectURL string                     `json:"redirectUrl,omitempty"`
+	Attributes  map[string][]string        `json:"attributes,omitempty"`
+	Domains     []OrganizationDomain       `json:"domains"`
+	Extra       map[string]json.RawMessage `json:"-"`
+}
+
+type organizationFields Organization
+
+// UnmarshalJSON keeps the keys Organization doesn't model in Extra.
+func (o *Organization) UnmarshalJSON(data []byte) error {
+	var fields organizationFields
+	extra, err := unmarshalWithExtra(data, &fields)
+	if err != nil {
+		return err
+	}
+	*o = Organization(fields)
+	o.Extra = extra
+	return nil
+}
+
+// MarshalJSON writes Extra back beside the modelled keys.
+func (o Organization) MarshalJSON() ([]byte, error) {
+	if o.Domains == nil {
+		o.Domains = []OrganizationDomain{}
+	}
+	return marshalWithExtra(organizationFields(o), o.Extra)
+}
+
+// unmarshalWithExtra decodes data into fields and returns the top-level keys
+// that fields has no JSON name for.
+func unmarshalWithExtra(data []byte, fields any) (map[string]json.RawMessage, error) {
+	if err := json.Unmarshal(data, fields); err != nil {
+		return nil, err
+	}
+	var all map[string]json.RawMessage
+	if err := json.Unmarshal(data, &all); err != nil {
+		return nil, err
+	}
+	for _, key := range jsonFieldNames(fields) {
+		delete(all, key)
+	}
+	if len(all) == 0 {
+		return nil, nil
+	}
+	return all, nil
+}
+
+// marshalWithExtra encodes fields, then adds each Extra key it didn't write.
+func marshalWithExtra(fields any, extra map[string]json.RawMessage) ([]byte, error) {
+	data, err := json.Marshal(fields)
+	if err != nil || len(extra) == 0 {
+		return data, err
+	}
+	var out map[string]json.RawMessage
+	if err := json.Unmarshal(data, &out); err != nil {
+		return nil, err
+	}
+	for key, value := range extra {
+		if !slices.Contains(jsonFieldNames(fields), key) {
+			out[key] = value
+		}
+	}
+	return json.Marshal(out)
+}
+
+// jsonFieldNames lists the JSON names of a struct's fields, including those
+// omitted as empty, so an omitted modelled key is never taken for an extra.
+func jsonFieldNames(v any) []string {
+	t := reflect.TypeOf(v)
+	if t.Kind() == reflect.Pointer {
+		t = t.Elem()
+	}
+	var names []string
+	for i := range t.NumField() {
+		name, _, _ := strings.Cut(t.Field(i).Tag.Get("json"), ",")
+		if name != "" && name != "-" {
+			names = append(names, name)
+		}
+	}
+	return names
 }
 
 // APIError is a non-2xx response from the Keycloak Admin API.
@@ -129,7 +235,9 @@ func (c *Client) ListOrganizations(ctx context.Context) ([]Organization, error) 
 	if err != nil {
 		return nil, err
 	}
-	endpoint := c.orgsURL() + "?first=0&max=" + strconv.Itoa(100)
+	// The full representation carries the attributes, where this backend
+	// keeps each tenant's version and creation time.
+	endpoint := c.orgsURL() + "?briefRepresentation=false&first=0&max=" + strconv.Itoa(100)
 	var organizations []Organization
 	if err := c.doJSON(ctx, http.MethodGet, endpoint, token, nil, &organizations, "list organizations"); err != nil {
 		return nil, err
