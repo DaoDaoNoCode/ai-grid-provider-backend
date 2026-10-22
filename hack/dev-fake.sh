@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# Runs the fake infrastructure (bin/ai-grid-fake-infra: fake hub API and fake
-# Keycloak) and the real, unmodified ai-grid-provider-backend against it, in
-# one terminal. Ctrl-C or SIGTERM stops both. `make dev-fake` and
+# Runs the fake infrastructure (bin/ai-grid-fake-infra: fake hub API, fake
+# Keycloak and the fake of the console's draft API, ai_grid.draft.v1) and the
+# real, unmodified ai-grid-provider-backend against it, in one terminal. Ctrl-C or SIGTERM stops both. `make dev-fake` and
 # `make dev-fake-poc` build both binaries and call this script; the DEV_*
 # variables come from the Makefile.
 set -euo pipefail
@@ -11,7 +11,11 @@ DEV_GRPC_PORT="${DEV_GRPC_PORT:-9090}"
 DEV_HUB_PORT="${DEV_HUB_PORT:-9091}"
 DEV_HTTP_PORT="${DEV_HTTP_PORT:-9092}"
 DEV_KEYCLOAK_PORT="${DEV_KEYCLOAK_PORT:-9093}"
+DEV_DRAFT_PORT="${DEV_DRAFT_PORT:-9094}"
+# Set but empty turns the draft fake off (cmd/ai-grid-fake-infra --draft-address "").
+DEV_DRAFT_ADDRESS="${DEV_DRAFT_ADDRESS-$DEV_HOST:$DEV_DRAFT_PORT}"
 DEV_FIXTURES="${DEV_FIXTURES:-fixtures/default}"
+DEV_DRAFT_FIXTURES="${DEV_DRAFT_FIXTURES:-fixtures/draft/default}"
 DEV_KUBECONFIG="${DEV_KUBECONFIG:-bin/fake-kubeconfig}"
 FAKE_INFRA_BIN="${FAKE_INFRA_BIN:-bin/ai-grid-fake-infra}"
 BACKEND_BIN="${BACKEND_BIN:-bin/ai-grid-provider-backend}"
@@ -56,6 +60,8 @@ fi
   --fixtures "$DEV_FIXTURES" \
   --hub-address "$DEV_HOST:$DEV_HUB_PORT" \
   --keycloak-address "$DEV_HOST:$DEV_KEYCLOAK_PORT" \
+  --draft-address "$DEV_DRAFT_ADDRESS" \
+  --draft-fixtures "$DEV_DRAFT_FIXTURES" \
   --kubeconfig-out "$DEV_KUBECONFIG" \
   --keycloak-admin-realm "$KC_ADMIN_REALM" \
   --keycloak-realm "$KC_REALM" \
@@ -63,7 +69,7 @@ fi
   --keycloak-admin-password "$KC_ADMIN_PASSWORD" &
 infra_pid=$!
 
-# The kubeconfig appears once both fakes are listening.
+# The kubeconfig appears once every fake is listening.
 for _ in $(seq 1 100); do
   [[ -f "$DEV_KUBECONFIG" ]] && break
   if ! kill -0 "$infra_pid" 2>/dev/null; then
@@ -89,12 +95,13 @@ KEYCLOAK_ADMIN_PASSWORD="$KC_ADMIN_PASSWORD" \
 backend_pid=$!
 
 cat <<EOF
-dev-fake: fixtures $DEV_FIXTURES
+dev-fake: fixtures $DEV_FIXTURES, draft fixtures $DEV_DRAFT_FIXTURES
   backend gRPC      $DEV_HOST:$DEV_GRPC_PORT
   backend REST      http://$DEV_HOST:$DEV_HTTP_PORT/api/v1/clusters  (Swagger UI /docs/)
   fake hub API      https://$DEV_HOST:$DEV_HUB_PORT for the backend ($DEV_KUBECONFIG),
                     http://$DEV_HOST:$DEV_HUB_PORT for the console BFF (same port)
   fake Keycloak     http://$DEV_HOST:$DEV_KEYCLOAK_PORT
+  draft API (fake)  ${DEV_DRAFT_ADDRESS:-off}  gRPC ai_grid.draft.v1, own state from $DEV_DRAFT_FIXTURES
 Press Ctrl-C to stop both.
 EOF
 

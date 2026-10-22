@@ -1,0 +1,89 @@
+// DRAFT: the console's PROPOSAL for the APIs this backend doesn't implement yet. It is not
+// this backend's API, which is ai_grid.v1 (proto/ai_grid/v1).
+//
+// Moved from the console repository (ai-grid-cloud/ai-grid-provider-console,
+// mock/proto/ai_grid/v1 at ac80c25), with the package renamed to ai_grid.draft.v1. It began
+// as a superset of the first backend's three RPCs plus the shapes drafted in
+// docs/draft/research/backend-conventions.md section 6. Only the draft fake
+// (internal/fakeinfra/draft, started by make dev-fake) serves it, over gRPC, for the
+// console's BFF. Nothing here checks it against ai_grid.v1: the console's drift test
+// stayed in the console.
+//
+// When this backend implements an area, that area's RPCs and fake code are deleted here
+// and the console moves to ai_grid.v1 (docs/draft/README.md).
+
+syntax = "proto3";
+
+package ai_grid.draft.v1;
+
+import "ai_grid/draft/v1/model_type.proto";
+import "ai_grid/draft/v1/subscription_type.proto";
+
+option go_package = "github.com/osac-project/ai-grid-provider-backend/gen/ai_grid/draft/v1;aigriddraftv1";
+
+// MaaS subscriptions and the authorization policies paired with them.
+service Subscriptions {
+  // Lists every subscription.
+  rpc ListSubscriptions(ListSubscriptionsRequest) returns (ListSubscriptionsResponse);
+  // The subscription, the models it references, the auth policies that cover them
+  // and the models' MaaS registrations.
+  rpc GetSubscription(GetSubscriptionRequest) returns (GetSubscriptionResponse);
+  // With create_auth_policy, also creates <name>-policy for the same groups and models.
+  // AlreadyExists when the name is taken, or an authorization policy this service didn't
+  // create already has the policy's name.
+  rpc CreateSubscription(CreateSubscriptionRequest) returns (CreateSubscriptionResponse);
+  // Replaces the editable fields and applies the groups and models to <name>-policy when
+  // this service created it; never touches other authorization policies. With lock,
+  // Aborted unless object.resource_version is the current one.
+  rpc UpdateSubscription(UpdateSubscriptionRequest) returns (UpdateSubscriptionResponse);
+  // Also deletes <name>-policy when this service created it. FailedPrecondition while the
+  // subscription is being deleted.
+  rpc DeleteSubscription(DeleteSubscriptionRequest) returns (DeleteSubscriptionResponse);
+}
+
+message ListSubscriptionsRequest {}
+
+message ListSubscriptionsResponse {
+  repeated Subscription subscriptions = 1;
+}
+
+message GetSubscriptionRequest {
+  string name = 1;
+}
+
+message GetSubscriptionResponse {
+  Subscription subscription = 1;
+  repeated Model model_refs = 2;
+  repeated AuthPolicy auth_policies = 3;
+  // Proposal for the ai-grid-backend owners; implemented in the fake (P12,
+  // field 4). The MaaSModelRef status of each referenced model that exists.
+  repeated ModelRegistration model_registrations = 4;
+}
+
+message CreateSubscriptionRequest {
+  Subscription object = 1;
+  bool create_auth_policy = 2;
+}
+
+message CreateSubscriptionResponse {
+  Subscription subscription = 1;
+  // Set when create_auth_policy was.
+  AuthPolicy auth_policy = 2;
+}
+
+message UpdateSubscriptionRequest {
+  Subscription object = 1;
+  bool lock = 2;
+}
+
+message UpdateSubscriptionResponse {
+  Subscription subscription = 1;
+}
+
+message DeleteSubscriptionRequest {
+  string name = 1;
+  // When set, Aborted unless it matches the current version.
+  string resource_version = 2;
+}
+
+message DeleteSubscriptionResponse {}

@@ -1,0 +1,16 @@
+{
+  "_comment": "The LLMInferenceServiceConfig presets installed in the RHOAI applications namespace, which spec.baseRefs resolve against (mock/research/models-maas.md section 1; 26 non-early-access presets named v3-6-0-kserve-config-llm-* at the time of writing, including the scheduler EPP-config presets). The list here is the subset the console uses or the research names; the accelerator variants are left out. A baseRef outside this list is accepted by the API server and fails later with PresetsCombined=False/ConfigNotFound, as on the hub. Names are versioned by RHOAI release (open question 10), so they live in a fixture rather than in code.",
+  "namespace": "redhat-ods-applications",
+  "presets": [
+    "v3-6-0-kserve-config-llm-template",
+    "v3-6-0-kserve-config-llm-template-cpu",
+    "v3-6-0-kserve-config-llm-scheduler",
+    "v3-6-0-kserve-config-llm-scheduler-eppconfig-default",
+    "v3-6-0-kserve-config-llm-router-route",
+    "v3-6-0-kserve-config-llm-decode-template",
+    "v3-6-0-kserve-config-llm-prefill-template",
+    "v3-6-0-kserve-config-llm-tokenizer",
+    "v3-6-0-kserve-config-llm-tracing",
+    "v3-6-0-kserve-config-llm-worker-data-parallel"
+  ]
+}

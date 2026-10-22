@@ -15,6 +15,10 @@ at commit `537df38`:
 | `default/` | `mock/fixtures/` | Ten clusters in every state the ACM console distinguishes, six organizations, a timeline of cluster events. |
 | `poc/` | `mock/fixtures-poc/` | The PoC's four sites (`site1`-`site4`) and three organizations; no timeline, so nothing changes over time. |
 
+`draft/` is different: the draft fake's fixtures, the console's protojson of its draft API
+copied **verbatim, not converted**. `hack/convert-console-fixtures` and everything below about
+the conversion apply only to `default/` and `poc/`. See [`draft/README.md`](draft/README.md).
+
 The console's fixtures are protojson of its draft `ai_grid.v1` proto, which
 mirrors the hub's `ManagedCluster` and Keycloak's Organization field by
 field. The files here are the real objects again, so the real backend reads

@@ -1,19 +1,26 @@
 SHELL := /usr/bin/env bash
 
 GO := go
+# buf on PATH by default (CI pins 1.50.0 in .github/workflows/ci.yaml); without it: make generate BUF='go run github.com/bufbuild/buf/cmd/buf@v1.50.0'
+BUF ?= buf
 BIN_DIR := bin
 BACKEND_BIN := $(BIN_DIR)/ai-grid-provider-backend
 FAKE_INFRA_BIN := $(BIN_DIR)/ai-grid-fake-infra
 
 # Dev mode with fake infrastructure (make dev-fake). Override any of these,
 # for example `make dev-fake DEV_GRPC_PORT=19090`. gRPC 9090 is what the
-# console BFF dials by default; 9091 is where it sends SelfSubjectAccessReview.
+# console BFF dials by default; 9091 is where it sends SelfSubjectAccessReview;
+# 9094 serves the console's draft API (ai_grid.draft.v1, docs/draft/README.md).
 DEV_HOST ?= 127.0.0.1
 DEV_GRPC_PORT ?= 9090
 DEV_HUB_PORT ?= 9091
 DEV_HTTP_PORT ?= 9092
 DEV_KEYCLOAK_PORT ?= 9093
+DEV_DRAFT_PORT ?= 9094
+# make dev-fake DEV_DRAFT_ADDRESS= runs without the draft fake.
+DEV_DRAFT_ADDRESS ?= $(DEV_HOST):$(DEV_DRAFT_PORT)
 DEV_FIXTURES ?= fixtures/default
+DEV_DRAFT_FIXTURES ?= fixtures/draft/default
 DEV_KUBECONFIG ?= $(BIN_DIR)/fake-kubeconfig
 
 # Container image (Podman preferred). Override with IMAGE=... TAG=dev.
@@ -65,23 +72,24 @@ unit: ## Run unit tests (excludes Kind integration)
 
 test: unit ## Alias for unit
 
-build-fake-infra: ## Build the fake hub and Keycloak (cmd/ai-grid-fake-infra)
+build-fake-infra: ## Build the fake hub, Keycloak and draft API (cmd/ai-grid-fake-infra)
 	mkdir -p $(BIN_DIR)
 	$(GO) build -buildvcs=false -trimpath -o $(FAKE_INFRA_BIN) ./cmd/ai-grid-fake-infra
 
-# Runs the fake hub API and fake Keycloak (cmd/ai-grid-fake-infra) and the real
-# backend against them in one terminal; Ctrl-C stops both. See README.md,
+# Runs the fake hub API, fake Keycloak and draft fake (cmd/ai-grid-fake-infra)
+# and the real backend against them in one terminal; Ctrl-C stops both. See README.md,
 # "Dev mode with fake infrastructure".
-dev-fake: build build-fake-infra ## Run the real backend on a fake hub and Keycloak
+dev-fake: build build-fake-infra ## Run the real backend on a fake hub and Keycloak, plus the draft fake
 	@DEV_HOST="$(DEV_HOST)" DEV_GRPC_PORT="$(DEV_GRPC_PORT)" DEV_HUB_PORT="$(DEV_HUB_PORT)" \
 		DEV_HTTP_PORT="$(DEV_HTTP_PORT)" DEV_KEYCLOAK_PORT="$(DEV_KEYCLOAK_PORT)" \
+		DEV_DRAFT_PORT="$(DEV_DRAFT_PORT)" DEV_DRAFT_ADDRESS="$(DEV_DRAFT_ADDRESS)" DEV_DRAFT_FIXTURES="$(DEV_DRAFT_FIXTURES)" \
 		DEV_FIXTURES="$(DEV_FIXTURES)" DEV_KUBECONFIG="$(DEV_KUBECONFIG)" \
 		FAKE_INFRA_BIN="$(FAKE_INFRA_BIN)" BACKEND_BIN="$(BACKEND_BIN)" \
 		bash hack/dev-fake.sh
 
-# The same on the PoC preset (fixtures/poc).
-dev-fake-poc: ## dev-fake on the PoC preset (fixtures/poc)
-	@$(MAKE) --no-print-directory dev-fake DEV_FIXTURES=fixtures/poc
+# The same on the PoC preset (fixtures/poc, fixtures/draft/poc).
+dev-fake-poc: ## dev-fake on the PoC preset (fixtures/poc, fixtures/draft/poc)
+	@$(MAKE) --no-print-directory dev-fake DEV_FIXTURES=fixtures/poc DEV_DRAFT_FIXTURES=fixtures/draft/poc
 
 vet:
 	$(GO) vet ./...
@@ -99,9 +107,11 @@ lint: fmt-check vet ## gofmt check, go vet; golangci-lint when installed
 		echo "golangci-lint not installed; gofmt and go vet completed"; \
 	fi
 
-# Regenerates protobuf, gRPC, Connect, and OpenAPI (OSAC-style buf pipeline).
-generate: ## Regenerate protobuf, RPC stubs, and OpenAPI
-	cd proto && buf dep update && buf generate
+# Regenerates protobuf, gRPC, Connect, and OpenAPI (OSAC-style buf pipeline) for ai_grid.v1,
+# then Go and gRPC only for the console's draft, ai_grid.draft.v1 (proto/buf.gen.draft.yaml,
+# docs/draft/proto/README.md).
+generate: ## Regenerate protobuf, RPC stubs, OpenAPI, and the draft's Go code
+	cd proto && $(BUF) dep update && $(BUF) generate && $(BUF) generate --template buf.gen.draft.yaml
 	# Drop legacy monolithic stubs if a prior generate left them behind.
 	rm -f gen/ai_grid/v1/ai_grid.pb.go gen/ai_grid/v1/ai_grid_grpc.pb.go gen/ai_grid/v1/ai_grid.pb.gw.go
 	mkdir -p internal/restgateway/openapi
@@ -119,10 +129,17 @@ check-generated: ## fail when the committed output differs from what proto/ gene
 	  echo "check-generated: an out: path in proto/buf.gen.yaml was not redirected; the check would compare the real output with itself" >&2; \
 	  exit 1; \
 	fi && \
-	(cd proto && buf generate --template "$$tmp/buf.gen.yaml") && \
+	(cd proto && $(BUF) generate --template "$$tmp/buf.gen.yaml") && \
 	diff -r "$$tmp/gen/ai_grid/v1" gen/ai_grid/v1 && \
 	diff -r "$$tmp/openapi" docs/openapi && \
-	diff "$$tmp/openapi/ai_grid.swagger.json" internal/restgateway/openapi/ai_grid.swagger.json
+	diff "$$tmp/openapi/ai_grid.swagger.json" internal/restgateway/openapi/ai_grid.swagger.json && \
+	sed -e "s#out: \.\./gen\$$#out: $$tmp/gen#" proto/buf.gen.draft.yaml > "$$tmp/buf.gen.draft.yaml" && \
+	if grep -q "out: \.\./" "$$tmp/buf.gen.draft.yaml"; then \
+	  echo "check-generated: an out: path in proto/buf.gen.draft.yaml was not redirected" >&2; \
+	  exit 1; \
+	fi && \
+	(cd proto && $(BUF) generate --template "$$tmp/buf.gen.draft.yaml") && \
+	diff -r "$$tmp/gen/ai_grid/draft/v1" gen/ai_grid/draft/v1
 
 verify: build unit lint ## Build binary + unit tests + lint
 

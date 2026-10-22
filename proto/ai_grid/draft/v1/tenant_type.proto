@@ -1,0 +1,156 @@
+// DRAFT: the console's PROPOSAL for the APIs this backend doesn't implement yet. It is not
+// this backend's API, which is ai_grid.v1 (proto/ai_grid/v1).
+//
+// Moved from the console repository (ai-grid-cloud/ai-grid-provider-console,
+// mock/proto/ai_grid/v1 at ac80c25), with the package renamed to ai_grid.draft.v1. It began
+// as a superset of the first backend's three RPCs plus the shapes drafted in
+// docs/draft/research/backend-conventions.md section 6. Only the draft fake
+// (internal/fakeinfra/draft, started by make dev-fake) serves it, over gRPC, for the
+// console's BFF. Nothing here checks it against ai_grid.v1: the console's drift test
+// stayed in the console.
+//
+// When this backend implements an area, that area's RPCs and fake code are deleted here
+// and the console moves to ai_grid.v1 (docs/draft/README.md).
+
+syntax = "proto3";
+
+package ai_grid.draft.v1;
+
+option go_package = "github.com/osac-project/ai-grid-provider-backend/gen/ai_grid/draft/v1;aigriddraftv1";
+
+import "google/protobuf/timestamp.proto";
+
+// A consumer organisation. Backed by a Keycloak Organization in the AI Grid realm.
+//
+// Fields 1-3 are the ones the backend ships and must not move. New fields are
+// appended. Keycloak serialises with NON_NULL, so an unset `description`
+// and an organization without domains arrive without those keys; in proto
+// that is the empty string and the empty list, nothing more to do.
+message Tenant {
+  // Field 8 was `version`, removed together with `UpdateTenantRequest.lock`
+  // before the first tagged release because Keycloak Organizations have no
+  // server-side version, etag or Last-Modified (mock/research/keycloak.md
+  // 8.1). The version is now `resource_version` (field 10), which the
+  // backend keeps itself; 8 and the old name stay reserved.
+  reserved 8;
+  reserved "version";
+
+  // Keycloak Organization id (UUID v4). Output only; the identifier for Get/Update/Delete.
+  string id = 1;
+  // Organization name. Required on create (Keycloak: 400 "Name can not be
+  // null"), unique within the realm (Keycloak: 409 "A organization with the
+  // same name already exists."; on update a blank name gets that 409 too).
+  string name = 2;
+  // E-mail domains owned by the tenant: the `name` of each `domain_details`
+  // entry, in the same order. Keycloak trims and lower-cases them, validates
+  // them as the domain part of an e-mail address (hibernate-validator's rule
+  // as copied by Keycloak's EmailValidationUtil: labels of letters, digits,
+  // `!#$%&'*+/=?^`{|}~` (no underscore) and non-ASCII characters with inner
+  // hyphens, no trailing dot, at most 63 characters per label and 255 in all
+  // counted on the IDN (punycode) form, or a bracketed IPv4 or `IPv6:`
+  // literal) or as one wildcard `*.base.tld` whose base has 2 to 10 parts,
+  // and keeps them unique across the realm (mock/research/keycloak.md 5.7;
+  // mock/areas/tenants.md lists where the fake approximates the rule).
+  repeated string domains = 3;
+  // URL-safe alias (no whitespace or RFC 3986 reserved characters). Defaults
+  // to `name` on create. Immutable (Keycloak: 400 "Cannot change the alias").
+  string alias = 4;
+  // Whether members can log in. Optional so that absence is visible: Keycloak
+  // defaults an omitted value to true on create and on a full update, and a
+  // backend that does not fill this field yet (the shipped one) reads as
+  // enabled. Always set on output.
+  optional bool enabled = 5;
+  // Free-text description shown in the console.
+  string description = 6;
+  // Keycloak Organization attributes. Keycloak stores `map<string, list<string>>`;
+  // this field carries the first value of each key (lossy; see
+  // mock/research/keycloak.md open question 4).
+  map<string, string> attributes = 7;
+  // The domains with their Keycloak metadata. `verified` is free-form (no
+  // verification flow exists), `identity_provider_alias` and `auto_redirect`
+  // route logins for that domain to one of the organization's identity
+  // providers. Always consistent with `domains`.
+  repeated TenantDomain domain_details = 9;
+  // Opaque version for optimistic concurrency, compared by UpdateTenant and
+  // DeleteTenant when the request carries one. Keycloak keeps no version, so
+  // the backend stores it itself, in the organization attribute
+  // `ai-grid/resource-version`, and bumps it on every write it makes; the
+  // attribute never appears in `attributes`, and a request that tries to set
+  // it is InvalidArgument (mock/areas/tenants.md, "Version"). An edit made
+  // in Keycloak directly, past the backend, does not bump it. Output only;
+  // empty from a backend that does not keep one (the shipped one).
+  string resource_version = 10;
+  // Proposal for the ai-grid-backend owners; implemented in the fake (P1,
+  // field 11). The organization's OIDC identity provider, as the console's
+  // organization wizard (ported from the PoC) configures it; unset for an
+  // organization without one. On create and on an update whose mask names
+  // `identity_provider`, the backend validates it with the PoC's rules
+  // (BadRequest field violations under `identityProvider.*`), trims it and
+  // stores it. Keycloak keeps an organization's identity providers as realm
+  // identity providers linked to the organization, not as a field;
+  // `TenantDomain.identity_provider_alias` already names one, so a backend
+  // that maps this field onto Keycloak needs the owners' agreement first.
+  IdentityProvider identity_provider = 11;
+  // Proposal for the ai-grid-backend owners; implemented in the fake (P3,
+  // field 12). When the backend created the organization. Output only. The
+  // backend stamps the organization attribute `ai-grid/create-time` (RFC 3339)
+  // on create and leaves that key out of `attributes`; unset for an
+  // organization created some other way (Keycloak keeps no creation time).
+  google.protobuf.Timestamp create_time = 12;
+}
+
+// One organization domain, as Keycloak 26.8 represents it
+// (`OrganizationDomainRepresentation`).
+message TenantDomain {
+  // Lower-case DNS name or `*.base.tld`.
+  string name = 1;
+  // Whether the provider marked the domain as verified. Default false.
+  bool verified = 2;
+  // Alias of the organization identity provider that handles this domain, or
+  // empty. It must name an identity provider of the realm that is linked to
+  // the organization; otherwise Keycloak answers 400 "Identity provider with
+  // alias '<alias>' does not exist in realm <realm>" or "Identity provider
+  // '<alias>' is not associated with organization <name>" (InvalidArgument).
+  // The console's fake realm has no identity providers, so it rejects every
+  // non-empty value with the first message.
+  string identity_provider_alias = 3;
+  // Redirect logins for this domain straight to that identity provider.
+  bool auto_redirect = 4;
+}
+
+// Proposal for the ai-grid-backend owners (P1). An organization's OIDC
+// identity provider: the PoC's TenantInput identityProvider
+// (krisv/ai-grid-cloud-provider-poc src/app/types/tenants.ts at 62319b8).
+message IdentityProvider {
+  // Display title. At most 253 characters after trimming.
+  string title = 1;
+  // Free text, kept as typed. At most 4000 characters.
+  string description = 2;
+  // Must be true when set (the PoC can't save a disabled identity provider);
+  // unset means true. Always set on output.
+  optional bool enabled = 3;
+  // The OIDC client configuration. Required.
+  OidcConfig config = 4;
+}
+
+// The OIDC client configuration of an IdentityProvider. Only the name of the
+// Secret that holds the client secret is stored, never the secret itself.
+message OidcConfig {
+  // Required; at most 253 characters after trimming.
+  string client_id = 1;
+  // Name of the Secret holding the client secret: required, a DNS subdomain
+  // name (lower-case letters, digits, `-` and `.`), at most 253 characters.
+  string client_secret_secret_name = 2;
+  // Required HTTP or HTTPS URLs, at most 2048 characters after trimming.
+  string issuer = 3;
+  string authorization_url = 4;
+  string token_url = 5;
+  // Space-separated scopes, at most 2048 characters after trimming.
+  string default_scopes = 6;
+  // Optional HTTP or HTTPS URLs; empty when unset.
+  string user_info_url = 7;
+  string jwks_url = 8;
+  string logout_url = 9;
+  // Unset means true. Always set on output.
+  optional bool validate_signature = 10;
+}

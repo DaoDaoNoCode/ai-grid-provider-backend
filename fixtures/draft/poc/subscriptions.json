@@ -1,0 +1,154 @@
+{
+  "_comment": "ai_grid.v1.Subscription and AuthPolicy in protojson: the PoC's three subscriptions and their authorization policies (src/services/subscriptions/fixtures.ts at 62319b8, as the port carried them), with the PoC's model names, groups and token limits; engineering belongs to acme-robotics instead of the PoC's osac. Model references have no namespace, so they name models in the console's models namespace. No fixture stores a phase: every model exists and each subscription was created in the past, so all three read Active. All values are fictional.",
+  "subscriptions": [
+    {
+      "name": "engineering",
+      "displayName": "Engineering",
+      "description": "Production models for the engineering team.",
+      "priority": 100,
+      "owner": {
+        "groups": [
+          "engineering"
+        ]
+      },
+      "modelRefs": [
+        {
+          "name": "granite-3-8b",
+          "displayName": "Granite 3.3 8B Instruct",
+          "description": "Enterprise language model",
+          "tokenRateLimits": [
+            {
+              "limit": "100000",
+              "window": "1h"
+            },
+            {
+              "limit": "10000",
+              "window": "1m"
+            }
+          ],
+          "billingRatePerToken": "0.000002"
+        }
+      ],
+      "tokenMetadata": {
+        "organizationId": "3f1c9a72-5b6e-4d2a-8c01-2d3e4f5a6b7c",
+        "costCenter": "engineering",
+        "labels": {
+          "environment": "production"
+        }
+      },
+      "resourceVersion": "1",
+      "createTime": "2026-09-01T09:00:00Z"
+    },
+    {
+      "name": "data-science",
+      "displayName": "Data science",
+      "description": "Shared model access for data scientists.",
+      "priority": 10,
+      "owner": {
+        "groups": [
+          "data-scientists",
+          "platform-admins"
+        ]
+      },
+      "modelRefs": [
+        {
+          "name": "granite-3-8b",
+          "displayName": "Granite 3.3 8B Instruct",
+          "description": "Enterprise language model",
+          "tokenRateLimits": [
+            {
+              "limit": "50000",
+              "window": "1h"
+            }
+          ]
+        },
+        {
+          "name": "llama-3-70b",
+          "displayName": "Llama 3.3 70B Instruct",
+          "description": "General purpose language model",
+          "tokenRateLimits": [
+            {
+              "limit": "50000",
+              "window": "1h"
+            }
+          ]
+        }
+      ],
+      "tokenMetadata": {
+        "organizationId": "8d2e7b31-0c4f-4a9d-b5e6-7f8a9b0c1d2e"
+      },
+      "resourceVersion": "1",
+      "createTime": "2026-09-02T09:00:00Z"
+    },
+    {
+      "name": "research",
+      "displayName": "Research",
+      "description": "Experimental endpoint access.",
+      "priority": 0,
+      "owner": {
+        "groups": [
+          "research"
+        ]
+      },
+      "modelRefs": [
+        {
+          "name": "granite-research",
+          "displayName": "Granite research endpoint",
+          "tokenRateLimits": [
+            {
+              "limit": "1000",
+              "window": "1h"
+            }
+          ]
+        }
+      ],
+      "tokenMetadata": {
+        "organizationId": "c5a4d3e2-f1b0-4987-a6c5-d4e3f2a1b0c9"
+      },
+      "resourceVersion": "1",
+      "createTime": "2026-09-03T09:00:00Z"
+    }
+  ],
+  "authPolicies": [
+    {
+      "name": "engineering-policy",
+      "displayName": "Engineering policy",
+      "modelRefs": [
+        {
+          "name": "granite-3-8b"
+        }
+      ],
+      "subjectGroups": [
+        "engineering"
+      ]
+    },
+    {
+      "name": "data-science-policy",
+      "displayName": "Data science policy",
+      "modelRefs": [
+        {
+          "name": "granite-3-8b"
+        },
+        {
+          "name": "llama-3-70b"
+        }
+      ],
+      "subjectGroups": [
+        "data-scientists",
+        "platform-admins"
+      ]
+    },
+    {
+      "name": "research-policy",
+      "displayName": "Research policy",
+      "modelRefs": [
+        {
+          "name": "granite-research"
+        }
+      ],
+      "subjectGroups": [
+        "research"
+      ]
+    }
+  ]
+}

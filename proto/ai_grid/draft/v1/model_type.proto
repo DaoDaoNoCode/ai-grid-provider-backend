@@ -1,0 +1,519 @@
+// DRAFT: the console's PROPOSAL for the APIs this backend doesn't implement yet. It is not
+// this backend's API, which is ai_grid.v1 (proto/ai_grid/v1).
+//
+// Moved from the console repository (ai-grid-cloud/ai-grid-provider-console,
+// mock/proto/ai_grid/v1 at ac80c25), with the package renamed to ai_grid.draft.v1. It began
+// as a superset of the first backend's three RPCs plus the shapes drafted in
+// docs/draft/research/backend-conventions.md section 6. Only the draft fake
+// (internal/fakeinfra/draft, started by make dev-fake) serves it, over gRPC, for the
+// console's BFF. Nothing here checks it against ai_grid.v1: the console's drift test
+// stayed in the console.
+//
+// When this backend implements an area, that area's RPCs and fake code are deleted here
+// and the console moves to ai_grid.v1 (docs/draft/README.md).
+
+syntax = "proto3";
+
+package ai_grid.draft.v1;
+
+import "ai_grid/draft/v1/condition_type.proto";
+import "ai_grid/draft/v1/metadata_type.proto";
+
+option go_package = "github.com/osac-project/ai-grid-provider-backend/gen/ai_grid/draft/v1;aigriddraftv1";
+
+// A model served on the grid. The spec is the subset of a KServe
+// `LLMInferenceService` (`serving.kserve.io/v1alpha2`) the console writes
+// (mock/research/models-maas.md 2.1 and 8.1), plus an optional `placement`.
+// Without `placement` the model is one LLMInferenceService on the hub. With it
+// the backend keeps one ACM `Placement` and one `ManifestWorkReplicaSet`, both
+// named `model-<name>` in the model's namespace and labelled
+// `ai-grid/model=<name>`, whose template carries the LLMInferenceService and
+// whose works deploy it to every selected cluster (mock/research/acm.md 3, 4).
+message Model {
+  // `metadata.name`: a DNS-1123 subdomain, unique in the namespace.
+  string name = 1;
+  // Kubernetes metadata. `display_name` and `description` live in the
+  // `openshift.io/display-name` and `openshift.io/description` annotations.
+  ObjectMeta metadata = 2;
+  // Desired state.
+  ModelSpec spec = 3;
+  // Observed state. Output only.
+  ModelStatus status = 4;
+}
+
+// `LLMInferenceService.spec`, trimmed to what the console writes, plus the
+// multi-site placement.
+message ModelSpec {
+  // `spec.model`: where the artifact comes from and the name clients send.
+  ModelSource model = 1;
+  // `spec.replicas`. Mutually exclusive with `scaling` (CRD CEL rule).
+  optional int32 replicas = 2;
+  // `spec.baseRefs[].name`: `LLMInferenceServiceConfig` presets merged under
+  // the spec. Unknown names are accepted by the API server and fail later with
+  // `PresetsCombined=False/ConfigNotFound`.
+  repeated string base_refs = 3;
+  // `spec.runtime`: a ServingRuntime or ClusterServingRuntime name. Optional.
+  string runtime = 4;
+  // `spec.router`.
+  Router router = 5;
+  // The `main` container of `spec.template`.
+  Container main = 6;
+  // `spec.scaling`. A scaling block must carry `keda` (the webhook forbids
+  // `wva`; the CRD requires one of them).
+  Scaling scaling = 7;
+  // Where to deploy. Unset: the hub only. Set: an ACM Placement over the
+  // managed clusters; the hub keeps no local deployment.
+  Placement placement = 8;
+  // How the ManifestWorkReplicaSet rolls the deployment out to the selected
+  // clusters. Only meaningful with `placement`; unset means `All`.
+  Rollout rollout = 9;
+}
+
+// `spec.model`.
+message ModelSource {
+  // `spec.model.uri`: `hf://`, `s3://`, `pvc://` or `oci://`. Required. The
+  // CRD types it as a plain string; the scheme is a console check.
+  string uri = 1;
+  // `spec.model.name`: the identifier clients send in the request `model`
+  // field. Defaults to `metadata.name`.
+  string name = 2;
+}
+
+// `spec.scaling`. The CRD's CEL rules (read from the hub): a scaling block
+// must carry `keda` (the webhook forbids `wva`), `keda.triggers` needs at
+// least one entry, and `minReplicas` cannot exceed `maxReplicas`. Its openAPI
+// schema requires `maxReplicas` and sets a minimum of 1 on both counts.
+message Scaling {
+  // `spec.scaling.minReplicas`, minimum 1, default 1 (0 here means unset).
+  // Must not exceed `max_replicas`.
+  int32 min_replicas = 1;
+  // `spec.scaling.maxReplicas`, required inside `scaling`, minimum 1.
+  int32 max_replicas = 2;
+  // Whether `spec.scaling.keda` is set. Requires at least one trigger.
+  bool keda = 3;
+  // `spec.scaling.keda.triggers[]`: the KEDA scale triggers.
+  repeated KedaTrigger triggers = 4;
+}
+
+// One `spec.scaling.keda.triggers[]` entry (a KEDA `ScaleTriggers`).
+message KedaTrigger {
+  // Trigger type, for example `prometheus` or `cpu`.
+  string type = 1;
+  // Trigger metadata, as KEDA's scaler expects it.
+  map<string, string> metadata = 2;
+}
+
+// `spec.router`.
+message Router {
+  // `spec.router.gateway.refs[]`. Empty: the managed route attaches to the
+  // default Gateway and `GatewaysReady` is not reported. A referenced Gateway
+  // that does not exist gives `GatewaysReady=False/RefsInvalid`; the workload
+  // still deploys, but no route, `url` or `addresses` are written.
+  repeated GatewayRef gateway_refs = 1;
+  // `spec.router.route: {}`: the controller manages the HTTPRoute.
+  bool managed_route = 2;
+  // `spec.router.scheduler: {}`: the llm-d inference scheduler and an
+  // InferencePool are created.
+  bool scheduler = 3;
+}
+
+// One `spec.router.gateway.refs[]` entry.
+message GatewayRef {
+  // Gateway name, for example `openshift-ai-inference` (the product default).
+  string name = 1;
+  // Gateway namespace, for example `openshift-ingress`.
+  string namespace = 2;
+  // Listener section name. Optional.
+  string section_name = 3;
+}
+
+// The `main` container.
+message Container {
+  // Runtime image. Empty uses the preset's.
+  string image = 1;
+  // `resources.requests`, quantity strings such as `"2"`, `"8Gi"`, `"1"` for
+  // `nvidia.com/gpu`.
+  map<string, string> requests = 2;
+  // `resources.limits`.
+  map<string, string> limits = 3;
+  // Environment variables, for example `VLLM_ADDITIONAL_ARGS`.
+  repeated EnvVar env = 4;
+}
+
+// One environment variable.
+message EnvVar {
+  // Variable name.
+  string name = 1;
+  // Literal value.
+  string value = 2;
+}
+
+// An ACM `Placement.spec` (`cluster.open-cluster-management.io/v1beta1`) with
+// one predicate (mock/research/acm.md 3). The console's message carries no
+// defaults; the API server applies the CRD's (`sortBy: ClusterName`,
+// `scoreRateLimit: 1m`, `prioritizerPolicy.mode: Additive`,
+// `decisionStrategy.groupStrategy.clustersPerDecisionGroup: 100%`, so one
+// decision group). The operator, `number_of_clusters` and cluster-set checks
+// are the console's; the CRD only enumerates the toleration effect.
+message Placement {
+  // `spec.clusterSets[]`: sets to draw from; each must be bound into the
+  // namespace. Empty means every bound set.
+  repeated string cluster_sets = 1;
+  // `spec.predicates[0].requiredClusterSelector.labelSelector` over the
+  // ManagedCluster labels.
+  LabelSelector label_selector = 2;
+  // `spec.predicates[0].requiredClusterSelector.claimSelector.matchExpressions[]`
+  // over `status.clusterClaims`.
+  repeated ClaimExpression claim_expressions = 3;
+  // `spec.tolerations[]`. The hub taints clusters that are unreachable or
+  // unavailable with `NoSelect`; a Placement must tolerate the taint to keep
+  // such a cluster selected.
+  repeated Toleration tolerations = 4;
+  // `spec.numberOfClusters`: cap on selected clusters. Unset means all. The
+  // scheduler keeps clusters already selected (Steady prioritizer) and picks
+  // the rest by score, then name.
+  optional int32 number_of_clusters = 5;
+  // `spec.spreadPolicy.spreadConstraints[]`. Carried as written; the fake
+  // does not evaluate them.
+  repeated SpreadConstraint spread_constraints = 6;
+}
+
+// `metav1.LabelSelector`: `match_labels` and `match_expressions` are AND-ed.
+message LabelSelector {
+  // Exact label matches.
+  map<string, string> match_labels = 1;
+  // Set-based requirements.
+  repeated LabelSelectorRequirement match_expressions = 2;
+}
+
+// `metav1.LabelSelectorRequirement`.
+message LabelSelectorRequirement {
+  // Label key.
+  string key = 1;
+  // `In`, `NotIn`, `Exists` or `DoesNotExist`. `NotIn` and `DoesNotExist`
+  // match a cluster without the label.
+  string operator = 2;
+  // Values for `In` and `NotIn`; empty for the other operators.
+  repeated string values = 3;
+}
+
+// One claim requirement, same operators as a label requirement.
+message ClaimExpression {
+  // Claim name, for example `platform.open-cluster-management.io`.
+  string key = 1;
+  // `In`, `NotIn`, `Exists` or `DoesNotExist`.
+  string operator = 2;
+  // Values for `In` and `NotIn`.
+  repeated string values = 3;
+}
+
+// `spec.tolerations[]`.
+message Toleration {
+  // Taint key, for example `cluster.open-cluster-management.io/unreachable`.
+  // Empty matches every key and needs operator `Exists`; otherwise the
+  // scheduler reports `PlacementMisconfigured=True` and selects nothing.
+  string key = 1;
+  // `Equal` (CRD default) or `Exists`, which takes no value.
+  string operator = 2;
+  // Taint value for `Equal`.
+  string value = 3;
+  // Taint effect to tolerate; empty tolerates every effect. `NoSelect`
+  // taints filter a cluster, `NoSelectIfNew` only one not already selected,
+  // `PreferNoSelect` never.
+  string effect = 4;
+  // How long the taint is tolerated, counted from the taint's `timeAdded`.
+  // Unset tolerates it forever.
+  optional int64 toleration_seconds = 5;
+}
+
+// `spec.spreadPolicy.spreadConstraints[]`.
+message SpreadConstraint {
+  // Label or claim key to spread across, for example `ai-grid/region`.
+  string topology_key = 1;
+  // `Label` or `Claim`.
+  string topology_key_type = 2;
+  // Maximum skew; CRD default 1.
+  int32 max_skew = 3;
+  // `DoNotSchedule` or `ScheduleAnyway` (CRD default).
+  string when_unsatisfiable = 4;
+}
+
+// `ManifestWorkReplicaSet.spec.placementRefs[0].rolloutStrategy`
+// (mock/research/acm.md 4). Durations are Kubernetes strings such as `5m`.
+message Rollout {
+  // Strategy type.
+  RolloutStrategy strategy = 1;
+  // Progressive only (All and ProgressivePerGroup have no maxConcurrency;
+  // InvalidArgument otherwise): clusters rolled out at once, an integer or a
+  // percent such as `20%`, rounded up. Empty, zero or more than the selected
+  // clusters means every selected cluster. The backend must write a bare
+  // integer as an IntOrString int: sdk-go rejects a string without `%`.
+  string max_concurrency = 2;
+  // Failed or timed-out clusters tolerated before the rollout stops, an
+  // integer or a percent of the selected clusters. Empty means 0, and so
+  // does a value above the number of selected clusters (sdk-go's fallback).
+  // Not used by All.
+  string max_failures = 3;
+  // How long a cluster may stay progressing (or failed) before it counts as
+  // timed out, counted from its work's `Progressing` (or, failed, `Degraded`)
+  // condition's last transition. `5m`, `1h` or `None`; empty or `None` means
+  // never, `0s` at once.
+  string progress_deadline = 4;
+  // How long a succeeded cluster keeps its slot before the next starts.
+  // Empty means 0. Not used by All.
+  string min_success_time = 5;
+}
+
+// `rolloutStrategy.type`.
+enum RolloutStrategy {
+  // Not set; read as ALL.
+  ROLLOUT_STRATEGY_UNSPECIFIED = 0;
+  // Every selected cluster at once.
+  ROLLOUT_STRATEGY_ALL = 1;
+  // `max_concurrency` clusters at a time, in cluster-name order. A work
+  // still carrying an older template holds no slot.
+  ROLLOUT_STRATEGY_PROGRESSIVE = 2;
+  // Decision group by decision group, each group all at once. The console's
+  // Placements have one decision group, so this behaves like ALL.
+  ROLLOUT_STRATEGY_PROGRESSIVE_PER_GROUP = 3;
+}
+
+// `LLMInferenceService.status` of the hub deployment (empty when the model is
+// placed on other clusters) plus the Placement and ManifestWorkReplicaSet
+// status when `spec.placement` is set.
+message ModelStatus {
+  // `status.url`: the external `/<namespace>/<name>` address. Written with
+  // the managed route on the first reconcile, before the model is Ready, and
+  // kept through a restart.
+  string url = 1;
+  // `status.addresses[]`, sorted by URL as the controller writes them.
+  repeated Address addresses = 2;
+  // `status.conditions[]` (Knative style; `Ready` rolls up `PresetsCombined`,
+  // `WorkloadsReady` and `RouterReady`).
+  repeated Condition conditions = 3;
+  // `status.appliedConfigs[]` in merge precedence order.
+  repeated AppliedConfig applied_configs = 4;
+  // `status.workloads`.
+  Workloads workloads = 5;
+  // `status.observedGeneration`.
+  int64 observed_generation = 6;
+  // Summary derived by the server, see ModelPhase.
+  ModelPhase phase = 7;
+  // Reason of the condition that decided `phase`.
+  string reason = 8;
+  // Message of the condition that decided `phase`.
+  string message = 9;
+  // The Placement's status. Set only when `spec.placement` is set.
+  PlacementStatus placement = 10;
+  // The ManifestWorkReplicaSet's status. Set only when `spec.placement` is set.
+  RolloutStatus rollout = 11;
+}
+
+// Summary of a model's state. LLMInferenceService has no phase
+// (mock/research/models-maas.md 2.1), so the server derives one:
+//
+//   Hub deployment (no `spec.placement`): from the `Ready` condition,
+//   True -> READY; False with a reason that does not recover on its own
+//   (`ConfigNotFound`, `RefsInvalid`, `GatewaysNotReady`) -> FAILED with its
+//   reason and message; False with any other reason (KServe's starting
+//   reasons `WaitingForGateway`, `Progressing`, `MinimumReplicasUnavailable`),
+//   absent or Unknown -> PENDING with the condition's reason and message. A
+//   workload that never becomes available keeps `MinimumReplicasUnavailable`
+//   and so stays PENDING, as a stuck spoke does below.
+//
+//   Placed model: from the ManifestWorkReplicaSet conditions,
+//   `PlacementRolledOut` True and `ManifestworkApplied` True -> READY;
+//   `ManifestworkApplied` False/`NotAsExpected` with a work that is Degraded
+//   or failed to apply -> FAILED; otherwise PENDING (this includes
+//   `NotAsExpected` from an agent that has not reported yet) with the reason
+//   of `PlacementVerified` when it is False, of `PlacementRolledOut` when
+//   `ManifestworkApplied` is True (more clusters to come), else of
+//   `ManifestworkApplied`. A spoke whose pods never become ready keeps
+//   `Ready=False/MinimumReplicasUnavailable`, which the template's Degraded
+//   rule does not match, so its work stays Progressing and the model reads
+//   PENDING/`Processing`; a Progressive rollout times that cluster out after
+//   `progress_deadline`.
+enum ModelPhase {
+  // No status yet.
+  MODEL_PHASE_UNSPECIFIED = 0;
+  // Starting, rolling out, or waiting for clusters.
+  MODEL_PHASE_PENDING = 1;
+  // Serving.
+  MODEL_PHASE_READY = 2;
+  // `Ready` is False with a terminal reason (hub), or a work is degraded or
+  // failed to apply.
+  MODEL_PHASE_FAILED = 3;
+}
+
+// `status.addresses[]` (`SourcedAddress`).
+message Address {
+  // `gateway-external`, `gateway-external-model-routing`, `gateway-internal`,
+  // `gateway-internal-model-routing` (or `internal[-model-routing]`).
+  string name = 1;
+  // The URL.
+  string url = 2;
+  // The Gateway the address comes from.
+  ObjectRef origin = 3;
+  // Model identifiers this address accepts in the request `model` field.
+  repeated string models = 4;
+}
+
+// A reference to a Kubernetes object.
+message ObjectRef {
+  // API group.
+  string group = 1;
+  // Kind.
+  string kind = 2;
+  // Name.
+  string name = 3;
+  // Namespace.
+  string namespace = 4;
+}
+
+// `status.appliedConfigs[]`.
+message AppliedConfig {
+  // Config name.
+  string name = 1;
+  // Config namespace.
+  string namespace = 2;
+  // `Preset`, `UserRef` or `ServingRuntime`.
+  string source = 3;
+}
+
+// `status.workloads`.
+message Workloads {
+  // The main Deployment.
+  WorkloadRef primary = 1;
+  // The prefill Deployment, when disaggregated.
+  WorkloadRef prefill = 2;
+  // The scheduler Deployment (`<name>-kserve-router-scheduler`).
+  WorkloadRef scheduler = 3;
+  // The workload Service (`<name>-kserve-workload-svc`).
+  WorkloadRef service = 4;
+}
+
+// One observed workload.
+message WorkloadRef {
+  // API group, `apps`.
+  string api_group = 1;
+  // `Deployment` or `LeaderWorkerSet`.
+  string kind = 2;
+  // Workload name.
+  string name = 3;
+  // Ready replicas.
+  int32 ready_replicas = 4;
+}
+
+// `Placement.status` plus the PlacementDecisions, flattened.
+message PlacementStatus {
+  // `status.numberOfSelectedClusters`.
+  int32 number_of_selected_clusters = 1;
+  // `PlacementDecision.status.decisions[]`, in cluster-name order.
+  repeated ClusterDecision decisions = 2;
+  // `PlacementSatisfied` and `PlacementMisconfigured`.
+  repeated Condition conditions = 3;
+  // Proposal for the ai-grid-backend owners; implemented in the fake (P8,
+  // field 4). The `location` labels of the decided clusters, unique and
+  // sorted; a decided cluster without one adds nothing. Output only. The
+  // console shows a model's locations from this, whatever selected the
+  // clusters, as the PoC shows the locations it placed the model on.
+  repeated string locations = 4;
+}
+
+// One `status.decisions[]` entry.
+message ClusterDecision {
+  // Selected cluster.
+  string cluster_name = 1;
+  // Empty in practice.
+  string reason = 2;
+}
+
+// `ManifestWorkReplicaSet.status` plus the generated ManifestWorks.
+message RolloutStatus {
+  // `status.summary`.
+  RolloutSummary summary = 1;
+  // `PlacementVerified`, `PlacementRolledOut`, `ManifestworkApplied`.
+  repeated Condition conditions = 2;
+  // One entry per generated ManifestWork, in cluster-name order.
+  repeated ManifestWorkStatus works = 3;
+}
+
+// `status.summary`: counts of the generated ManifestWorks whose spec is the
+// current template (a work still carrying an older template is not counted).
+message RolloutSummary {
+  // Works at the current template, including those applied in this pass.
+  int32 total = 1;
+  // Works with `Applied` True.
+  int32 applied = 2;
+  // Works with `Available` True.
+  int32 available = 3;
+  // Works with `Progressing` True.
+  int32 progressing = 4;
+  // Works with `Degraded` True.
+  int32 degraded = 5;
+  // Never set. The CRD declares `updated` (and `desiredTotal`) but the
+  // ManifestWorkReplicaSet controller never writes either, so the fake and
+  // the BFF leave it out. To be removed from the proposal (reserve 6).
+  int32 updated = 6;
+}
+
+// One generated ManifestWork, in the cluster's namespace on the hub.
+message ManifestWorkStatus {
+  // Namespace of the work: the cluster it targets.
+  string cluster_name = 1;
+  // Work name, `<mwrs name><5 random characters>`: the controller's
+  // generateName is the MWRS name with no separator, cut to 58 characters.
+  string work_name = 2;
+  // `Applied`, `Available`, and `Progressing`/`Degraded` from the template's
+  // condition rules.
+  repeated Condition conditions = 3;
+  // `status.resourceStatus.manifests[]`, in ordinal order.
+  repeated ManifestStatus manifests = 4;
+  // The ManifestWork's own `metadata.generation`: 1 when the controller
+  // creates it, bumped each time an update changes its spec. It is not the
+  // model's generation: a work created for a cluster that joins later starts
+  // at 1.
+  int64 generation = 5;
+  // `observedGeneration` of the `Applied` condition.
+  int64 observed_generation = 6;
+}
+
+// One `status.resourceStatus.manifests[]` entry.
+message ManifestStatus {
+  // `resourceMeta`.
+  ResourceIdentifier resource = 1;
+  // `Applied`, `Available`, `StatusFeedbackSynced`, plus rule conditions.
+  // Only `Applied` and the rule conditions carry `observed_generation`.
+  repeated Condition conditions = 2;
+  // `statusFeedback.values[]`.
+  repeated FeedbackValue feedback = 3;
+}
+
+// `resourceMeta` of a manifest.
+message ResourceIdentifier {
+  // Position in the workload.
+  int32 ordinal = 1;
+  // API group, empty for core.
+  string group = 2;
+  // API version.
+  string version = 3;
+  // Plural lowercase resource. Empty when the spoke has no such kind (the
+  // apply then failed).
+  string resource = 4;
+  // Kind.
+  string kind = 5;
+  // Namespace, empty for cluster-scoped.
+  string namespace = 6;
+  // Name.
+  string name = 7;
+}
+
+// One `statusFeedback.values[]` entry.
+message FeedbackValue {
+  // Feedback rule name, for example `ready` or `url`.
+  string name = 1;
+  // `Integer`, `String`, `Boolean` or `JsonRaw`.
+  string type = 2;
+  // The value, as a string.
+  string value = 3;
+}

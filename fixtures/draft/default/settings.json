@@ -1,0 +1,8 @@
+{
+  "_comment": "latency is a Go duration added to every RPC to resemble a round trip. speed multiplies the scenario clock (scenarios.json and the model lifecycles): 1 is real time, 10 plays a 5 minute scenario in 30 seconds. manifestWorkReplicaSetEnabled is what GetHubCapabilities reports and what gates a placed model: true runs the fake's ManifestWorkReplicaSet controller, false makes CreateModel and UpdateModel answer FailedPrecondition when they add a placement (the backend's check; the console's text), and a placed fixture model is still loaded, as the API server would store it, with decisions but no works or ManifestWorkReplicaSet status, since nothing reconciles it. observabilityInstalled and acmVersion are reported by GetHubCapabilities as written here; all values are fixture settings, not observations of any environment.",
+  "latency": "40ms",
+  "speed": 1.0,
+  "manifestWorkReplicaSetEnabled": true,
+  "observabilityInstalled": false,
+  "acmVersion": "2.17.3"
+}

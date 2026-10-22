@@ -1,0 +1,186 @@
+// DRAFT: the console's PROPOSAL for the APIs this backend doesn't implement yet. It is not
+// this backend's API, which is ai_grid.v1 (proto/ai_grid/v1).
+//
+// Moved from the console repository (ai-grid-cloud/ai-grid-provider-console,
+// mock/proto/ai_grid/v1 at ac80c25), with the package renamed to ai_grid.draft.v1. It began
+// as a superset of the first backend's three RPCs plus the shapes drafted in
+// docs/draft/research/backend-conventions.md section 6. Only the draft fake
+// (internal/fakeinfra/draft, started by make dev-fake) serves it, over gRPC, for the
+// console's BFF. Nothing here checks it against ai_grid.v1: the console's drift test
+// stayed in the console.
+//
+// When this backend implements an area, that area's RPCs and fake code are deleted here
+// and the console moves to ai_grid.v1 (docs/draft/README.md).
+
+syntax = "proto3";
+
+package ai_grid.draft.v1;
+
+import "ai_grid/draft/v1/condition_type.proto";
+import "google/protobuf/timestamp.proto";
+
+option go_package = "github.com/osac-project/ai-grid-provider-backend/gen/ai_grid/draft/v1;aigriddraftv1";
+
+// An Open Cluster Management ManagedCluster as seen on the hub. The shape
+// follows the CRD (`cluster.open-cluster-management.io/v1`) so that labels and
+// claims written by other ACM tooling appear verbatim.
+//
+// Fields 1-3 are the ones the backend ships and must not move. New fields are
+// appended.
+message ManagedCluster {
+  // Name of the ManagedCluster. Cluster-scoped, unique, immutable; the
+  // identifier used by Get/Update/Delete.
+  string name = 1;
+  // Labels on the hub object. The console relies on `ai-grid/enabled`,
+  // `ai-grid/provisioned`, `location`, `ai-grid/site`, `ai-grid/region` and
+  // ACM's `openshiftVersion`. Mutable through UpdateManagedCluster.
+  map<string, string> labels = 2;
+  // `spec.hubAcceptsClient`.
+  bool hub_accepts_client = 3;
+
+  // Annotations on the hub object. The console writes `ai-grid/site-name`,
+  // `ai-grid/latitude`, `ai-grid/longitude`. Mutable through UpdateManagedCluster.
+  map<string, string> annotations = 4;
+  // Kubernetes UID. Output only.
+  string uid = 5;
+  // Opaque version for optimistic concurrency (`lock` on Update). Output only.
+  string resource_version = 6;
+  // Time the object was created. Output only.
+  google.protobuf.Timestamp creation_timestamp = 7;
+  // Set while the cluster is being detached. Output only.
+  google.protobuf.Timestamp deletion_timestamp = 8;
+  // `spec.leaseDurationSeconds`.
+  int32 lease_duration_seconds = 9;
+  // `spec.managedClusterClientConfigs`.
+  repeated ClientConfig managed_cluster_client_configs = 10;
+  // Observed state. Output only.
+  ManagedClusterStatus status = 11;
+  // `spec.taints`. The hub's taint controller keeps at most one of its two
+  // taints, both with effect `NoSelect`: `cluster.open-cluster-management.io/unreachable`
+  // while Available is Unknown or missing, `cluster.open-cluster-management.io/unavailable`
+  // while it is False (each replaces the other), none while it is True; it
+  // leaves a terminating cluster alone (ocm pkg/registration/hub/taint/controller.go).
+  // Placements must tolerate them to select the cluster. Output only for the
+  // console: users may add taints with other tooling.
+  repeated Taint taints = 12;
+  // Generation of the desired state (`metadata.generation`); the hub bumps
+  // it on every spec change. Output only.
+  int64 generation = 13;
+  // Finalizers still blocking deletion. Output only.
+  repeated string finalizers = 14;
+}
+
+// `spec.taints[]`, as defined by `cluster.open-cluster-management.io/v1`.
+message Taint {
+  // Taint key, for example `cluster.open-cluster-management.io/unreachable`.
+  string key = 1;
+  // Taint value. Empty for the hub's own taints.
+  string value = 2;
+  // One of `NoSelect`, `PreferNoSelect`, `NoSelectIfNew`.
+  string effect = 3;
+  // When the taint was added; stamped by the ManagedCluster mutating webhook
+  // so `tolerationSeconds` can count from it.
+  google.protobuf.Timestamp time_added = 4;
+}
+
+// `spec.managedClusterClientConfigs[]`.
+message ClientConfig {
+  // URL of the managed cluster's API server.
+  string url = 1;
+  // CA bundle (PEM) used to verify the API server. May be empty.
+  bytes ca_bundle = 2;
+}
+
+// Summary of the cluster's lifecycle, derived server-side from the conditions
+// in the same order as the ACM console
+// (`console:frontend/src/resources/utils/get-cluster.ts`, see
+// mock/research/acm.md section 1). A condition counts as "not True" when it is
+// False or absent:
+//
+//  1. `deletion_timestamp` set                        -> DETACHING
+//  2. no conditions at all                            -> UNSPECIFIED (the ACM console calls this `failed`;
+//                                                        the shipped backend, which sends no status, lands here too)
+//  3. `HubAcceptedManagedCluster` not True            -> NOT_ACCEPTED
+//  4. `ManagedClusterJoined` not True                 -> by `ManagedClusterImportSucceeded` reason:
+//        `ManagedClusterImporting`                    -> IMPORTING
+//        `ManagedClusterImportFailed`                 -> IMPORT_FAILED
+//        anything else                                -> PENDING_IMPORT
+//  5. `ManagedClusterConditionAvailable` True         -> AVAILABLE (the ACM console's "ready")
+//                                       False        -> UNAVAILABLE ("offline")
+//                                       Unknown/absent -> UNKNOWN
+//
+// Values 1-4 keep their original meaning; 1 (PENDING) is kept for
+// compatibility but a server implementing this derivation never returns it,
+// because PENDING_IMPORT, IMPORTING and IMPORT_FAILED are finer.
+enum ManagedClusterState {
+  // The conditions do not allow a summary yet (no conditions at all, or a
+  // backend that does not derive one). The ACM console shows `failed` for a
+  // cluster with no conditions; the console shows "No status" instead.
+  MANAGED_CLUSTER_STATE_UNSPECIFIED = 0;
+  // Accepted by the hub but the agent has not reported availability yet.
+  // Superseded by PENDING_IMPORT / IMPORTING / IMPORT_FAILED.
+  MANAGED_CLUSTER_STATE_PENDING = 1;
+  // Joined and `ManagedClusterConditionAvailable` is True. ACM console: `ready`.
+  MANAGED_CLUSTER_STATE_AVAILABLE = 2;
+  // Joined and `ManagedClusterConditionAvailable` is False. ACM console: `offline`.
+  MANAGED_CLUSTER_STATE_UNAVAILABLE = 3;
+  // `deletion_timestamp` is set. ACM console: `detaching`.
+  MANAGED_CLUSTER_STATE_DETACHING = 4;
+  // Accepted but `ManagedClusterJoined` is not True and
+  // `ManagedClusterImportSucceeded` is absent or carries another reason (for
+  // example `ManagedClusterWaitForImporting`). ACM console: `pendingimport`.
+  MANAGED_CLUSTER_STATE_PENDING_IMPORT = 5;
+  // Not joined; `ManagedClusterImportSucceeded` is False with reason
+  // `ManagedClusterImporting`. ACM console: `importing`.
+  MANAGED_CLUSTER_STATE_IMPORTING = 6;
+  // Not joined; `ManagedClusterImportSucceeded` is False with reason
+  // `ManagedClusterImportFailed`. ACM console: `importfailed`.
+  MANAGED_CLUSTER_STATE_IMPORT_FAILED = 7;
+  // `HubAcceptedManagedCluster` is False or absent (for example
+  // `HubClusterAdminDenied`). ACM console: `notaccepted`.
+  MANAGED_CLUSTER_STATE_NOT_ACCEPTED = 8;
+  // Joined but `ManagedClusterConditionAvailable` is Unknown or absent: the
+  // agent stopped renewing its lease. ACM console: `unknown`.
+  MANAGED_CLUSTER_STATE_UNKNOWN = 9;
+}
+
+// `status` of the ManagedCluster.
+message ManagedClusterStatus {
+  // Summary state derived from the conditions.
+  ManagedClusterState state = 1;
+  // `status.conditions`, verbatim.
+  repeated Condition conditions = 2;
+  // `status.version.kubernetes`.
+  string kubernetes_version = 3;
+  // `status.capacity`, as Kubernetes quantity strings keyed by resource name
+  // (for example `cpu`, `memory`, `nvidia.com/gpu`). Quantities have no
+  // lossless numeric proto type; the BFF and the UI parse them.
+  map<string, string> capacity = 4;
+  // `status.allocatable`, same encoding as `capacity`.
+  map<string, string> allocatable = 5;
+  // `status.clusterClaims`. The console reads `consoleurl.cluster.open-cluster-management.io`,
+  // `version.openshift.io`, `platform.open-cluster-management.io`, `product.open-cluster-management.io`.
+  // One list sorted by claim name, as the hub reports it.
+  repeated ClusterClaim cluster_claims = 6;
+  // Message of the condition that decided `state`, verbatim (for example
+  // "Registration agent stopped updating its lease."). Empty when no
+  // condition decided it (DETACHING with no ImportSucceeded condition, or
+  // UNKNOWN with the Available condition absent). Filling it for every state
+  // is this proposal's choice: the ACM console shows a message only for
+  // importing, importfailed, offline and unknown.
+  string state_message = 7;
+  // AI Grid provisioning, from the cluster's compliance with the hub's
+  // ai-grid-ready Policy: "Compliant", "NonCompliant", "Pending" (placed, no
+  // result yet), or empty when the Policy doesn't cover the cluster. Unset
+  // when the backend doesn't report it; the console then reads the
+  // ai-grid/provisioned label.
+  optional string provisioning = 8;
+}
+
+// `status.clusterClaims[]`.
+message ClusterClaim {
+  // Claim name, for example `version.openshift.io`.
+  string name = 1;
+  // Claim value as the agent reported it.
+  string value = 2;
+}

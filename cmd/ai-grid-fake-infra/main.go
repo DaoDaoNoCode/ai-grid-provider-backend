@@ -5,6 +5,12 @@
 // a kubeconfig that points the backend's --kubeconfig at the fake hub with
 // the backend's fake ServiceAccount token. See "Dev mode with fake
 // infrastructure" in README.md.
+//
+// It also serves the console's draft API, ai_grid.draft.v1, on
+// --draft-address: the fake for the services this backend does not implement
+// yet (internal/fakeinfra/draft, docs/draft/README.md). The draft fake has its
+// own state, seeded from --draft-fixtures; it does not read the fake hub's
+// clusters.
 package main
 
 import (
@@ -23,6 +29,7 @@ import (
 	"time"
 
 	"github.com/osac-project/ai-grid-provider-backend/internal/fakeinfra/devserve"
+	"github.com/osac-project/ai-grid-provider-backend/internal/fakeinfra/draft"
 	"github.com/osac-project/ai-grid-provider-backend/internal/fakeinfra/hub"
 	"github.com/osac-project/ai-grid-provider-backend/internal/fakeinfra/keycloak"
 )
@@ -31,6 +38,8 @@ func main() {
 	fixtures := flag.String("fixtures", "fixtures/default", "fixtures directory (fixtures/default or fixtures/poc)")
 	hubAddress := flag.String("hub-address", "127.0.0.1:9091", "fake hub API listen address")
 	keycloakAddress := flag.String("keycloak-address", "127.0.0.1:9093", "fake Keycloak listen address")
+	draftAddress := flag.String("draft-address", "127.0.0.1:9094", "gRPC listen address of the fake ai_grid.draft.v1 services; empty disables them")
+	draftFixtures := flag.String("draft-fixtures", "fixtures/draft/default", "fixtures directory of the draft fake (fixtures/draft/default or fixtures/draft/poc)")
 	kubeconfigOut := flag.String("kubeconfig-out", "bin/fake-kubeconfig", "where to write the kubeconfig for the backend's --kubeconfig")
 	adminRealm := flag.String("keycloak-admin-realm", "master", "realm of the Keycloak admin user (the backend's KEYCLOAK_ADMIN_REALM)")
 	realm := flag.String("keycloak-realm", "ai-grid", "realm with Organizations (the backend's KEYCLOAK_REALM)")
@@ -48,6 +57,7 @@ func main() {
 
 	if err := run(logger, config{
 		fixtures: *fixtures, hubAddress: *hubAddress, keycloakAddress: *keycloakAddress, kubeconfigOut: *kubeconfigOut,
+		draftAddress: *draftAddress, draftFixtures: *draftFixtures,
 		keycloak: keycloak.Config{AdminRealm: *adminRealm, Realm: *realm, Username: *username, Password: *password},
 	}); err != nil {
 		logger.Error("ai-grid-fake-infra failed", slog.Any("error", err))
@@ -69,6 +79,8 @@ type config struct {
 	hubAddress      string
 	keycloakAddress string
 	kubeconfigOut   string
+	draftAddress    string
+	draftFixtures   string
 	keycloak        keycloak.Config
 }
 
@@ -89,6 +101,23 @@ func run(logger *slog.Logger, cfg config) error {
 	fakeKeycloak, err := keycloak.New(cfg.keycloak, organizations)
 	if err != nil {
 		return fmt.Errorf("build fake Keycloak: %w", err)
+	}
+
+	var fakeDraft *draft.Server
+	if cfg.draftAddress != "" {
+		draftFx, err := draft.Load(cfg.draftFixtures)
+		if err != nil {
+			return fmt.Errorf("load draft fixtures from %s: %w", cfg.draftFixtures, err)
+		}
+		fakeDraft, err = draft.New(draftFx, logger.With("component", "draft"))
+		if err != nil {
+			return fmt.Errorf("draft fixtures in %s: %w", cfg.draftFixtures, err)
+		}
+		logger.Info("draft fixtures loaded", slog.String("dir", cfg.draftFixtures),
+			slog.Int("clusters", len(draftFx.Clusters)), slog.Int("tenants", len(draftFx.Tenants)),
+			slog.Bool("tenantsUnavailable", draftFx.TenantsUnavailable != ""), slog.Duration("latency", draftFx.Latency.Duration()),
+			slog.Int("scenarios", len(draftFx.Scenarios)), slog.Float64("speed", draftFx.Speed),
+			slog.Int("models", len(draftFx.Models)), slog.Int("subscriptions", len(draftFx.Subscriptions)))
 	}
 
 	hubHost, _, err := net.SplitHostPort(cfg.hubAddress)
@@ -113,11 +142,29 @@ func run(logger *slog.Logger, cfg config) error {
 		_ = hubListener.Close()
 		return fmt.Errorf("listen on %s: %w", cfg.keycloakAddress, err)
 	}
+	// The draft port is bound before the kubeconfig is written too, so the
+	// kubeconfig appearing (what hack/dev-fake.sh waits for) means every fake
+	// is listening.
+	var draftListener net.Listener
+	if fakeDraft != nil {
+		draftListener, err = net.Listen("tcp", cfg.draftAddress)
+		if err != nil {
+			_ = hubListener.Close()
+			_ = keycloakListener.Close()
+			return fmt.Errorf("listen on %s: %w", cfg.draftAddress, err)
+		}
+	}
+	closeListeners := func() {
+		_ = hubListener.Close()
+		_ = keycloakListener.Close()
+		if draftListener != nil {
+			_ = draftListener.Close()
+		}
+	}
 	hubURL := "https://" + hubListener.Addr().String()
 	written, err := devserve.WriteKubeconfig(cfg.kubeconfigOut, hubURL, caPEM, fakeHub.ServiceAccountToken())
 	if err != nil {
-		_ = hubListener.Close()
-		_ = keycloakListener.Close()
+		closeListeners()
 		return err
 	}
 	defer func() {
@@ -138,8 +185,21 @@ func run(logger *slog.Logger, cfg config) error {
 		{"hub", hubListener, &http.Server{Handler: logRequests(logger, "hub", fakeHub.Handler()), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: readTimeout, WriteTimeout: writeTimeout, IdleTimeout: idleTimeout}},
 		{"keycloak", keycloakListener, &http.Server{Handler: logRequests(logger, "keycloak", fakeKeycloak.Handler()), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: readTimeout, WriteTimeout: writeTimeout, IdleTimeout: idleTimeout}},
 	}
-	errs := make(chan error, len(servers))
+	errs := make(chan error, len(servers)+1)
 	var wg sync.WaitGroup
+	// The draft gRPC server stops when draftCtx ends: on a signal, or when
+	// another server fails.
+	draftCtx, stopDraft := context.WithCancel(ctx)
+	defer stopDraft()
+	if fakeDraft != nil {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if err := fakeDraft.ServeListener(draftCtx, draftListener); err != nil {
+				errs <- fmt.Errorf("draft server: %w", err)
+			}
+		}()
+	}
 	for _, s := range servers {
 		wg.Add(1)
 		go func() {
@@ -154,6 +214,8 @@ func run(logger *slog.Logger, cfg config) error {
 		slog.String("hub", hubURL),
 		slog.String("hubPlainHTTP", "http://"+hubListener.Addr().String()),
 		slog.String("keycloak", "http://"+keycloakListener.Addr().String()),
+		slog.String("draftGRPC", addrOf(draftListener)),
+		slog.String("draftFixtures", cfg.draftFixtures),
 		slog.String("kubeconfig", cfg.kubeconfigOut),
 		slog.String("keycloakAdminRealm", cfg.keycloak.AdminRealm),
 		slog.String("keycloakRealm", cfg.keycloak.Realm),
@@ -167,6 +229,7 @@ func run(logger *slog.Logger, cfg config) error {
 	}
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
+	stopDraft()
 	for _, s := range servers {
 		if err := s.server.Shutdown(shutdownCtx); err != nil {
 			logger.Warn("shutdown", slog.String("server", s.name), slog.Any("error", err))
@@ -174,6 +237,14 @@ func run(logger *slog.Logger, cfg config) error {
 	}
 	wg.Wait()
 	return serveErr
+}
+
+// addrOf is the listener's address, or "disabled" for none.
+func addrOf(l net.Listener) string {
+	if l == nil {
+		return "disabled"
+	}
+	return l.Addr().String()
 }
 
 type statusRecorder struct {

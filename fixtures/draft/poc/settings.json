@@ -1,0 +1,6 @@
+{
+  "_comment": "No latency and real-time speed, so the browser tests and the screenshots don't wait; the ManifestWorkReplicaSet gate on, so deploying a model to locations works as in the PoC. See mock/fixtures/settings.json for each field.",
+  "latency": "0s",
+  "speed": 1,
+  "manifestWorkReplicaSetEnabled": true
+}

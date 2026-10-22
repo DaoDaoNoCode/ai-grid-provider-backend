@@ -1,0 +1,120 @@
+// DRAFT: the console's PROPOSAL for the APIs this backend doesn't implement yet. It is not
+// this backend's API, which is ai_grid.v1 (proto/ai_grid/v1).
+//
+// Moved from the console repository (ai-grid-cloud/ai-grid-provider-console,
+// mock/proto/ai_grid/v1 at ac80c25), with the package renamed to ai_grid.draft.v1. It began
+// as a superset of the first backend's three RPCs plus the shapes drafted in
+// docs/draft/research/backend-conventions.md section 6. Only the draft fake
+// (internal/fakeinfra/draft, started by make dev-fake) serves it, over gRPC, for the
+// console's BFF. Nothing here checks it against ai_grid.v1: the console's drift test
+// stayed in the console.
+//
+// When this backend implements an area, that area's RPCs and fake code are deleted here
+// and the console moves to ai_grid.v1 (docs/draft/README.md).
+
+syntax = "proto3";
+
+package ai_grid.draft.v1;
+
+import "ai_grid/draft/v1/managed_cluster_type.proto";
+import "google/protobuf/field_mask.proto";
+
+option go_package = "github.com/osac-project/ai-grid-provider-backend/gen/ai_grid/draft/v1;aigriddraftv1";
+
+// Read and enrol ManagedClusters on the hub. Every RPC acts with the caller's
+// token; the hub's RBAC decides.
+service ManagedClusters {
+  // Lists ManagedClusters the caller may list.
+  rpc ListManagedClusters(ListManagedClustersRequest) returns (ListManagedClustersResponse);
+  // Returns one ManagedCluster by name. NotFound, with the message
+  // `object with identifier '<name>' not found`, when absent or not visible.
+  // `status.state` and `status.state_message` are derived by the server from
+  // the conditions on every read; see ManagedClusterState.
+  rpc GetManagedCluster(GetManagedClusterRequest) returns (GetManagedClusterResponse);
+  // Updates the labels and annotations of a ManagedCluster (`labels`,
+  // `annotations`). Any other path in `update_mask` is InvalidArgument naming
+  // the path, `hub_accepts_client` included: a provider console has no page
+  // that needs it, and turning it off makes the hub drop a live site; an
+  // empty mask is InvalidArgument. After a write the hub's webhook and
+  // controllers put back what they own (`name`, the default clusterset
+  // label, the add-on labels, `clusterID`, `openshiftVersion*`,
+  // `open-cluster-management/created-via`), but not a removed `cloud` or
+  // `vendor`. Only the console's keys may change: an update that adds,
+  // changes or removes a label or annotation outside `ai-grid/*`,
+  // `ai-grid-mock/*` (the fake's test switches) and the `location` label is
+  // InvalidArgument, compared after the hub has put back its own labels (a
+  // console proposal; the hub lets a provider admin patch any label). An
+  // update after which the labels and annotations equal the stored ones is
+  // not written: the stored cluster comes back with `resource_version` and
+  // `generation` unchanged, as the Kubernetes API server answers an
+  // unchanged update. The backend owns the AI Grid annotation convention: an
+  // `ai-grid/latitude` or `ai-grid/longitude` annotation, when present and
+  // not blank, must be a number within -90..90 or -180..180 (surrounding
+  // whitespace allowed), else InvalidArgument (a console proposal; the hub
+  // itself accepts any string). Requires `patch` on managedclusters for the
+  // caller. Every cluster the backend returns carries a non-empty
+  // `resource_version`, because a client must send it back to write.
+  rpc UpdateManagedCluster(UpdateManagedClusterRequest) returns (UpdateManagedClusterResponse);
+}
+
+// Request of ListManagedClusters. Every field is optional; the shipped backend
+// takes an empty request.
+message ListManagedClustersRequest {
+  // Zero-based index of the first result. Default zero.
+  optional int32 offset = 1;
+  // Maximum number of results. Omitted means all; zero means count only;
+  // negative is InvalidArgument.
+  optional int32 limit = 2;
+  // CEL expression over `this` (a ManagedCluster) selecting the clusters to
+  // return, for example `this.labels["ai-grid/enabled"] == "true"`. Empty
+  // means all. The language is OSAC's (osac-project/osac
+  // fulfillment-service/docs/FILTER.md, a CEL subset). Not implemented yet:
+  // the console's fake backend answers InvalidArgument for any filter.
+  optional string filter = 3;
+  // Sort order, `<field> [asc|desc]`, for example `name desc`. Default: by
+  // name. Not implemented yet: the fake answers InvalidArgument for any order.
+  optional string order = 4;
+}
+
+// Response of ListManagedClusters.
+message ListManagedClustersResponse {
+  // Clusters returned. Keeps its historical name instead of `items`.
+  repeated ManagedCluster clusters = 1;
+  // Number of clusters returned.
+  int32 size = 2;
+  // Number of clusters matching the filter regardless of paging.
+  int32 total = 3;
+}
+
+// Request of GetManagedCluster.
+message GetManagedClusterRequest {
+  // Name of the ManagedCluster.
+  string name = 1;
+}
+
+// Response of GetManagedCluster.
+message GetManagedClusterResponse {
+  // The cluster.
+  ManagedCluster object = 1;
+}
+
+// Request of UpdateManagedCluster.
+message UpdateManagedClusterRequest {
+  // The cluster with the new values. `name` identifies it.
+  ManagedCluster object = 1;
+  // Paths to update. Supported: `labels`, `annotations`.
+  // A map path replaces the whole map (FieldMask semantics, as in OSAC); to
+  // change one key, send the full map as returned by Get with that key
+  // changed. Per-key paths such as `labels.ai-grid/enabled` are not
+  // supported.
+  google.protobuf.FieldMask update_mask = 2;
+  // When true, the update fails with Aborted unless `object.resource_version`
+  // matches the hub's current value.
+  bool lock = 3;
+}
+
+// Response of UpdateManagedCluster.
+message UpdateManagedClusterResponse {
+  // The cluster after the update, as the hub stored it.
+  ManagedCluster object = 1;
+}

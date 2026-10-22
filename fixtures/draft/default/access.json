@@ -1,0 +1,6 @@
+{
+  "_comment": "What the fake hub answers to the BFF's SelfSubjectAccessReview (patch managedclusters). The dev proxy sends AUTH_TOKEN as the bearer token; pick one of these to see the console as that kind of user.",
+  "defaultAllowed": true,
+  "deniedTokens": ["viewer-token"],
+  "rejectedTokens": ["expired-token"]
+}

@@ -1,0 +1,93 @@
+{
+  "_comment": "ai_grid.v1.Tenant in protojson: the three organizations the UAT seeds into the PoC (the port's fixtures before the rebase onto PR 12), with the same names, domains and identity providers, on PR 12's shape: alias equal to the name, enabled, domainDetails for the domains, a creation time (proposal P3) and version 1 (proposal P2). initech-labs has no domains and no identity provider title, as in the PoC. All values are fictional.",
+  "tenants": [
+    {
+      "id": "3f1c9a72-5b6e-4d2a-8c01-2d3e4f5a6b7c",
+      "name": "acme-robotics",
+      "alias": "acme-robotics",
+      "enabled": true,
+      "createTime": "2026-09-01T09:00:00Z",
+      "domains": [
+        "acme-robotics.example.com",
+        "acme.example.org"
+      ],
+      "domainDetails": [
+        {
+          "name": "acme-robotics.example.com"
+        },
+        {
+          "name": "acme.example.org"
+        }
+      ],
+      "identityProvider": {
+        "title": "Acme Robotics SSO",
+        "description": "Employees of Acme Robotics sign in here.",
+        "enabled": true,
+        "config": {
+          "clientId": "ai-grid",
+          "clientSecretSecretName": "acme-robotics-oidc-client",
+          "issuer": "https://sso.example.com/realms/acme-robotics",
+          "authorizationUrl": "https://sso.example.com/realms/acme-robotics/protocol/openid-connect/auth",
+          "tokenUrl": "https://sso.example.com/realms/acme-robotics/protocol/openid-connect/token",
+          "defaultScopes": "openid profile email",
+          "validateSignature": true,
+          "userInfoUrl": "https://sso.example.com/realms/acme-robotics/protocol/openid-connect/userinfo",
+          "jwksUrl": "https://sso.example.com/realms/acme-robotics/protocol/openid-connect/certs",
+          "logoutUrl": "https://sso.example.com/realms/acme-robotics/protocol/openid-connect/logout"
+        }
+      },
+      "resourceVersion": "1"
+    },
+    {
+      "id": "8d2e7b31-0c4f-4a9d-b5e6-7f8a9b0c1d2e",
+      "name": "globex-research",
+      "alias": "globex-research",
+      "enabled": true,
+      "createTime": "2026-09-02T09:00:00Z",
+      "domains": [
+        "globex.example.com"
+      ],
+      "domainDetails": [
+        {
+          "name": "globex.example.com"
+        }
+      ],
+      "identityProvider": {
+        "title": "Globex SSO",
+        "enabled": true,
+        "config": {
+          "clientId": "ai-grid",
+          "clientSecretSecretName": "globex-research-oidc-client",
+          "issuer": "https://sso.example.com/realms/globex-research",
+          "authorizationUrl": "https://sso.example.com/realms/globex-research/protocol/openid-connect/auth",
+          "tokenUrl": "https://sso.example.com/realms/globex-research/protocol/openid-connect/token",
+          "defaultScopes": "openid profile email",
+          "validateSignature": true
+        }
+      },
+      "resourceVersion": "1"
+    },
+    {
+      "id": "c5a4d3e2-f1b0-4987-a6c5-d4e3f2a1b0c9",
+      "name": "initech-labs",
+      "alias": "initech-labs",
+      "enabled": true,
+      "createTime": "2026-09-03T09:00:00Z",
+      "domains": [],
+      "domainDetails": [],
+      "identityProvider": {
+        "enabled": true,
+        "config": {
+          "clientId": "ai-grid",
+          "clientSecretSecretName": "initech-labs-oidc-client",
+          "issuer": "https://sso.example.com/realms/initech-labs",
+          "authorizationUrl": "https://sso.example.com/realms/initech-labs/protocol/openid-connect/auth",
+          "tokenUrl": "https://sso.example.com/realms/initech-labs/protocol/openid-connect/token",
+          "defaultScopes": "openid profile email",
+          "validateSignature": true
+        }
+      },
+      "resourceVersion": "1"
+    }
+  ]
+}
