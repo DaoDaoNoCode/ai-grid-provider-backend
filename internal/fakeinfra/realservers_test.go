@@ -495,7 +495,7 @@ func TestRealSubscriptionsServerOnFakeHub(t *testing.T) {
 	if _, err := s.Delete(ctx, &aigridv1.SubscriptionsDeleteRequest{Id: "team-smoke"}); err != nil {
 		t.Fatalf("Delete() error = %v", err)
 	}
-	if _, err := s.Get(ctx, &aigridv1.SubscriptionsGetRequest{Id: "team-smoke"}); status.Code(err) != codes.NotFound {
+	if _, err := s.Get(ctx, &aigridv1.SubscriptionsGetRequest{Id: "team-smoke"}); connect.CodeOf(err) != connect.CodeNotFound {
 		t.Fatalf("Get after delete = %v, want NotFound", err)
 	}
 }
