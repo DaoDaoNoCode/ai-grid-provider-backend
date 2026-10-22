@@ -35,7 +35,7 @@ KEYCLOAK_PORT ?= 8180
 GRPC_ADDR ?= localhost:8080
 HTTP_ADDR ?= http://localhost:8081
 
-.PHONY: help all binary build-bin build test unit smoke smoke-openshift vet fmt-check lint verify generate \
+.PHONY: help all binary build-bin build test unit smoke smoke-openshift vet fmt-check lint verify generate check-generated \
 	image container push build-and-push run \
 	keycloak-up keycloak-down keycloak-seed \
 	build-fake-infra dev-fake dev-fake-poc \
@@ -99,13 +99,30 @@ lint: fmt-check vet ## gofmt check, go vet; golangci-lint when installed
 		echo "golangci-lint not installed; gofmt and go vet completed"; \
 	fi
 
-# Regenerates protobuf, gRPC, grpc-gateway, and OpenAPI (OSAC-style buf pipeline).
-generate: ## Regenerate protobuf, gateway stubs, and OpenAPI
+# Regenerates protobuf, gRPC, Connect, and OpenAPI (OSAC-style buf pipeline).
+generate: ## Regenerate protobuf, RPC stubs, and OpenAPI
 	cd proto && buf dep update && buf generate
 	# Drop legacy monolithic stubs if a prior generate left them behind.
 	rm -f gen/ai_grid/v1/ai_grid.pb.go gen/ai_grid/v1/ai_grid_grpc.pb.go gen/ai_grid/v1/ai_grid.pb.gw.go
 	mkdir -p internal/restgateway/openapi
 	cp docs/openapi/ai_grid.swagger.json internal/restgateway/openapi/ai_grid.swagger.json
+
+# Generates into a temporary directory and compares. This catches a file the
+# protobuf no longer produces, which `git status` cannot: an orphaned generated
+# file is committed and unmodified, so the worktree looks clean.
+check-generated: ## fail when the committed output differs from what proto/ generates: stale, missing or left-over files
+	tmp="$$(mktemp -d)" && trap 'rm -rf "$$tmp"' EXIT && \
+	sed -e "s#out: \.\./gen\$$#out: $$tmp/gen#" \
+	    -e "s#out: \.\./docs/openapi\$$#out: $$tmp/openapi#" \
+	    proto/buf.gen.yaml > "$$tmp/buf.gen.yaml" && \
+	if grep -q "out: \.\./" "$$tmp/buf.gen.yaml"; then \
+	  echo "check-generated: an out: path in proto/buf.gen.yaml was not redirected; the check would compare the real output with itself" >&2; \
+	  exit 1; \
+	fi && \
+	(cd proto && buf generate --template "$$tmp/buf.gen.yaml") && \
+	diff -r "$$tmp/gen/ai_grid/v1" gen/ai_grid/v1 && \
+	diff -r "$$tmp/openapi" docs/openapi && \
+	diff "$$tmp/openapi/ai_grid.swagger.json" internal/restgateway/openapi/ai_grid.swagger.json
 
 verify: build unit lint ## Build binary + unit tests + lint
 

@@ -1,8 +1,11 @@
 # AI Grid backend
 
-`ai-grid-provider-backend` is a Go gRPC service that manages Open Cluster
+`ai-grid-provider-backend` is a Go service that manages Open Cluster
 Management (OCM)/RHACM `ManagedCluster` resources via the Kubernetes API
-(hub-side CRUD; it does not provision spoke clusters).
+(hub-side CRUD; it does not provision spoke clusters). It is built with
+[connect-go](https://connectrpc.com), so `:8080` answers the Connect, gRPC and
+gRPC-Web protocols from one set of handlers and a browser can call it without
+a proxy.
 
 The current API includes:
 
@@ -18,14 +21,18 @@ The current API includes:
 - `ai_grid.v1.Tenants/Update`
 - `ai_grid.v1.Tenants/Delete`
 
-REST (grpc-gateway) and Swagger UI are also exposed on HTTP `:8081`:
+REST and Swagger UI are also exposed on HTTP `:8081`:
 
 - Swagger UI: `http://localhost:8081/docs/`
 - OpenAPI (Swagger 2.0): `http://localhost:8081/openapi.json`
 - REST routes: `/api/v1/ping`, `/api/v1/clusters`, `/api/v1/tenants`
 - UI handout (payloads + examples): [`docs/UI_API_REFERENCE.md`](docs/UI_API_REFERENCE.md)
 
-Regenerate protobuf, gateway stubs, and OpenAPI with `make generate` (requires [buf](https://buf.build)).
+[vanguard](https://github.com/connectrpc/vanguard-go) serves REST by reading
+the `google.api.http` annotations off the descriptors at runtime, so there is
+no generated gateway code. The same routes answer on `:8080` as well.
+
+Regenerate protobuf, RPC stubs and OpenAPI with `make generate` (requires [buf](https://buf.build)).
 
 ManagedCluster RPCs use the Kubernetes dynamic client against:
 
@@ -157,9 +164,17 @@ List available gRPC services:
 grpcurl -plaintext localhost:8080 list
 ```
 
-API request authn/authz is out of scope for this MVP — gRPC and REST endpoints
+API request authn/authz is out of scope for this MVP — gRPC, Connect and REST endpoints
 are open. Keycloak is used only as the Tenants Organizations Admin API backend.
 See [`docs/UI_API_REFERENCE.md`](docs/UI_API_REFERENCE.md).
+
+The same port speaks the Connect protocol, which is a plain HTTP POST with a
+JSON body — what a browser sends:
+
+```sh
+curl -X POST -H 'Content-Type: application/json' -d '{"name":"world"}' \
+  http://localhost:8080/ai_grid.v1.AiGrid/Ping
+```
 
 Call the Clusters API (hub ManagedCluster list / get / create / update / delete):
 
@@ -476,10 +491,10 @@ cmd/ai-grid-provider-backend/             service entrypoint
 client/                          reusable gRPC client
 proto/                           protobuf + buf config
 proto/ai_grid/v1/                per-resource *_type.proto / *_service.proto + metadata
-gen/ai_grid/v1/                  generated protobuf, gRPC, and gateway code
+gen/ai_grid/v1/                  generated protobuf, gRPC, and Connect code
 docs/UI_API_REFERENCE.md         REST payloads for UI/BFF consumers
 docs/openapi/                    generated OpenAPI (Swagger 2.0) JSON
-internal/servers/                Per-resource gRPC servers (OSAC-style builders)
+internal/servers/                Per-resource connect-go handlers (OSAC-style builders)
 internal/servers/clusters_server.go         Kubernetes-backed Clusters API
 internal/servers/tenants_server.go Keycloak-backed tenant API
 internal/keycloak/               Keycloak Admin API client

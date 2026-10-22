@@ -19,14 +19,13 @@ import (
 	"testing"
 	"time"
 
+	connect "connectrpc.com/connect/v2"
 	aigridv1 "github.com/osac-project/ai-grid-provider-backend/gen/ai_grid/v1"
 	"github.com/osac-project/ai-grid-provider-backend/internal/fakeinfra/devserve"
 	"github.com/osac-project/ai-grid-provider-backend/internal/fakeinfra/hub"
 	fakekeycloak "github.com/osac-project/ai-grid-provider-backend/internal/fakeinfra/keycloak"
 	"github.com/osac-project/ai-grid-provider-backend/internal/keycloak"
 	"github.com/osac-project/ai-grid-provider-backend/internal/servers"
-	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/rest"
@@ -99,7 +98,7 @@ func TestRealClustersServerOnFakeHub(t *testing.T) {
 	if lyon.GetObject().GetMetadata().GetDeletionTimestamp() == nil {
 		t.Fatal("edge-lyon-2 has no deletion timestamp")
 	}
-	if _, err := s.Get(ctx, &aigridv1.ClustersGetRequest{Id: "missing"}); status.Code(err) != codes.NotFound {
+	if _, err := s.Get(ctx, &aigridv1.ClustersGetRequest{Id: "missing"}); connect.CodeOf(err) != connect.CodeNotFound {
 		t.Fatalf("Get(missing) error = %v, want NotFound", err)
 	}
 
@@ -118,11 +117,11 @@ func TestRealClustersServerOnFakeHub(t *testing.T) {
 	if again.GetObject().GetMetadata().GetLabels()["ai-grid/enabled"] != "true" {
 		t.Fatal("update not stored")
 	}
-	if _, err := s.Update(ctx, &aigridv1.ClustersUpdateRequest{Object: &aigridv1.ManagedCluster{Id: "missing"}}); status.Code(err) != codes.NotFound {
+	if _, err := s.Update(ctx, &aigridv1.ClustersUpdateRequest{Object: &aigridv1.ManagedCluster{Id: "missing"}}); connect.CodeOf(err) != connect.CodeNotFound {
 		t.Fatalf("Update(missing) error = %v, want NotFound", err)
 	}
 
-	if _, err := s.Create(ctx, &aigridv1.ClustersCreateRequest{Object: &aigridv1.ManagedCluster{Id: "site-paris-1"}}); status.Code(err) != codes.AlreadyExists {
+	if _, err := s.Create(ctx, &aigridv1.ClustersCreateRequest{Object: &aigridv1.ManagedCluster{Id: "site-paris-1"}}); connect.CodeOf(err) != connect.CodeAlreadyExists {
 		t.Fatalf("Create(existing) error = %v, want AlreadyExists", err)
 	}
 	created, err := s.Create(ctx, &aigridv1.ClustersCreateRequest{Object: &aigridv1.ManagedCluster{Id: "site-rome-1", Spec: &aigridv1.ManagedClusterSpec{HubAcceptsClient: true}}})
@@ -140,7 +139,7 @@ func TestRealClustersServerOnFakeHub(t *testing.T) {
 
 	// A token the hub rejects reaches the backend as PermissionDenied.
 	denied := clustersServer(t, &rest.Config{Host: srv.URL, BearerToken: "expired-token"})
-	if _, err := denied.Get(ctx, &aigridv1.ClustersGetRequest{Id: "site-paris-1"}); status.Code(err) != codes.PermissionDenied {
+	if _, err := denied.Get(ctx, &aigridv1.ClustersGetRequest{Id: "site-paris-1"}); connect.CodeOf(err) != connect.CodePermissionDenied {
 		t.Fatalf("Get(expired token) error = %v, want PermissionDenied", err)
 	}
 }
@@ -261,7 +260,7 @@ func TestRealClustersServerUpdateVersion(t *testing.T) {
 		Object:     &aigridv1.ManagedCluster{Id: "site-oslo-1", Metadata: &aigridv1.Metadata{Labels: read.GetLabels(), Version: read.GetVersion()}},
 		UpdateMask: mask,
 	})
-	if status.Code(err) != codes.Aborted {
+	if connect.CodeOf(err) != connect.CodeAborted {
 		t.Fatalf("Update(stale version) error = %v, want Aborted", err)
 	}
 	// A stale version is Aborted before the labels are checked, so a label ACM
@@ -273,7 +272,7 @@ func TestRealClustersServerUpdateVersion(t *testing.T) {
 		"changed ACM label": {Object: &aigridv1.ManagedCluster{Id: "site-oslo-1", Metadata: &aigridv1.Metadata{Labels: changed, Version: read.GetVersion()}}, UpdateMask: mask},
 		"no field":          {Object: &aigridv1.ManagedCluster{Id: "site-oslo-1", Metadata: &aigridv1.Metadata{Version: read.GetVersion()}}},
 	} {
-		if _, err := s.Update(ctx, req); status.Code(err) != codes.Aborted {
+		if _, err := s.Update(ctx, req); connect.CodeOf(err) != connect.CodeAborted {
 			t.Fatalf("Update(stale version, %s) error = %v, want Aborted", name, err)
 		}
 	}
@@ -281,7 +280,7 @@ func TestRealClustersServerUpdateVersion(t *testing.T) {
 	if _, err := s.Update(ctx, &aigridv1.ClustersUpdateRequest{
 		Object:     &aigridv1.ManagedCluster{Id: "site-oslo-1", Metadata: &aigridv1.Metadata{Labels: changed, Version: added.GetObject().GetMetadata().GetVersion()}},
 		UpdateMask: mask,
-	}); status.Code(err) != codes.InvalidArgument {
+	}); connect.CodeOf(err) != connect.CodeInvalidArgument {
 		t.Fatalf("Update(current version, changed ACM label) error = %v, want InvalidArgument", err)
 	}
 
@@ -309,7 +308,7 @@ func TestRealClustersServerUpdateVersion(t *testing.T) {
 	// lock without a version is refused.
 	if _, err := s.Update(ctx, &aigridv1.ClustersUpdateRequest{
 		Object: &aigridv1.ManagedCluster{Id: "site-oslo-1", Metadata: &aigridv1.Metadata{Labels: remove}}, UpdateMask: mask, Lock: true,
-	}); status.Code(err) != codes.InvalidArgument {
+	}); connect.CodeOf(err) != connect.CodeInvalidArgument {
 		t.Fatalf("Update(lock, no version) error = %v, want InvalidArgument", err)
 	}
 }

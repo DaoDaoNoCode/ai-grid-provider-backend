@@ -10,17 +10,18 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"sync"
 	"syscall"
 	"time"
 
-	aigridv1 "github.com/osac-project/ai-grid-provider-backend/gen/ai_grid/v1"
+	connect "connectrpc.com/connect/v2"
+	"connectrpc.com/connect/v2/connecthttp"
+	grpchealth "connectrpc.com/grpchealth/v2"
+	grpcreflect "connectrpc.com/grpcreflect/v2"
+	"github.com/osac-project/ai-grid-provider-backend/gen/ai_grid/v1/aigridv1connect"
 	"github.com/osac-project/ai-grid-provider-backend/internal/keycloak"
 	"github.com/osac-project/ai-grid-provider-backend/internal/restgateway"
 	"github.com/osac-project/ai-grid-provider-backend/internal/servers"
-	"google.golang.org/grpc"
-	"google.golang.org/grpc/health"
-	healthv1 "google.golang.org/grpc/health/grpc_health_v1"
-	"google.golang.org/grpc/reflection"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
@@ -71,36 +72,74 @@ func main() {
 		os.Exit(1)
 	}
 
-	grpcServer := grpc.NewServer()
-	aigridv1.RegisterAiGridServer(grpcServer, aiGridServer)
-	aigridv1.RegisterClustersServer(grpcServer, clustersServer)
-	aigridv1.RegisterTenantsServer(grpcServer, tenantsServer)
+	// One *connect.Server holds every service. connecthttp serves Connect,
+	// gRPC and gRPC-Web from it; vanguard serves the google.api.http
+	// annotations as REST. Both transports dispatch the same handlers.
+	server := connect.NewServer()
+	aigridv1connect.RegisterAiGridHandler(server, aiGridServer)
+	aigridv1connect.RegisterClustersHandler(server, clustersServer)
+	aigridv1connect.RegisterTenantsHandler(server, tenantsServer)
 
-	healthServer := health.NewServer()
-	healthServer.SetServingStatus("", healthv1.HealthCheckResponse_SERVING)
-	healthv1.RegisterHealthServer(grpcServer, healthServer)
-	reflection.Register(grpcServer)
+	grpchealth.Register(server, grpchealth.NewStaticChecker(
+		aigridv1connect.AiGridName,
+		aigridv1connect.ClustersName,
+		aigridv1connect.TenantsName,
+	))
+	// Reflection lists the three API services. It does not list grpc.health.v1.Health:
+	// grpchealth/v2 registers its methods without a protobuf Schema and grpcreflect
+	// skips schema-less methods. Health/Check by name and `grpcurl describe` both work,
+	// which is what hack/smoke-apis.sh relies on.
+	grpcreflect.Register(server)
+
+	mux := http.NewServeMux()
+	connecthttp.Mount(mux, server)
+	if err := restgateway.Mount(mux, server); err != nil {
+		fmt.Fprintf(os.Stderr, "%v\n", err)
+		os.Exit(1)
+	}
+
+	// Plaintext HTTP/2 so gRPC clients (grpcurl, client/, integration/) reach
+	// the same address they always have, alongside HTTP/1.1 Connect callers.
+	protocols := new(http.Protocols)
+	protocols.SetHTTP1(true)
+	protocols.SetUnencryptedHTTP2(true)
+	apiServer := &http.Server{
+		Handler:   mux,
+		Protocols: protocols,
+		// grpc-go applied its own limits to slow and idle connections. A bare
+		// net/http server waits on a slow client indefinitely. No WriteTimeout:
+		// it would cut long-running streams.
+		ReadHeaderTimeout: 10 * time.Second,
+		IdleTimeout:       120 * time.Second,
+	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	gateway, err := restgateway.New(ctx, *httpAddress, restgateway.Servers{
-		AiGrid:   aiGridServer,
-		Clusters: clustersServer,
-		Tenants:  tenantsServer,
-	})
+	gateway, err := restgateway.New(*httpAddress, server)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "REST gateway: %v\n", err)
 		os.Exit(1)
 	}
 
+	// http.Server.Shutdown makes Serve return ErrServerClosed immediately, so main
+	// must wait for the drain itself: "Make sure the program doesn't exit and waits
+	// instead for Shutdown to return." grpc-go's Serve used to block until
+	// GracefulStop finished, so without this a pod termination cuts off live RPCs.
+	drained := make(chan struct{})
 	go func() {
+		defer close(drained)
 		<-ctx.Done()
 		slog.Info("shutting down ai-grid-provider-backend")
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
-		_ = gateway.Shutdown(shutdownCtx)
-		grpcServer.GracefulStop()
+		// Concurrently: run in sequence and a REST drain that uses the whole
+		// deadline leaves the RPC server none, cutting calls still in flight.
+		var wg sync.WaitGroup
+		wg.Add(2)
+		go func() { defer wg.Done(); _ = gateway.Shutdown(shutdownCtx) }()
+		go func() { defer wg.Done(); _ = apiServer.Shutdown(shutdownCtx) }()
+		wg.Wait()
 	}()
 
 	go func() {
@@ -111,10 +150,11 @@ func main() {
 	}()
 
 	slog.Info("ai-grid-provider-backend listening", "grpc", listener.Addr().String(), "http", gateway.Addr())
-	if err := grpcServer.Serve(listener); err != nil && !errors.Is(err, grpc.ErrServerStopped) {
-		fmt.Fprintf(os.Stderr, "gRPC server: %v\n", err)
+	if err := apiServer.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) {
+		fmt.Fprintf(os.Stderr, "RPC server: %v\n", err)
 		os.Exit(1)
 	}
+	<-drained
 }
 
 func getEnv(name, fallback string) string {

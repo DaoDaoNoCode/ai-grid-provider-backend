@@ -40,11 +40,11 @@ ai-grid-provider-backend/
 ├── cmd/ai-grid-provider-backend/   # Service entrypoint
 ├── client/                         # Reusable gRPC client
 ├── proto/ai_grid/v1/               # Per-resource *_type.proto / *_service.proto + metadata
-├── gen/ai_grid/v1/                 # Generated Go + gateway stubs (committed)
+├── gen/ai_grid/v1/                 # Generated Go, gRPC and Connect code (committed)
 ├── docs/openapi/                   # Generated OpenAPI (Swagger 2.0)
 ├── internal/servers/               # Per-resource gRPC servers (OSAC-style builders)
 ├── internal/keycloak/              # Keycloak Admin API client
-├── internal/restgateway/           # HTTP gateway + Swagger UI
+├── internal/restgateway/           # REST surface (vanguard) + Swagger UI
 ├── deploy/kind/                    # Kind manifests
 ├── hack/                           # Local Kind/OCM helpers
 ├── integration/                    # Kind integration tests
@@ -1506,7 +1506,8 @@ On first authenticated request, automatically creates a user record. Eliminates 
 |----------|---------|--------|
 | gRPC | `google.golang.org/grpc` | Server + client |
 | Protobuf | `google.golang.org/protobuf` | Types + reflection |
-| REST gateway | `github.com/grpc-ecosystem/grpc-gateway/v2` | HTTP→gRPC proxy |
+| REST transcoding | `connectrpc.com/vanguard` | Serves the google.api.http annotations; no separate registration step |
+| RPC | `connectrpc.com/connect/v2` | One handler answers Connect, gRPC and gRPC-Web |
 | Proto validation | `buf.build/go/protovalidate` | Field validation |
 | PostgreSQL | `github.com/jackc/pgx/v5` | Database driver + pool |
 | Migrations | `github.com/golang-migrate/migrate/v4` | Schema migrations |

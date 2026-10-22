@@ -11,6 +11,8 @@ import (
 	"testing"
 	"time"
 
+	connect "connectrpc.com/connect/v2"
+	"github.com/osac-project/ai-grid-provider-backend/gen/ai_grid/v1/aigridv1connect"
 	"github.com/osac-project/ai-grid-provider-backend/internal/keycloak"
 	"github.com/osac-project/ai-grid-provider-backend/internal/restgateway"
 	"github.com/osac-project/ai-grid-provider-backend/internal/servers"
@@ -336,12 +338,12 @@ func startGateway(t *testing.T, objects []runtime.Object, orgs organizationClien
 		t.Fatalf("build Tenants server: %v", err)
 	}
 
-	ctx := context.Background()
-	gateway, err := restgateway.New(ctx, "127.0.0.1:0", restgateway.Servers{
-		AiGrid:   aiGridServer,
-		Clusters: clustersServer,
-		Tenants:  tenantsServer,
-	})
+	server := connect.NewServer()
+	aigridv1connect.RegisterAiGridHandler(server, aiGridServer)
+	aigridv1connect.RegisterClustersHandler(server, clustersServer)
+	aigridv1connect.RegisterTenantsHandler(server, tenantsServer)
+
+	gateway, err := restgateway.New("127.0.0.1:0", server)
 	if err != nil {
 		t.Fatalf("restgateway.New: %v", err)
 	}

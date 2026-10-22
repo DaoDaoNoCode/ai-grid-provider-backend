@@ -11,11 +11,13 @@ plugins:
     opt:
       - paths=source_relative
 
-  - remote: buf.build/grpc-ecosystem/gateway:v2.26.1
+  - remote: buf.build/connectrpc/go:v2.0.1
     out: ../gen
     opt:
       - paths=source_relative
 
+  # No gateway plugin: vanguard serves the google.api.http annotations at
+  # runtime. openapiv2 still reads them, so docs/openapi is unaffected.
   - remote: buf.build/grpc-ecosystem/openapiv2:v2.26.1
     out: ../docs/openapi
     opt:

@@ -1,12 +1,13 @@
 package servers
 
 import (
+	connect "connectrpc.com/connect/v2"
 	"context"
-	"errors"
 	"fmt"
 	"log/slog"
 
 	aigridv1 "github.com/osac-project/ai-grid-provider-backend/gen/ai_grid/v1"
+	"github.com/osac-project/ai-grid-provider-backend/gen/ai_grid/v1/aigridv1connect"
 )
 
 // AiGridServerBuilder configures an AiGridServer.
@@ -16,11 +17,11 @@ type AiGridServerBuilder struct {
 
 // AiGridServer implements ai_grid.v1.AiGrid.
 type AiGridServer struct {
-	aigridv1.UnimplementedAiGridServer
+	aigridv1connect.UnimplementedAiGridHandler
 	logger *slog.Logger
 }
 
-var _ aigridv1.AiGridServer = (*AiGridServer)(nil)
+var _ aigridv1connect.AiGridHandler = (*AiGridServer)(nil)
 
 // NewAiGridServer creates a builder for AiGridServer.
 func NewAiGridServer() *AiGridServerBuilder {
@@ -45,7 +46,7 @@ func (b *AiGridServerBuilder) Build() (*AiGridServer, error) {
 // Ping returns a greeting for the requested name.
 func (s *AiGridServer) Ping(_ context.Context, request *aigridv1.AiGridPingRequest) (*aigridv1.AiGridPingResponse, error) {
 	if request == nil {
-		return nil, errors.New("request is required")
+		return nil, connect.Errorf(connect.CodeInvalidArgument, "request is required")
 	}
 	name := request.GetName()
 	if name == "" {
