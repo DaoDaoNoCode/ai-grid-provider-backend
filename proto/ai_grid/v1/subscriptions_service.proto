@@ -41,6 +41,13 @@ message SubscriptionsGetRequest {
 
 message SubscriptionsGetResponse {
   Subscription object = 1;
+
+  // AuthPolicies in the subscription namespace whose modelRefs intersect the
+  // subscription's models (includes the managed <id>-policy when present).
+  repeated AuthPolicy auth_policies = 2;
+
+  // MaaSModelRef status for each referenced model that exists.
+  repeated ModelRegistration model_registrations = 3;
 }
 
 message SubscriptionsCreateRequest {
@@ -49,13 +56,16 @@ message SubscriptionsCreateRequest {
 
 message SubscriptionsCreateResponse {
   Subscription object = 1;
+
+  // Managed MaaSAuthPolicy created with the subscription (<id>-policy).
+  AuthPolicy auth_policy = 2;
 }
 
 message SubscriptionsUpdateRequest {
   Subscription object = 1;
   google.protobuf.FieldMask update_mask = 2;
 
-  // Lock enables optimistic locking against metadata.version. Not enforced yet.
+  // Lock enables optimistic locking against metadata.version.
   bool lock = 3;
 }
 
@@ -70,26 +80,24 @@ message SubscriptionsDeleteRequest {
 
 message SubscriptionsDeleteResponse {}
 
-// Subscriptions manage MaaS entitlements (spoke MaaSSubscription CRs).
-// Storage and spoke reconciliation are not implemented yet; List returns empty
-// and Get/Create/Update/Delete return Unimplemented.
+// Subscriptions manage MaaS entitlements (namespaced MaaSSubscription CRs).
+// Create/Update/Delete also maintain a managed MaaSAuthPolicy named <id>-policy.
 service Subscriptions {
   rpc List(SubscriptionsListRequest) returns (SubscriptionsListResponse) {
     option (google.api.http) = {get: "/api/v1/subscriptions"};
   }
 
+  // Returns the subscription plus covering auth policies and model registrations.
+  // Full response body (not unwrapped to object alone).
   rpc Get(SubscriptionsGetRequest) returns (SubscriptionsGetResponse) {
-    option (google.api.http) = {
-      get: "/api/v1/subscriptions/{id}"
-      response_body: "object"
-    };
+    option (google.api.http) = {get: "/api/v1/subscriptions/{id}"};
   }
 
+  // Creates the subscription and a managed <id>-policy. Full response body.
   rpc Create(SubscriptionsCreateRequest) returns (SubscriptionsCreateResponse) {
     option (google.api.http) = {
       post: "/api/v1/subscriptions"
       body: "object"
-      response_body: "object"
     };
   }
 

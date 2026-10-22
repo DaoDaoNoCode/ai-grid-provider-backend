@@ -30,12 +30,14 @@ const (
 //
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 //
-// Subscriptions manage MaaS entitlements (spoke MaaSSubscription CRs).
-// Storage and spoke reconciliation are not implemented yet; List returns empty
-// and Get/Create/Update/Delete return Unimplemented.
+// Subscriptions manage MaaS entitlements (namespaced MaaSSubscription CRs).
+// Create/Update/Delete also maintain a managed MaaSAuthPolicy named <id>-policy.
 type SubscriptionsClient interface {
 	List(ctx context.Context, in *SubscriptionsListRequest, opts ...grpc.CallOption) (*SubscriptionsListResponse, error)
+	// Returns the subscription plus covering auth policies and model registrations.
+	// Full response body (not unwrapped to object alone).
 	Get(ctx context.Context, in *SubscriptionsGetRequest, opts ...grpc.CallOption) (*SubscriptionsGetResponse, error)
+	// Creates the subscription and a managed <id>-policy. Full response body.
 	Create(ctx context.Context, in *SubscriptionsCreateRequest, opts ...grpc.CallOption) (*SubscriptionsCreateResponse, error)
 	Update(ctx context.Context, in *SubscriptionsUpdateRequest, opts ...grpc.CallOption) (*SubscriptionsUpdateResponse, error)
 	Delete(ctx context.Context, in *SubscriptionsDeleteRequest, opts ...grpc.CallOption) (*SubscriptionsDeleteResponse, error)
@@ -103,12 +105,14 @@ func (c *subscriptionsClient) Delete(ctx context.Context, in *SubscriptionsDelet
 // All implementations must embed UnimplementedSubscriptionsServer
 // for forward compatibility.
 //
-// Subscriptions manage MaaS entitlements (spoke MaaSSubscription CRs).
-// Storage and spoke reconciliation are not implemented yet; List returns empty
-// and Get/Create/Update/Delete return Unimplemented.
+// Subscriptions manage MaaS entitlements (namespaced MaaSSubscription CRs).
+// Create/Update/Delete also maintain a managed MaaSAuthPolicy named <id>-policy.
 type SubscriptionsServer interface {
 	List(context.Context, *SubscriptionsListRequest) (*SubscriptionsListResponse, error)
+	// Returns the subscription plus covering auth policies and model registrations.
+	// Full response body (not unwrapped to object alone).
 	Get(context.Context, *SubscriptionsGetRequest) (*SubscriptionsGetResponse, error)
+	// Creates the subscription and a managed <id>-policy. Full response body.
 	Create(context.Context, *SubscriptionsCreateRequest) (*SubscriptionsCreateResponse, error)
 	Update(context.Context, *SubscriptionsUpdateRequest) (*SubscriptionsUpdateResponse, error)
 	Delete(context.Context, *SubscriptionsDeleteRequest) (*SubscriptionsDeleteResponse, error)

@@ -77,7 +77,10 @@ var (
 // SubscriptionsClient is a client for the ai_grid.v1.Subscriptions service.
 type SubscriptionsClient interface {
 	List(context.Context, *v1.SubscriptionsListRequest) (*v1.SubscriptionsListResponse, error)
+	// Returns the subscription plus covering auth policies and model registrations.
+	// Full response body (not unwrapped to object alone).
 	Get(context.Context, *v1.SubscriptionsGetRequest) (*v1.SubscriptionsGetResponse, error)
+	// Creates the subscription and a managed <id>-policy. Full response body.
 	Create(context.Context, *v1.SubscriptionsCreateRequest) (*v1.SubscriptionsCreateResponse, error)
 	Update(context.Context, *v1.SubscriptionsUpdateRequest) (*v1.SubscriptionsUpdateResponse, error)
 	Delete(context.Context, *v1.SubscriptionsDeleteRequest) (*v1.SubscriptionsDeleteResponse, error)
@@ -92,7 +95,10 @@ func NewSubscriptionsClient(client *connect.Client) SubscriptionsClient {
 // SubscriptionsHandler is an implementation of the ai_grid.v1.Subscriptions service.
 type SubscriptionsHandler interface {
 	List(context.Context, *v1.SubscriptionsListRequest) (*v1.SubscriptionsListResponse, error)
+	// Returns the subscription plus covering auth policies and model registrations.
+	// Full response body (not unwrapped to object alone).
 	Get(context.Context, *v1.SubscriptionsGetRequest) (*v1.SubscriptionsGetResponse, error)
+	// Creates the subscription and a managed <id>-policy. Full response body.
 	Create(context.Context, *v1.SubscriptionsCreateRequest) (*v1.SubscriptionsCreateResponse, error)
 	Update(context.Context, *v1.SubscriptionsUpdateRequest) (*v1.SubscriptionsUpdateResponse, error)
 	Delete(context.Context, *v1.SubscriptionsDeleteRequest) (*v1.SubscriptionsDeleteResponse, error)
