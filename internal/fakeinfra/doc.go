@@ -1,5 +1,6 @@
 // Package fakeinfra groups the fake infrastructure the real backend runs
 // against in dev mode: hub (the hub's Kubernetes API for ManagedClusters,
+// LLMInferenceService / Placement / ManifestWorkReplicaSet for Models,
 // MaaS Subscription/AuthPolicy/ModelRef CRs, and SelfSubjectAccessReview),
 // keycloak (Keycloak's token endpoint and Organizations Admin API) and
 // devserve (TLS listener and kubeconfig).

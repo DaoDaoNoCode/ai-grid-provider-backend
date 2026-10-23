@@ -563,8 +563,9 @@ this file is the current contract snapshot).
 ## 7. Local / OpenShift try-out
 
 ```bash
-# Local without a cluster (fake hub seeds model / MaaS CRs for Models)
+# Local without a cluster (fixtures/default seeds LLMInferenceService for Models)
 make dev-fake
+# Prefer make dev-fake over make dev-fake-poc: poc has no MaaS/LLMISvc seeds.
 
 # Local against a real kubeconfig + Keycloak (needs LLMInferenceService / MaaS CRDs for Models)
 KEYCLOAK_URL=http://127.0.0.1:8180 make run
@@ -582,6 +583,7 @@ Example curls:
 curl -sS 'http://localhost:8081/api/v1/ping?name=UI'
 curl -sS 'http://localhost:8081/api/v1/clusters'
 curl -sS 'http://localhost:8081/api/v1/tenants'
+curl -sS 'http://localhost:8081/api/v1/models'
 
 curl -sS -X POST 'http://localhost:8081/api/v1/clusters' \
   -H 'Content-Type: application/json' \
@@ -590,7 +592,20 @@ curl -sS -X POST 'http://localhost:8081/api/v1/clusters' \
 curl -sS -X PATCH 'http://localhost:8081/api/v1/clusters/demo-cluster' \
   -H 'Content-Type: application/json' \
   -d '{"id":"demo-cluster","metadata":{"labels":{"ai-grid/enabled":"true"}},"spec":{"hub_accepts_client":true}}'
+
+# Models (hub-only; Create deploys LLMInferenceService + MaaSModelRef)
+curl -sS -X POST 'http://localhost:8081/api/v1/models' \
+  -H 'Content-Type: application/json' \
+  -d '{"id":"facebook-opt-125m","metadata":{"name":"facebook-opt-125m","annotations":{"openshift.io/display-name":"Facebook OPT 125M"}},"spec":{"model":{"uri":"hf://facebook/opt-125m","name":"facebook/opt-125m"},"replicas":1,"main":{"image":"quay.io/example/vllm:latest","requests":{"cpu":"100m","memory":"1Gi"},"limits":{"cpu":"1","memory":"2Gi"}}}}'
+
+curl -sS 'http://localhost:8081/api/v1/models/facebook-opt-125m'
+curl -sS -X PATCH 'http://localhost:8081/api/v1/models/facebook-opt-125m' \
+  -H 'Content-Type: application/json' \
+  -d '{"id":"facebook-opt-125m","metadata":{"name":"facebook-opt-125m"},"spec":{"replicas":2}}'
+curl -sS -X DELETE 'http://localhost:8081/api/v1/models/facebook-opt-125m'
 ```
+
+Subscriptions live on PR #13 (`feat/subscriptions_api`), not this Models branch.
 
 ---
 
