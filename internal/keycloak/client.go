@@ -100,9 +100,10 @@ type OrganizationMember struct {
 // through GET→modify→PUT so Keycloak replacement semantics do not clear them,
 // and so are the keys this type doesn't model, in Extra.
 //
-// Domains is always written, as [] when empty: Keycloak leaves the stored
-// domains unchanged when a PUT has no domains key, so an update that removes
-// the last domain must send an empty list.
+// Domains is always written, as [] when empty. What Keycloak does with a PUT
+// that has no domains key depends on its version: 26.8 and later keep the
+// stored domains, earlier versions clear them. Sending the list is right for
+// both.
 type Organization struct {
 	ID          string                     `json:"id,omitempty"`
 	Name        string                     `json:"name"`
@@ -304,7 +305,23 @@ func (c *Client) CreateOrganization(ctx context.Context, org Organization) (Orga
 	return c.GetOrganization(ctx, id)
 }
 
-// UpdateOrganization replaces a Keycloak Organization representation.
+// ReadBackError is UpdateOrganization's error when the PUT succeeded but the
+// GET that follows it failed: the change is stored, and Written is the
+// representation that was sent.
+type ReadBackError struct {
+	Written Organization
+	Err     error
+}
+
+func (e *ReadBackError) Error() string {
+	return fmt.Sprintf("read back updated organization %s: %v", e.Written.ID, e.Err)
+}
+
+func (e *ReadBackError) Unwrap() error { return e.Err }
+
+// UpdateOrganization replaces a Keycloak Organization representation and
+// returns the stored one. When the PUT succeeds and the read-back fails, the
+// error is a *ReadBackError.
 func (c *Client) UpdateOrganization(ctx context.Context, org Organization) (Organization, error) {
 	if org.ID == "" {
 		return Organization{}, fmt.Errorf("organization id is required")
@@ -322,7 +339,11 @@ func (c *Client) UpdateOrganization(ctx context.Context, org Organization) (Orga
 	if err := c.doJSON(ctx, http.MethodPut, c.orgURL(org.ID), token, payload, nil, "update organization"); err != nil {
 		return Organization{}, err
 	}
-	return c.GetOrganization(ctx, org.ID)
+	stored, err := c.GetOrganization(ctx, org.ID)
+	if err != nil {
+		return Organization{}, &ReadBackError{Written: org, Err: err}
+	}
+	return stored, nil
 }
 
 // DeleteOrganization deletes a Keycloak Organization by id.

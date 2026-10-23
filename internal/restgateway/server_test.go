@@ -246,9 +246,15 @@ func TestRESTTenantCRUD(t *testing.T) {
 		t.Fatalf("get after create = %s", got)
 	}
 
+	// The body sends back the version and creation time it read, as a client
+	// round-tripping the GET response does.
+	createdMeta, _ := created["metadata"].(map[string]any)
+	if createdMeta["version"] != float64(1) || createdMeta["creation_timestamp"] == nil {
+		t.Fatalf("create metadata = %v", createdMeta)
+	}
 	patchBody := `{
 		"id":"` + id + `",
-		"metadata":{"name":"rest-tenant"},
+		"metadata":{"name":"rest-tenant","version":1,"creation_timestamp":"` + createdMeta["creation_timestamp"].(string) + `"},
 		"spec":{"domains":["updated.example.com"]}
 	}`
 	patchReq, err := http.NewRequest(http.MethodPatch, baseURL+"/api/v1/tenants/"+id, strings.NewReader(patchBody))
@@ -272,7 +278,32 @@ func TestRESTTenantCRUD(t *testing.T) {
 		t.Fatalf("patch body = %s", patched)
 	}
 
-	delReq, err := http.NewRequest(http.MethodDelete, baseURL+"/api/v1/tenants/"+id, nil)
+	if !strings.Contains(string(patched), `"version":2`) {
+		t.Fatalf("patch body = %s, want version 2", patched)
+	}
+
+	// A stale version: the PATCH again, and a DELETE at the read version.
+	stale, err := http.NewRequest(http.MethodPatch, baseURL+"/api/v1/tenants/"+id, strings.NewReader(patchBody))
+	if err != nil {
+		t.Fatalf("new patch request: %v", err)
+	}
+	stale.Header.Set("Content-Type", "application/json")
+	staleDel, err := http.NewRequest(http.MethodDelete, baseURL+"/api/v1/tenants/"+id+"?version=1", nil)
+	if err != nil {
+		t.Fatalf("new delete request: %v", err)
+	}
+	for _, req := range []*http.Request{stale, staleDel} {
+		resp, err := client.Do(req)
+		if err != nil {
+			t.Fatalf("%s: %v", req.Method, err)
+		}
+		_ = resp.Body.Close()
+		if resp.StatusCode != http.StatusConflict {
+			t.Fatalf("%s at a stale version: status = %d, want 409", req.Method, resp.StatusCode)
+		}
+	}
+
+	delReq, err := http.NewRequest(http.MethodDelete, baseURL+"/api/v1/tenants/"+id+"?version=2", nil)
 	if err != nil {
 		t.Fatalf("new delete request: %v", err)
 	}

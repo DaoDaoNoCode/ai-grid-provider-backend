@@ -2,6 +2,7 @@ package servers
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"maps"
@@ -9,6 +10,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	connect "connectrpc.com/connect/v2"
 	aigridv1 "github.com/osac-project/ai-grid-provider-backend/gen/ai_grid/v1"
@@ -1078,6 +1080,12 @@ type fakeOrganizationStore struct {
 	members map[string][]keycloak.OrganizationMember
 	next    int
 	listErr error
+	// updateDelay widens the window between an Update's read and its write.
+	updateDelay time.Duration
+	// readBackErr makes UpdateOrganization store the change, then fail the
+	// read-back as the real client does.
+	readBackErr error
+	puts        int
 }
 
 func newFakeOrganizationStore(orgs ...keycloak.Organization) *fakeOrganizationStore {
@@ -1132,17 +1140,27 @@ func (f *fakeOrganizationStore) CreateOrganization(_ context.Context, org keyclo
 }
 
 func (f *fakeOrganizationStore) UpdateOrganization(_ context.Context, org keycloak.Organization) (keycloak.Organization, error) {
+	time.Sleep(f.updateDelay)
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	existing, ok := f.byID[org.ID]
 	if !ok {
 		return keycloak.Organization{}, &keycloak.APIError{Op: "update organization", StatusCode: http.StatusNotFound}
 	}
+	for id, other := range f.byID {
+		if id != org.ID && other.Name == org.Name {
+			return keycloak.Organization{}, &keycloak.APIError{Op: "update organization", StatusCode: http.StatusConflict}
+		}
+	}
+	f.puts++
 	// Keycloak alias is immutable once set; preserve when omitted.
 	if org.Alias == "" {
 		org.Alias = existing.Alias
 	}
 	f.byID[org.ID] = org
+	if f.readBackErr != nil {
+		return keycloak.Organization{}, &keycloak.ReadBackError{Written: org, Err: f.readBackErr}
+	}
 	return org, nil
 }
 
@@ -1243,3 +1261,243 @@ func assertStringSlicesEqual(t *testing.T, got, want []string) {
 }
 
 func int32Ptr(v int32) *int32 { return &v }
+
+func TestTenantVersion(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	stamped := func(v string) keycloak.Organization {
+		return keycloak.Organization{
+			ID: "org-1", Name: "acme", Alias: "acme",
+			Attributes: map[string][]string{tenantVersionAttribute: {v}, "billing-id": {"keep-me"}},
+			Domains:    []keycloak.OrganizationDomain{{Name: "acme.example.com"}},
+		}
+	}
+	update := func(version int32, lock bool) *aigridv1.TenantsUpdateRequest {
+		return &aigridv1.TenantsUpdateRequest{
+			Object:     &aigridv1.Tenant{Id: "org-1", Metadata: &aigridv1.Metadata{Name: "acme-renamed", Version: version}},
+			UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"metadata.name"}},
+			Lock:       lock,
+		}
+	}
+
+	t.Run("create stamps version 1 and the create time", func(t *testing.T) {
+		t.Parallel()
+		server := mustTenantsServer(t, newFakeOrganizationStore())
+		server.now = func() time.Time { return time.Date(2026, 10, 22, 9, 30, 0, 0, time.FixedZone("ET", -4*3600)) }
+		got, err := server.Create(ctx, &aigridv1.TenantsCreateRequest{Object: &aigridv1.Tenant{Metadata: &aigridv1.Metadata{Name: "acme"}}})
+		if err != nil {
+			t.Fatalf("Create() error = %v", err)
+		}
+		meta := got.GetObject().GetMetadata()
+		if meta.GetVersion() != 1 || meta.GetCreationTimestamp().AsTime().Format(time.RFC3339) != "2026-10-22T13:30:00Z" {
+			t.Fatalf("Create() metadata = %v", meta)
+		}
+	})
+
+	t.Run("an organization made outside the backend is version 1 with no create time", func(t *testing.T) {
+		t.Parallel()
+		server := mustTenantsServer(t, newFakeOrganizationStore(
+			keycloak.Organization{ID: "org-1", Name: "acme"},
+			keycloak.Organization{ID: "org-2", Name: "beta", Attributes: map[string][]string{tenantVersionAttribute: {"junk"}, tenantCreateTimeAttribute: {"yesterday"}}},
+		))
+		list, err := server.List(ctx, &aigridv1.TenantsListRequest{})
+		if err != nil {
+			t.Fatalf("List() error = %v", err)
+		}
+		for _, item := range list.GetItems() {
+			if item.GetMetadata().GetVersion() != 1 || item.GetMetadata().GetCreationTimestamp() != nil {
+				t.Fatalf("%s metadata = %v", item.GetId(), item.GetMetadata())
+			}
+		}
+	})
+
+	t.Run("update at the current version bumps it and keeps the rest", func(t *testing.T) {
+		t.Parallel()
+		store := newFakeOrganizationStore(stamped("4"))
+		store.byID["org-1"].Domains[0].Verified = true
+		got, err := mustTenantsServer(t, store).Update(ctx, update(4, true))
+		if err != nil {
+			t.Fatalf("Update() error = %v", err)
+		}
+		if got.GetObject().GetMetadata().GetVersion() != 5 {
+			t.Fatalf("version = %d, want 5", got.GetObject().GetMetadata().GetVersion())
+		}
+		stored := store.byID["org-1"]
+		if stored.Attributes["billing-id"][0] != "keep-me" || !stored.Domains[0].Verified {
+			t.Fatalf("update dropped stored fields: %+v", stored)
+		}
+	})
+
+	t.Run("an unstamped organization takes version 1 and becomes 2", func(t *testing.T) {
+		t.Parallel()
+		store := newFakeOrganizationStore(keycloak.Organization{ID: "org-1", Name: "acme", Alias: "acme"})
+		got, err := mustTenantsServer(t, store).Update(ctx, update(1, true))
+		if err != nil || got.GetObject().GetMetadata().GetVersion() != 2 {
+			t.Fatalf("Update() = %v, %v; want version 2", got, err)
+		}
+	})
+
+	t.Run("an update without a version is unchecked and still bumps", func(t *testing.T) {
+		t.Parallel()
+		store := newFakeOrganizationStore(stamped("4"))
+		got, err := mustTenantsServer(t, store).Update(ctx, update(0, false))
+		if err != nil || got.GetObject().GetMetadata().GetVersion() != 5 {
+			t.Fatalf("Update() = %v, %v; want version 5", got, err)
+		}
+	})
+
+	t.Run("a stale version is Aborted and writes nothing", func(t *testing.T) {
+		t.Parallel()
+		store := newFakeOrganizationStore(stamped("4"))
+		server := mustTenantsServer(t, store)
+		for _, lock := range []bool{true, false} {
+			_, err := server.Update(ctx, update(3, lock))
+			assertConnectCode(t, err, connect.CodeAborted)
+		}
+		if store.byID["org-1"].Name != "acme" {
+			t.Fatalf("stale update wrote %+v", store.byID["org-1"])
+		}
+	})
+
+	t.Run("lock without a version is InvalidArgument", func(t *testing.T) {
+		t.Parallel()
+		_, err := mustTenantsServer(t, newFakeOrganizationStore(stamped("4"))).Update(ctx, update(0, true))
+		assertConnectCode(t, err, connect.CodeInvalidArgument)
+	})
+
+	t.Run("a REST body that sends back version and creation time is accepted", func(t *testing.T) {
+		t.Parallel()
+		req := update(4, false)
+		req.UpdateMask.Paths = append(req.UpdateMask.Paths, "metadata.version", "metadata.creation_timestamp")
+		if _, err := mustTenantsServer(t, newFakeOrganizationStore(stamped("4"))).Update(ctx, req); err != nil {
+			t.Fatalf("Update() error = %v", err)
+		}
+	})
+
+	t.Run("removing the last domain clears domains", func(t *testing.T) {
+		t.Parallel()
+		store := newFakeOrganizationStore(stamped("4"))
+		_, err := mustTenantsServer(t, store).Update(ctx, &aigridv1.TenantsUpdateRequest{
+			Object:     &aigridv1.Tenant{Id: "org-1", Spec: &aigridv1.TenantSpec{}},
+			UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.domains"}},
+		})
+		if err != nil {
+			t.Fatalf("Update() error = %v", err)
+		}
+		if got := store.byID["org-1"].Domains; len(got) != 0 {
+			t.Fatalf("domains = %v, want none", got)
+		}
+	})
+
+	t.Run("a kept domain keeps its stored details", func(t *testing.T) {
+		t.Parallel()
+		org := stamped("4")
+		org.Domains = []keycloak.OrganizationDomain{{
+			Name: "acme.example.com", Verified: true,
+			Extra: map[string]json.RawMessage{"identityProviderAlias": json.RawMessage(`"acme-idp"`)},
+		}}
+		store := newFakeOrganizationStore(org)
+		_, err := mustTenantsServer(t, store).Update(ctx, &aigridv1.TenantsUpdateRequest{
+			Object:     &aigridv1.Tenant{Id: "org-1", Spec: &aigridv1.TenantSpec{Domains: []string{"acme.example.com", "new.example.com"}}},
+			UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.domains"}},
+		})
+		if err != nil {
+			t.Fatalf("Update() error = %v", err)
+		}
+		got := store.byID["org-1"].Domains
+		if len(got) != 2 || !got[0].Verified || string(got[0].Extra["identityProviderAlias"]) != `"acme-idp"` || got[1].Name != "new.example.com" || got[1].Verified {
+			t.Fatalf("domains = %+v", got)
+		}
+	})
+
+	t.Run("two concurrent edits at one version: the second is Aborted", func(t *testing.T) {
+		t.Parallel()
+		store := newFakeOrganizationStore(stamped("4"))
+		store.updateDelay = 50 * time.Millisecond
+		server := mustTenantsServer(t, store)
+		rename := update(4, true)
+		domains := &aigridv1.TenantsUpdateRequest{
+			Object:     &aigridv1.Tenant{Id: "org-1", Metadata: &aigridv1.Metadata{Version: 4}, Spec: &aigridv1.TenantSpec{Domains: []string{"other.example.com"}}},
+			UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.domains"}},
+			Lock:       true,
+		}
+		errs := make(chan error, 2)
+		for _, req := range []*aigridv1.TenantsUpdateRequest{rename, domains} {
+			go func() {
+				_, err := server.Update(ctx, req)
+				errs <- err
+			}()
+		}
+		var ok, aborted int
+		for range 2 {
+			switch err := <-errs; {
+			case err == nil:
+				ok++
+			case connect.CodeOf(err) == connect.CodeAborted:
+				aborted++
+			default:
+				t.Fatalf("Update() error = %v", err)
+			}
+		}
+		if ok != 1 || aborted != 1 || store.puts != 1 {
+			t.Fatalf("ok = %d, aborted = %d, puts = %d; want 1, 1, 1", ok, aborted, store.puts)
+		}
+	})
+
+	t.Run("a mask with only id, version and creation time writes nothing", func(t *testing.T) {
+		t.Parallel()
+		store := newFakeOrganizationStore(stamped("4"))
+		req := update(4, true)
+		req.UpdateMask.Paths = []string{"id", "metadata.version", "metadata.creation_timestamp"}
+		got, err := mustTenantsServer(t, store).Update(ctx, req)
+		if err != nil {
+			t.Fatalf("Update() error = %v", err)
+		}
+		if got.GetObject().GetMetadata().GetVersion() != 4 || got.GetObject().GetMetadata().GetName() != "acme" || store.puts != 0 {
+			t.Fatalf("Update() = %v after %d writes; want version 4, name acme, no write", got.GetObject(), store.puts)
+		}
+		// Still checked: a stale version is Aborted even when nothing would change.
+		req.Object.Metadata.Version = 3
+		_, err = mustTenantsServer(t, store).Update(ctx, req)
+		assertConnectCode(t, err, connect.CodeAborted)
+	})
+
+	t.Run("a name used by another organization is AlreadyExists, naming the cause", func(t *testing.T) {
+		t.Parallel()
+		store := newFakeOrganizationStore(stamped("4"), keycloak.Organization{ID: "org-2", Name: "acme-renamed"})
+		_, err := mustTenantsServer(t, store).Update(ctx, update(4, true))
+		assertConnectCode(t, err, connect.CodeAlreadyExists)
+		if !strings.Contains(err.Error(), "already used by another organization") {
+			t.Fatalf("error = %v", err)
+		}
+	})
+
+	t.Run("a failed read-back answers with what was written", func(t *testing.T) {
+		t.Parallel()
+		store := newFakeOrganizationStore(stamped("4"))
+		store.readBackErr = errors.New("connection reset")
+		got, err := mustTenantsServer(t, store).Update(ctx, update(4, true))
+		if err != nil {
+			t.Fatalf("Update() error = %v", err)
+		}
+		if got.GetObject().GetMetadata().GetVersion() != 5 || got.GetObject().GetMetadata().GetName() != "acme-renamed" {
+			t.Fatalf("Update() = %v; want the written tenant at version 5", got.GetObject())
+		}
+	})
+
+	t.Run("delete checks a non-zero version", func(t *testing.T) {
+		t.Parallel()
+		store := newFakeOrganizationStore(stamped("4"))
+		server := mustTenantsServer(t, store)
+		_, err := server.Delete(ctx, &aigridv1.TenantsDeleteRequest{Id: "org-1", Version: 3})
+		assertConnectCode(t, err, connect.CodeAborted)
+		if _, ok := store.byID["org-1"]; !ok {
+			t.Fatal("stale delete removed the tenant")
+		}
+		if _, err := server.Delete(ctx, &aigridv1.TenantsDeleteRequest{Id: "org-1", Version: 4}); err != nil {
+			t.Fatalf("Delete(current version) error = %v", err)
+		}
+		_, err = server.Delete(ctx, &aigridv1.TenantsDeleteRequest{Id: "org-1", Version: 4})
+		assertConnectCode(t, err, connect.CodeNotFound)
+	})
+}

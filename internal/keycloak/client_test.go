@@ -3,10 +3,12 @@ package keycloak
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -466,8 +468,8 @@ func TestOrganizationIDFromLocation(t *testing.T) {
 // TestUpdateOrganizationRoundTripsUnmodelledKeys reads an organization shaped
 // like a Keycloak 26 one with a linked identity provider and writes it back
 // with no domains: the keys Organization doesn't model go back unchanged, and
-// the domains key is an empty list, because Keycloak keeps the stored domains
-// when a PUT leaves the key out.
+// the domains key is an empty list, because a PUT without the key keeps the
+// stored domains on Keycloak 26.8 and later (and clears them before 26.8).
 func TestUpdateOrganizationRoundTripsUnmodelledKeys(t *testing.T) {
 	t.Parallel()
 
@@ -511,7 +513,7 @@ func TestUpdateOrganizationRoundTripsUnmodelledKeys(t *testing.T) {
 	if err := json.Unmarshal(putBody, &got); err != nil {
 		t.Fatalf("decode PUT body: %v (%s)", err, putBody)
 	}
-	if fmt.Sprint(got) != fmt.Sprint(want) {
+	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("PUT body changed the representation:\n got %v\nwant %v", got, want)
 	}
 
@@ -524,5 +526,32 @@ func TestUpdateOrganizationRoundTripsUnmodelledKeys(t *testing.T) {
 	}
 	if !strings.Contains(string(putBody), `"identityProviders"`) {
 		t.Fatalf("PUT dropped identityProviders: %s", putBody)
+	}
+}
+
+// TestUpdateOrganizationReadBackError: a PUT that succeeds followed by a GET
+// that fails is a *ReadBackError carrying what was written, not a plain
+// failure, so the caller can tell the change is stored.
+func TestUpdateOrganizationReadBackError(t *testing.T) {
+	t.Parallel()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.Contains(r.URL.Path, "/token"):
+			_ = json.NewEncoder(w).Encode(map[string]string{"access_token": "test-token"})
+		case r.Method == http.MethodPut:
+			w.WriteHeader(http.StatusNoContent)
+		default:
+			http.Error(w, "unavailable", http.StatusServiceUnavailable)
+		}
+	}))
+	t.Cleanup(server.Close)
+	client := New(Config{
+		BaseURL: server.URL, AdminRealm: "master", Realm: "ai-grid",
+		Username: "admin", Password: "admin", HTTPClient: server.Client(),
+	})
+	_, err := client.UpdateOrganization(context.Background(), Organization{ID: "org-1", Name: "acme"})
+	var readBack *ReadBackError
+	if !errors.As(err, &readBack) || readBack.Written.Name != "acme" {
+		t.Fatalf("UpdateOrganization() error = %v, want a *ReadBackError with the written organization", err)
 	}
 }
