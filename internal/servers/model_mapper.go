@@ -12,11 +12,7 @@ import (
 )
 
 const (
-	defaultModelsNamespace       = "ai-grid-internal-models"
-	defaultSubscriptionNamespace = "models-as-a-service"
-
-	managedByLabelKey   = "app.kubernetes.io/managed-by"
-	managedByLabelValue = "ai-grid-provider-backend"
+	defaultModelsNamespace = "ai-grid-internal-models"
 
 	modelLabelKey = "ai-grid/model"
 
@@ -50,15 +46,6 @@ var (
 	}
 	manifestWorkReplicaSetsResource = schema.GroupVersionResource{
 		Group: "work.open-cluster-management.io", Version: "v1alpha1", Resource: "manifestworkreplicasets",
-	}
-	maasModelRefsResource = schema.GroupVersionResource{
-		Group: "maas.opendatahub.io", Version: "v1alpha1", Resource: "maasmodelrefs",
-	}
-	maasSubscriptionsResource = schema.GroupVersionResource{
-		Group: "maas.opendatahub.io", Version: "v1alpha1", Resource: "maassubscriptions",
-	}
-	maasAuthPoliciesResource = schema.GroupVersionResource{
-		Group: "maas.opendatahub.io", Version: "v1alpha1", Resource: "maasauthpolicies",
 	}
 
 	modelNameRE     = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$`)

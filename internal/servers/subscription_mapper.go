@@ -2,24 +2,17 @@ package servers
 
 import (
 	"regexp"
-	"strings"
-	"time"
 
 	aigridv1 "github.com/osac-project/ai-grid-provider-backend/gen/ai_grid/v1"
 	"google.golang.org/protobuf/types/known/timestamppb"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
-	"k8s.io/apimachinery/pkg/runtime/schema"
 )
 
 const (
-	defaultSubscriptionNamespace = "models-as-a-service"
-	defaultModelNamespace        = "llm"
-	authPolicyNameSuffix         = "-policy"
+	authPolicyNameSuffix = "-policy"
 	// maxSubscriptionIDLen leaves room for authPolicyNameSuffix within DNS-1123 (63).
 	maxSubscriptionIDLen = 63 - len(authPolicyNameSuffix)
 
-	managedByLabelKey    = "app.kubernetes.io/managed-by"
-	managedByLabelValue  = "ai-grid-provider-backend"
 	subscriptionLabelKey = "ai-grid/subscription"
 
 	annotationDisplayName = "openshift.io/display-name"
@@ -27,16 +20,6 @@ const (
 )
 
 var (
-	maasSubscriptionsResource = schema.GroupVersionResource{
-		Group: "maas.opendatahub.io", Version: "v1alpha1", Resource: "maassubscriptions",
-	}
-	maasAuthPoliciesResource = schema.GroupVersionResource{
-		Group: "maas.opendatahub.io", Version: "v1alpha1", Resource: "maasauthpolicies",
-	}
-	maasModelRefsResource = schema.GroupVersionResource{
-		Group: "maas.opendatahub.io", Version: "v1alpha1", Resource: "maasmodelrefs",
-	}
-
 	subscriptionNameRE = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$`)
 	tokenWindowRE      = regexp.MustCompile(`^[1-9]\d{0,3}(s|m|h)$`)
 )
@@ -56,13 +39,6 @@ func subscriptionID(object *aigridv1.Subscription) string {
 
 func authPolicyNameForSubscription(id string) string {
 	return id + authPolicyNameSuffix
-}
-
-func modelRefKey(name, namespace string) string {
-	if namespace == "" {
-		namespace = defaultModelNamespace
-	}
-	return namespace + "/" + name
 }
 
 func subscriptionFromUnstructured(item unstructured.Unstructured) *aigridv1.Subscription {
@@ -566,47 +542,6 @@ func guardrailsToUnstructured(items []*aigridv1.GuardrailAttachment) []interface
 	return out
 }
 
-func conditionsFromSlice(raw []interface{}) []*aigridv1.Condition {
-	out := make([]*aigridv1.Condition, 0, len(raw))
-	for _, item := range raw {
-		m, ok := item.(map[string]interface{})
-		if !ok {
-			continue
-		}
-		c := &aigridv1.Condition{
-			Type:               stringField(m, "type"),
-			Status:             conditionStatusFromString(stringField(m, "status")),
-			ObservedGeneration: nestedInt64(m, "observedGeneration"),
-		}
-		if reason := stringField(m, "reason"); reason != "" {
-			c.Reason = &reason
-		}
-		if message := stringField(m, "message"); message != "" {
-			c.Message = &message
-		}
-		if ts := stringField(m, "lastTransitionTime"); ts != "" {
-			if t, err := time.Parse(time.RFC3339, ts); err == nil {
-				c.LastTransitionTime = timestamppb.New(t)
-			} else if t, err := time.Parse(time.RFC3339Nano, ts); err == nil {
-				c.LastTransitionTime = timestamppb.New(t)
-			}
-		}
-		out = append(out, c)
-	}
-	return out
-}
-
-func conditionStatusFromString(s string) aigridv1.ConditionStatus {
-	switch strings.ToLower(s) {
-	case "true":
-		return aigridv1.ConditionStatus_CONDITION_STATUS_TRUE
-	case "false":
-		return aigridv1.ConditionStatus_CONDITION_STATUS_FALSE
-	default:
-		return aigridv1.ConditionStatus_CONDITION_STATUS_UNSPECIFIED
-	}
-}
-
 func resourceRefStatusFromMap(m map[string]interface{}) *aigridv1.ResourceRefStatus {
 	return &aigridv1.ResourceRefStatus{
 		Name:      stringField(m, "name"),
@@ -617,27 +552,3 @@ func resourceRefStatusFromMap(m map[string]interface{}) *aigridv1.ResourceRefSta
 	}
 }
 
-func nestedInt64(obj map[string]interface{}, fields ...string) int64 {
-	v, found, err := unstructured.NestedInt64(obj, fields...)
-	if err != nil || !found {
-		f, found, err := unstructured.NestedFloat64(obj, fields...)
-		if err != nil || !found {
-			return 0
-		}
-		return int64(f)
-	}
-	return v
-}
-
-func nestedBool(obj map[string]interface{}, fields ...string) bool {
-	v, found, err := unstructured.NestedBool(obj, fields...)
-	if err != nil || !found {
-		return false
-	}
-	return v
-}
-
-func stringField(obj map[string]interface{}, key string) string {
-	v, _, _ := unstructured.NestedString(obj, key)
-	return v
-}

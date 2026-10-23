@@ -29,46 +29,6 @@ var (
 	}
 )
 
-var (
-	testModelRefsGVR = schema.GroupVersionResource{
-		Group: "maas.opendatahub.io", Version: "v1alpha1", Resource: "maasmodelrefs",
-	}
-	testSubscriptionsGVR = schema.GroupVersionResource{
-		Group: "maas.opendatahub.io", Version: "v1alpha1", Resource: "maassubscriptions",
-	}
-	testAuthPoliciesGVR = schema.GroupVersionResource{
-		Group: "maas.opendatahub.io", Version: "v1alpha1", Resource: "maasauthpolicies",
-	}
-)
-
-func subscriptionUnstructured(name, namespace string) *unstructured.Unstructured {
-	return &unstructured.Unstructured{Object: map[string]interface{}{
-		"apiVersion": "maas.opendatahub.io/v1alpha1",
-		"kind":       "MaaSSubscription",
-		"metadata": map[string]interface{}{
-			"name":            name,
-			"namespace":       namespace,
-			"resourceVersion": "1",
-		},
-		"spec": map[string]interface{}{
-			"owner": map[string]interface{}{
-				"groups": []interface{}{map[string]interface{}{"name": "g"}},
-				"users":  []interface{}{},
-			},
-			"modelRefs": []interface{}{
-				map[string]interface{}{
-					"name":      "tiny-llm",
-					"namespace": "ai-grid-internal-models",
-					"tokenRateLimits": []interface{}{
-						map[string]interface{}{"limit": int64(100), "window": "1m"},
-					},
-				},
-			},
-			"priority": int64(10),
-		},
-	}}
-}
-
 func TestModelsServerRequiresClient(t *testing.T) {
 	t.Parallel()
 	if _, err := NewModelsServer().Build(); err == nil {

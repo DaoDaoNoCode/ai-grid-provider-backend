@@ -7,6 +7,28 @@ import (
 	aigridv1 "github.com/osac-project/ai-grid-provider-backend/gen/ai_grid/v1"
 	"google.golang.org/protobuf/types/known/timestamppb"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+)
+
+// Shared labels / namespaces / GVRs used by Models and Subscriptions.
+const (
+	defaultSubscriptionNamespace = "models-as-a-service"
+	defaultModelNamespace        = "llm"
+
+	managedByLabelKey   = "app.kubernetes.io/managed-by"
+	managedByLabelValue = "ai-grid-provider-backend"
+)
+
+var (
+	maasSubscriptionsResource = schema.GroupVersionResource{
+		Group: "maas.opendatahub.io", Version: "v1alpha1", Resource: "maassubscriptions",
+	}
+	maasAuthPoliciesResource = schema.GroupVersionResource{
+		Group: "maas.opendatahub.io", Version: "v1alpha1", Resource: "maasauthpolicies",
+	}
+	maasModelRefsResource = schema.GroupVersionResource{
+		Group: "maas.opendatahub.io", Version: "v1alpha1", Resource: "maasmodelrefs",
+	}
 )
 
 func conditionsFromSlice(raw []interface{}) []*aigridv1.Condition {
@@ -77,7 +99,7 @@ func stringField(obj map[string]interface{}, key string) string {
 
 func modelRefKey(name, namespace string) string {
 	if namespace == "" {
-		namespace = "llm"
+		namespace = defaultModelNamespace
 	}
 	return namespace + "/" + name
 }
