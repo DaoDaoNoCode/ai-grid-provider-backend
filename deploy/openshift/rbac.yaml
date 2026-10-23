@@ -31,13 +31,14 @@ rules:
     resources: ["policies"]
     resourceNames: ["ai-grid-ready"]
     verbs: ["get"]
-  # Models Delete guards: refuse while MaaSSubscription/MaaSAuthPolicy still reference the model.
+  # Subscriptions CRUD (+ managed AuthPolicy) and Models Delete guards against MaaS CRs.
   # Objects live in AI_GRID_SUBSCRIPTION_NAMESPACE (default models-as-a-service).
   - apiGroups: ["maas.opendatahub.io"]
     resources: ["maassubscriptions", "maasauthpolicies"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
   # Get/List enrich model_refs and return model_registrations from MaaSModelRef.
   # Models Create/Update/Delete also write MaaSModelRef in AI_GRID_MODELS_NAMESPACE.
+  # Subscriptions Get/List enrich model_refs and return model_registrations (read).
   - apiGroups: ["maas.opendatahub.io"]
     resources: ["maasmodelrefs"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]

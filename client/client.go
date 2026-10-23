@@ -47,21 +47,23 @@ func (b *Builder) Build(ctx context.Context) (*Client, error) {
 		return nil, fmt.Errorf("connect to ai-grid-provider-backend: %w", err)
 	}
 	return &Client{
-		connection: connection,
-		aiGrid:     aigridv1.NewAiGridClient(connection),
-		clusters:   aigridv1.NewClustersClient(connection),
-		tenants:    aigridv1.NewTenantsClient(connection),
-		models:     aigridv1.NewModelsClient(connection),
+		connection:    connection,
+		aiGrid:        aigridv1.NewAiGridClient(connection),
+		clusters:      aigridv1.NewClustersClient(connection),
+		tenants:       aigridv1.NewTenantsClient(connection),
+		models:        aigridv1.NewModelsClient(connection),
+		subscriptions: aigridv1.NewSubscriptionsClient(connection),
 	}, nil
 }
 
 // Client calls the ai-grid-provider-backend gRPC API.
 type Client struct {
-	connection *grpc.ClientConn
-	aiGrid     aigridv1.AiGridClient
-	clusters   aigridv1.ClustersClient
-	tenants    aigridv1.TenantsClient
-	models     aigridv1.ModelsClient
+	connection    *grpc.ClientConn
+	aiGrid        aigridv1.AiGridClient
+	clusters      aigridv1.ClustersClient
+	tenants       aigridv1.TenantsClient
+	models        aigridv1.ModelsClient
+	subscriptions aigridv1.SubscriptionsClient
 }
 
 // Ping invokes ai_grid.v1.AiGrid/Ping.
@@ -214,6 +216,54 @@ func (c *Client) UpdateModel(ctx context.Context, object *aigridv1.Model, mask *
 // DeleteModel deletes a Model by id.
 func (c *Client) DeleteModel(ctx context.Context, id string) error {
 	_, err := c.models.Delete(ctx, &aigridv1.ModelsDeleteRequest{Id: id})
+	return err
+}
+
+// ListSubscriptions returns Subscription objects from the MaaS namespace.
+func (c *Client) ListSubscriptions(ctx context.Context) ([]*aigridv1.Subscription, error) {
+	response, err := c.subscriptions.List(ctx, &aigridv1.SubscriptionsListRequest{})
+	if err != nil {
+		return nil, err
+	}
+	return response.GetItems(), nil
+}
+
+// GetSubscription returns a single Subscription by id.
+// Unlike REST GET /api/v1/subscriptions/{id}, this helper returns only the
+// Subscription object; authPolicies and modelRegistrations from the gRPC Get
+// response are not exposed here.
+func (c *Client) GetSubscription(ctx context.Context, id string) (*aigridv1.Subscription, error) {
+	response, err := c.subscriptions.Get(ctx, &aigridv1.SubscriptionsGetRequest{Id: id})
+	if err != nil {
+		return nil, err
+	}
+	return response.GetObject(), nil
+}
+
+// CreateSubscription creates a Subscription.
+func (c *Client) CreateSubscription(ctx context.Context, object *aigridv1.Subscription) (*aigridv1.Subscription, error) {
+	response, err := c.subscriptions.Create(ctx, &aigridv1.SubscriptionsCreateRequest{Object: object})
+	if err != nil {
+		return nil, err
+	}
+	return response.GetObject(), nil
+}
+
+// UpdateSubscription patches an existing Subscription. A nil mask updates all mutable fields.
+func (c *Client) UpdateSubscription(ctx context.Context, object *aigridv1.Subscription, mask *fieldmaskpb.FieldMask) (*aigridv1.Subscription, error) {
+	response, err := c.subscriptions.Update(ctx, &aigridv1.SubscriptionsUpdateRequest{
+		Object:     object,
+		UpdateMask: mask,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return response.GetObject(), nil
+}
+
+// DeleteSubscription deletes a Subscription by id.
+func (c *Client) DeleteSubscription(ctx context.Context, id string) error {
+	_, err := c.subscriptions.Delete(ctx, &aigridv1.SubscriptionsDeleteRequest{Id: id})
 	return err
 }
 

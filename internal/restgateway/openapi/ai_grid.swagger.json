@@ -2,7 +2,7 @@
   "swagger": "2.0",
   "info": {
     "title": "AI Grid API",
-    "description": "gRPC-Gateway REST surface for ai-grid-provider-backend (Ping, Clusters, Tenants, Subscriptions, Models CRUD).",
+    "description": "gRPC-Gateway REST surface for ai-grid-provider-backend (Ping, Clusters, Tenants, Models, Subscriptions CRUD).",
     "version": "0.1.0",
     "contact": {
       "name": "AI Grid",
@@ -18,6 +18,9 @@
     },
     {
       "name": "Models"
+    },
+    {
+      "name": "Subscriptions"
     },
     {
       "name": "Tenants"
@@ -476,6 +479,210 @@
         ]
       }
     },
+    "/api/v1/subscriptions": {
+      "get": {
+        "operationId": "Subscriptions_List",
+        "responses": {
+          "200": {
+            "description": "A successful response.",
+            "schema": {
+              "$ref": "#/definitions/v1SubscriptionsListResponse"
+            }
+          },
+          "default": {
+            "description": "An unexpected error response.",
+            "schema": {
+              "$ref": "#/definitions/rpcStatus"
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "offset",
+            "description": "Index of the first result. If not specified the default value will be zero.",
+            "in": "query",
+            "required": false,
+            "type": "integer",
+            "format": "int32"
+          },
+          {
+            "name": "limit",
+            "description": "Maximum number of results to be returned by the server. When not specified all\nthe results will be returned.",
+            "in": "query",
+            "required": false,
+            "type": "integer",
+            "format": "int32"
+          },
+          {
+            "name": "filter",
+            "description": "CEL over `this` (a Subscription, proto field names) and `now` (server time),\nwith cel-go's standard library plus its strings extension. Empty means all.\nEvaluated in memory before order and paging. Indexing a missing map key is\nan error (use the `in` guard), not false.",
+            "in": "query",
+            "required": false,
+            "type": "string"
+          },
+          {
+            "name": "order",
+            "description": "Sort key. Empty means `id` ascending. Allowed: id, -id, priority, -priority,\nmetadata.name, -metadata.name (`-` = descending). Any other value is\nInvalidArgument. Applied after filter and before offset/limit.",
+            "in": "query",
+            "required": false,
+            "type": "string"
+          }
+        ],
+        "tags": [
+          "Subscriptions"
+        ]
+      },
+      "post": {
+        "summary": "Creates the subscription and a managed \u003cid\u003e-policy. Full response body.",
+        "operationId": "Subscriptions_Create",
+        "responses": {
+          "200": {
+            "description": "A successful response.",
+            "schema": {
+              "$ref": "#/definitions/v1SubscriptionsCreateResponse"
+            }
+          },
+          "default": {
+            "description": "An unexpected error response.",
+            "schema": {
+              "$ref": "#/definitions/rpcStatus"
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "object",
+            "in": "body",
+            "required": true,
+            "schema": {
+              "$ref": "#/definitions/v1Subscription"
+            }
+          }
+        ],
+        "tags": [
+          "Subscriptions"
+        ]
+      }
+    },
+    "/api/v1/subscriptions/{id}": {
+      "get": {
+        "summary": "Returns the subscription plus covering auth policies and model registrations.\nFull response body (not unwrapped to object alone).",
+        "operationId": "Subscriptions_Get",
+        "responses": {
+          "200": {
+            "description": "A successful response.",
+            "schema": {
+              "$ref": "#/definitions/v1SubscriptionsGetResponse"
+            }
+          },
+          "default": {
+            "description": "An unexpected error response.",
+            "schema": {
+              "$ref": "#/definitions/rpcStatus"
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "id",
+            "description": "Subscription id (equals metadata.name).",
+            "in": "path",
+            "required": true,
+            "type": "string"
+          }
+        ],
+        "tags": [
+          "Subscriptions"
+        ]
+      },
+      "delete": {
+        "operationId": "Subscriptions_Delete",
+        "responses": {
+          "200": {
+            "description": "A successful response.",
+            "schema": {
+              "$ref": "#/definitions/v1SubscriptionsDeleteResponse"
+            }
+          },
+          "default": {
+            "description": "An unexpected error response.",
+            "schema": {
+              "$ref": "#/definitions/rpcStatus"
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "id",
+            "description": "Subscription id (equals metadata.name).",
+            "in": "path",
+            "required": true,
+            "type": "string"
+          }
+        ],
+        "tags": [
+          "Subscriptions"
+        ]
+      }
+    },
+    "/api/v1/subscriptions/{object.id}": {
+      "patch": {
+        "operationId": "Subscriptions_Update",
+        "responses": {
+          "200": {
+            "description": "",
+            "schema": {
+              "$ref": "#/definitions/v1Subscription"
+            }
+          },
+          "default": {
+            "description": "An unexpected error response.",
+            "schema": {
+              "$ref": "#/definitions/rpcStatus"
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "object.id",
+            "description": "Unique identifier of the subscription. Equals metadata.name.",
+            "in": "path",
+            "required": true,
+            "type": "string"
+          },
+          {
+            "name": "object",
+            "in": "body",
+            "required": true,
+            "schema": {
+              "type": "object",
+              "properties": {
+                "metadata": {
+                  "$ref": "#/definitions/v1Metadata"
+                },
+                "spec": {
+                  "$ref": "#/definitions/v1SubscriptionSpec"
+                },
+                "status": {
+                  "$ref": "#/definitions/v1SubscriptionStatus"
+                }
+              },
+              "description": "Subscription is a MaaS entitlement that binds identity subjects to models\nwith token rate limits and a priority.\n\nIt maps to the spoke-cluster Kubernetes CR MaaSSubscription\n(apiVersion: maas.opendatahub.io/v1alpha1). It is not an OLM Subscription,\nnot an AAP license subscription, and not OSAC SERVICE_TIER_MAAS\n(\"Metal as a Service\").\n\nThe `spec` contains the desired details and may be modified by the user.\nThe `status` contains the current status and is provided by the system."
+            }
+          },
+          {
+            "name": "lock",
+            "description": "Lock enables optimistic locking against metadata.version.",
+            "in": "query",
+            "required": false,
+            "type": "boolean"
+          }
+        ],
+        "tags": [
+          "Subscriptions"
+        ]
+      }
+    },
     "/api/v1/tenants": {
       "get": {
         "operationId": "Tenants_List",
@@ -764,6 +971,74 @@
         }
       }
     },
+    "v1AuthPolicy": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Resource name (equals metadata.name on the CR)."
+        },
+        "metadata": {
+          "$ref": "#/definitions/v1Metadata"
+        },
+        "subject_groups": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Groups entitled by this policy."
+        },
+        "subject_users": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Users entitled by this policy."
+        },
+        "model_refs": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "$ref": "#/definitions/v1AuthPolicyModelRef"
+          },
+          "description": "Models this policy grants."
+        },
+        "phase": {
+          "type": "string",
+          "description": "Controller phase (for example \"Active\")."
+        },
+        "conditions": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "$ref": "#/definitions/v1Condition"
+          },
+          "description": "Controller conditions."
+        }
+      },
+      "description": "AuthPolicy is a MaaSAuthPolicy: groups/users allowed to call a set of models."
+    },
+    "v1AuthPolicyModelRef": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "namespace": {
+          "type": "string"
+        }
+      },
+      "description": "AuthPolicyModelRef references a MaaSModelRef granted by an AuthPolicy."
+    },
+    "v1BillingRate": {
+      "type": "object",
+      "properties": {
+        "per_token": {
+          "type": "string"
+        }
+      },
+      "description": "BillingRate defines cost per token."
+    },
     "v1ClustersCreateResponse": {
       "type": "object",
       "properties": {
@@ -855,6 +1130,23 @@
       ],
       "default": "CONDITION_STATUS_UNSPECIFIED",
       "description": "Status of a condition. Kubernetes `Unknown` is reported as UNSPECIFIED.\n\n - CONDITION_STATUS_UNSPECIFIED: The system cannot decide whether the object is in the condition.\n - CONDITION_STATUS_TRUE: The object is in the condition.\n - CONDITION_STATUS_FALSE: The object is not in the condition."
+    },
+    "v1GuardrailAttachment": {
+      "type": "object",
+      "properties": {
+        "ref_name": {
+          "type": "string",
+          "description": "Name of the AIGuardrail in the tenant namespace."
+        },
+        "checks": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Selected check names; empty means all checks in the policy."
+        }
+      },
+      "description": "GuardrailAttachment attaches an AIGuardrail policy by name."
     },
     "v1ManagedCluster": {
       "type": "object",
@@ -1143,6 +1435,33 @@
         }
       },
       "description": "Placement observed state."
+    },
+    "v1ModelRegistration": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "namespace": {
+          "type": "string"
+        },
+        "phase": {
+          "type": "string",
+          "description": "Pending, Ready, Unhealthy, Failed, or Invalid."
+        },
+        "endpoint": {
+          "type": "string",
+          "description": "Endpoint when Ready; empty otherwise."
+        },
+        "conditions": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "$ref": "#/definitions/v1Condition"
+          }
+        }
+      },
+      "description": "ModelRegistration is a MaaSModelRef's catalog status for a referenced model."
     },
     "v1ModelRollout": {
       "type": "object",
@@ -1435,6 +1754,270 @@
         }
       }
     },
+    "v1ResourceRefStatus": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "namespace": {
+          "type": "string"
+        },
+        "ready": {
+          "type": "boolean"
+        },
+        "reason": {
+          "type": "string"
+        },
+        "message": {
+          "type": "string"
+        }
+      },
+      "description": "ResourceRefStatus is the state of one object a MaaS resource references or generates."
+    },
+    "v1Subscription": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Unique identifier of the subscription. Equals metadata.name."
+        },
+        "metadata": {
+          "$ref": "#/definitions/v1Metadata"
+        },
+        "spec": {
+          "$ref": "#/definitions/v1SubscriptionSpec"
+        },
+        "status": {
+          "$ref": "#/definitions/v1SubscriptionStatus"
+        }
+      },
+      "description": "Subscription is a MaaS entitlement that binds identity subjects to models\nwith token rate limits and a priority.\n\nIt maps to the spoke-cluster Kubernetes CR MaaSSubscription\n(apiVersion: maas.opendatahub.io/v1alpha1). It is not an OLM Subscription,\nnot an AAP license subscription, and not OSAC SERVICE_TIER_MAAS\n(\"Metal as a Service\").\n\nThe `spec` contains the desired details and may be modified by the user.\nThe `status` contains the current status and is provided by the system."
+    },
+    "v1SubscriptionModelRef": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "Model name (DNS-1123 label)."
+        },
+        "namespace": {
+          "type": "string",
+          "description": "Model namespace. Empty means the platform default model namespace."
+        },
+        "token_rate_limits": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "$ref": "#/definitions/v1TokenRateLimit"
+          },
+          "description": "Token rate limits for this model. Required unless unlimited is true.\nMust be empty when unlimited is true."
+        },
+        "unlimited": {
+          "type": "boolean",
+          "description": "Access without a token budget. Mutually exclusive with token_rate_limits."
+        },
+        "billing_rate": {
+          "$ref": "#/definitions/v1BillingRate",
+          "description": "Cost per token, when set."
+        },
+        "guardrails": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "$ref": "#/definitions/v1GuardrailAttachment"
+          },
+          "description": "Guardrails for this model within the subscription."
+        },
+        "display_name": {
+          "type": "string",
+          "description": "Output enrichment from MaaSModelRef annotations. Ignored on write."
+        },
+        "description": {
+          "type": "string",
+          "description": "Output enrichment from MaaSModelRef annotations. Ignored on write."
+        }
+      },
+      "description": "SubscriptionModelRef references a model and optional token rate limits."
+    },
+    "v1SubscriptionOrganization": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Organization identifier. Non-empty; immutable once set."
+        }
+      },
+      "description": "SubscriptionOrganization identifies the organization that administers a subscription."
+    },
+    "v1SubscriptionOwner": {
+      "type": "object",
+      "properties": {
+        "groups": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "IdP / Kubernetes group names."
+        },
+        "users": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "User names (for example service accounts)."
+        }
+      },
+      "description": "SubscriptionOwner names the groups and users that own the entitlement."
+    },
+    "v1SubscriptionSpec": {
+      "type": "object",
+      "properties": {
+        "owner": {
+          "$ref": "#/definitions/v1SubscriptionOwner",
+          "description": "Identity subjects entitled by this subscription."
+        },
+        "model_refs": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "$ref": "#/definitions/v1SubscriptionModelRef"
+          },
+          "description": "Models this subscription applies to, with optional per-model rate limits."
+        },
+        "priority": {
+          "type": "integer",
+          "format": "int32",
+          "description": "Relative priority among subscriptions (higher wins when policies conflict)."
+        },
+        "organization": {
+          "$ref": "#/definitions/v1SubscriptionOrganization",
+          "description": "Stable organization association. May be set once; then immutable."
+        },
+        "token_metadata": {
+          "$ref": "#/definitions/v1TokenMetadata",
+          "description": "Metadata for token attribution and metering."
+        },
+        "inference_priority": {
+          "type": "integer",
+          "format": "int32",
+          "description": "Scheduling priority for inference under this subscription. Distinct from\npriority. When unset, no InferenceObjective is created."
+        },
+        "guardrails": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "$ref": "#/definitions/v1GuardrailAttachment"
+          },
+          "description": "Guardrail policies attached to every model accessed through this subscription."
+        }
+      },
+      "description": "Desired state of a MaaS Subscription."
+    },
+    "v1SubscriptionStatus": {
+      "type": "object",
+      "properties": {
+        "phase": {
+          "type": "string",
+          "description": "Controller-reported phase (for example \"Active\"). Empty until reconciled."
+        },
+        "conditions": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "$ref": "#/definitions/v1Condition"
+          },
+          "description": "Controller conditions (Ready, SpecPriorityDuplicate, ...)."
+        },
+        "model_ref_statuses": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "$ref": "#/definitions/v1ResourceRefStatus"
+          },
+          "description": "Per referenced model reconciliation status."
+        },
+        "token_rate_limit_statuses": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "$ref": "#/definitions/v1TokenRateLimitStatus"
+          },
+          "description": "Per generated TokenRateLimitPolicy status."
+        }
+      },
+      "description": "Observed state of a MaaS Subscription."
+    },
+    "v1SubscriptionsCreateResponse": {
+      "type": "object",
+      "properties": {
+        "object": {
+          "$ref": "#/definitions/v1Subscription"
+        },
+        "auth_policy": {
+          "$ref": "#/definitions/v1AuthPolicy",
+          "description": "Managed MaaSAuthPolicy created with the subscription (\u003cid\u003e-policy)."
+        }
+      }
+    },
+    "v1SubscriptionsDeleteResponse": {
+      "type": "object"
+    },
+    "v1SubscriptionsGetResponse": {
+      "type": "object",
+      "properties": {
+        "object": {
+          "$ref": "#/definitions/v1Subscription"
+        },
+        "auth_policies": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "$ref": "#/definitions/v1AuthPolicy"
+          },
+          "description": "AuthPolicies in the subscription namespace whose modelRefs intersect the\nsubscription's models (includes the managed \u003cid\u003e-policy when present)."
+        },
+        "model_registrations": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "$ref": "#/definitions/v1ModelRegistration"
+          },
+          "description": "MaaSModelRef status for each referenced model that exists."
+        }
+      }
+    },
+    "v1SubscriptionsListResponse": {
+      "type": "object",
+      "properties": {
+        "size": {
+          "type": "integer",
+          "format": "int32",
+          "description": "Actual number of items returned."
+        },
+        "total": {
+          "type": "integer",
+          "format": "int32",
+          "description": "Total number of items that match the search criteria."
+        },
+        "items": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "$ref": "#/definitions/v1Subscription"
+          },
+          "description": "List of results."
+        }
+      }
+    },
+    "v1SubscriptionsUpdateResponse": {
+      "type": "object",
+      "properties": {
+        "object": {
+          "$ref": "#/definitions/v1Subscription"
+        }
+      }
+    },
     "v1Tenant": {
       "type": "object",
       "properties": {
@@ -1569,6 +2152,52 @@
           "$ref": "#/definitions/v1Tenant"
         }
       }
+    },
+    "v1TokenMetadata": {
+      "type": "object",
+      "properties": {
+        "organization_id": {
+          "type": "string",
+          "description": "Legacy organization id for metering when organization.id is unset."
+        },
+        "cost_center": {
+          "type": "string"
+        },
+        "labels": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        }
+      },
+      "description": "TokenMetadata contains metadata for token attribution and metering."
+    },
+    "v1TokenRateLimit": {
+      "type": "object",
+      "properties": {
+        "limit": {
+          "type": "string",
+          "format": "int64",
+          "description": "Maximum tokens allowed in the window. CRD range is typically 1..1e9."
+        },
+        "window": {
+          "type": "string",
+          "description": "Window duration, e.g. \"1m\", \"30s\", \"2h\". Pattern: ^[1-9]\\d{0,3}(s|m|h)$."
+        }
+      },
+      "description": "TokenRateLimit caps token usage over a time window."
+    },
+    "v1TokenRateLimitStatus": {
+      "type": "object",
+      "properties": {
+        "ref": {
+          "$ref": "#/definitions/v1ResourceRefStatus"
+        },
+        "model": {
+          "type": "string"
+        }
+      },
+      "description": "TokenRateLimitStatus reports a generated TokenRateLimitPolicy and its model."
     }
   }
 }

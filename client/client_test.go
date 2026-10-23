@@ -299,6 +299,65 @@ func TestClientModelsCRUD(t *testing.T) {
 	}
 }
 
+func TestClientSubscriptionsCRUD(t *testing.T) {
+	t.Parallel()
+
+	c, cleanup := startTestClient(t, nil, fakeOrganizationLister{})
+	defer cleanup()
+	ctx := context.Background()
+
+	items, err := c.ListSubscriptions(ctx)
+	if err != nil {
+		t.Fatalf("ListSubscriptions() error = %v", err)
+	}
+	if len(items) != 0 {
+		t.Fatalf("ListSubscriptions() len = %d, want 0", len(items))
+	}
+
+	created, err := c.CreateSubscription(ctx, &aigridv1.Subscription{
+		Id:       "free-subscription",
+		Metadata: &aigridv1.Metadata{Name: "free-subscription"},
+		Spec: &aigridv1.SubscriptionSpec{
+			Owner: &aigridv1.SubscriptionOwner{Groups: []string{"system:authenticated"}},
+			ModelRefs: []*aigridv1.SubscriptionModelRef{
+				{Name: "sim-model", TokenRateLimits: []*aigridv1.TokenRateLimit{{Limit: 100, Window: "1m"}}},
+			},
+			Priority: 10,
+		},
+	})
+	if err != nil {
+		t.Fatalf("CreateSubscription() error = %v", err)
+	}
+	if created.GetId() != "free-subscription" {
+		t.Fatalf("CreateSubscription id = %q", created.GetId())
+	}
+
+	got, err := c.GetSubscription(ctx, "free-subscription")
+	if err != nil {
+		t.Fatalf("GetSubscription() error = %v", err)
+	}
+	if got.GetSpec().GetPriority() != 10 {
+		t.Fatalf("priority = %d", got.GetSpec().GetPriority())
+	}
+
+	got.Spec.Priority = 20
+	updated, err := c.UpdateSubscription(ctx, got, nil)
+	if err != nil {
+		t.Fatalf("UpdateSubscription() error = %v", err)
+	}
+	if updated.GetSpec().GetPriority() != 20 {
+		t.Fatalf("updated priority = %d", updated.GetSpec().GetPriority())
+	}
+
+	if err := c.DeleteSubscription(ctx, "free-subscription"); err != nil {
+		t.Fatalf("DeleteSubscription() error = %v", err)
+	}
+	_, err = c.GetSubscription(ctx, "free-subscription")
+	if status.Code(err) != codes.NotFound {
+		t.Fatalf("Get after delete code = %v (%v)", status.Code(err), err)
+	}
+}
+
 func TestClientTenantCRUD(t *testing.T) {
 	t.Parallel()
 
@@ -460,6 +519,12 @@ func startTestClient(t *testing.T, objects []runtime.Object, orgs organizationCl
 	if err != nil {
 		t.Fatalf("build Models server: %v", err)
 	}
+	subscriptionsServer, err := servers.NewSubscriptionsServer().
+		SetDynamicClient(dynamicClient).
+		Build()
+	if err != nil {
+		t.Fatalf("build Subscriptions server: %v", err)
+	}
 
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -472,6 +537,7 @@ func startTestClient(t *testing.T, objects []runtime.Object, orgs organizationCl
 	aigridv1connect.RegisterClustersHandler(server, clustersServer)
 	aigridv1connect.RegisterTenantsHandler(server, tenantsServer)
 	aigridv1connect.RegisterModelsHandler(server, modelsServer)
+	aigridv1connect.RegisterSubscriptionsHandler(server, subscriptionsServer)
 	mux := http.NewServeMux()
 	connecthttp.Mount(mux, server)
 	apiServer := h2cServer(mux)

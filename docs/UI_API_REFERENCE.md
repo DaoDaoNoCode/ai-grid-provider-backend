@@ -47,6 +47,11 @@ unwraps them via `response_body: "object"`.
 | `POST` | `/api/v1/models` | Create (= deploy) model |
 | `PATCH` | `/api/v1/models/{id}` | Update model (FieldMask) |
 | `DELETE` | `/api/v1/models/{id}` | Delete model (+ placement / MWRS / MaaSModelRef) |
+| `GET` | `/api/v1/subscriptions` | List subscriptions |
+| `GET` | `/api/v1/subscriptions/{id}` | Get subscription + covering auth policies + model registrations |
+| `POST` | `/api/v1/subscriptions` | Create subscription (+ managed AuthPolicy in response) |
+| `PATCH` | `/api/v1/subscriptions/{id}` | Update subscription (syncs managed AuthPolicy) |
+| `DELETE` | `/api/v1/subscriptions/{id}` | Delete subscription (+ managed AuthPolicy) |
 
 Also served (not resource APIs): `GET /openapi.json`, `GET /docs/`.
 
@@ -72,14 +77,14 @@ realm** — not a per-tenant identifier.
 | `tenant` | string | Reserved; often empty today |
 | `version` | int32 | Optimistic lock field; **not enforced yet** |
 
-### List query parameters (Clusters + Tenants + Models)
+### List query parameters (Clusters + Tenants + Models + Subscriptions)
 
 | Param | Type | Notes |
 | --- | --- | --- |
 | `offset` | int32 | Start index; default `0` |
 | `limit` | int32 | Max items; omit = all |
-| `filter` | string | CEL filter. **Models evaluates it**. Clusters and Tenants accept but do not evaluate yet. |
-| `order` | string | Sort. **Models uses an allowlist**. Clusters and Tenants accept but do not evaluate yet. |
+| `filter` | string | CEL filter. **Models and Subscriptions evaluate it**. Clusters and Tenants accept but do not evaluate yet. |
+| `order` | string | Sort. **Models and Subscriptions use allowlists**. Clusters and Tenants accept but do not evaluate yet. |
 
 ### Error body
 
@@ -539,19 +544,138 @@ gRPC: `ai_grid.v1.Models/{List,Get,Create,Update,Delete}`.
 
 ---
 
+## 5. Subscriptions (MaaS entitlements)
+
+Maps to namespaced `MaaSSubscription` CRs (`maas.opendatahub.io/v1alpha1`).
+OSAC shape: `id` + `metadata` + `spec` + `status`. `id` equals `metadata.name`.
+
+Requires a kubeconfig that can reach a cluster with the MaaS CRDs. Both
+subscription and auth-policy objects live in
+`AI_GRID_SUBSCRIPTION_NAMESPACE` (default `models-as-a-service`).
+
+**AuthPolicy pairing (server side-effect):** every Create also creates a managed
+`MaaSAuthPolicy` named `<id>-policy` in the same namespace (subjects from
+`owner`, model refs without rate limits). Labels:
+`app.kubernetes.io/managed-by=ai-grid-provider-backend` and
+`ai-grid/subscription=<id>`. Update syncs that managed policy when `spec`
+changes; Delete removes it. Unmanaged policies with the same name are left
+alone. There is no separate AuthPolicies RPC and no
+`create_auth_policy=false` path.
+
+**Get / Create response shape (REST):** unlike Clusters/Tenants unwrap,
+these return the full gRPC response wrapper:
+
+- `GET /subscriptions/{id}` → `{ object, authPolicies, modelRegistrations }`
+- `POST /subscriptions` → `{ object, authPolicy }`
+- `PATCH` still unwraps to the Subscription (`response_body: object`)
+- `GET /subscriptions` list remains `{ size, total, items }`
+
+`authPolicies` on Get are every AuthPolicy in the namespace whose `modelRefs`
+intersect the subscription’s models. `modelRegistrations` come from
+`MaaSModelRef` CRs. `model_refs[].display_name` / `description` are output
+enrichment from ModelRef annotations (ignored on write).
+
+**Go client note:** `client.GetSubscription` returns only the Subscription
+`object` (same unwrap as Clusters/Tenants helpers). REST `GET
+/api/v1/subscriptions/{id}` returns the full join (`object` + `authPolicies` +
+`modelRegistrations`). Callers that need the join should use REST or the raw
+gRPC `Subscriptions/Get` response, not the Go helper.
+
+Display name / description for the subscription itself stay in
+`metadata.annotations` (`openshift.io/display-name`,
+`openshift.io/description`). Optimistic concurrency uses `metadata.version`
+(int32 from Kubernetes `resourceVersion`); BFF maps that to string ETags.
+
+Subscription ids must leave room for the `-policy` suffix (max 56 chars).
+
+**List `filter` / `order`:** applied as filter → order → offset/limit, then
+ModelRef enrichment on the page only. `total` is the match count after filter.
+
+- `filter`: CEL over `this` (a Subscription, proto field names) and `now`, with
+  cel-go plus `ext.Strings()`. Empty means all. Example:
+  `this.spec.priority >= 10 && this.id.lowerAscii().contains("eng")`.
+  Indexing a missing map key fails the whole List (`InvalidArgument`); guard with
+  `"k" in this.metadata.labels && …`.
+- `order`: empty means `id` ascending. Allowed: `id`, `-id`, `priority`,
+  `-priority`, `metadata.name`, `-metadata.name` (`-` = descending). Anything
+  else is `InvalidArgument`.
+
+### `Subscription.spec`
+
+| Field | Type | Notes |
+| --- | --- | --- |
+| `owner.groups` | string[] | IdP / Kubernetes group names |
+| `owner.users` | string[] | Optional user names |
+| `model_refs[]` | object | See below |
+| `priority` | int32 | Relative priority among subscriptions |
+| `organization.id` | string | Optional; set once, then immutable |
+| `token_metadata` | object | `organization_id`, `cost_center`, `labels` |
+| `inference_priority` | int32 (optional) | Inference scheduling priority |
+| `guardrails[]` | object | `{ ref_name, checks[] }` |
+
+### `Subscription.spec.model_refs[]`
+
+| Field | Type | Notes |
+| --- | --- | --- |
+| `name` | string | MaaSModelRef name |
+| `namespace` | string | Defaults to `llm` on write |
+| `token_rate_limits[]` | object | Required unless `unlimited` |
+| `unlimited` | bool | Mutually exclusive with `token_rate_limits` |
+| `billing_rate.per_token` | string | Optional |
+| `guardrails[]` | object | Per-model guardrails |
+| `display_name` / `description` | string | Output only (from ModelRef annotations) |
+
+### `Subscription.status`
+
+| Field | Type | Notes |
+| --- | --- | --- |
+| `phase` | string | Controller phase (e.g. `Active`) |
+| `conditions[]` | Condition | Ready, SpecPriorityDuplicate, … |
+| `model_ref_statuses[]` | ResourceRefStatus | Per referenced model |
+| `token_rate_limit_statuses[]` | object | Generated TRLP status + `model` |
+
+### Example create
+
+```bash
+curl -sS -X POST 'http://localhost:8081/api/v1/subscriptions' \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "id": "free-subscription",
+    "metadata": {"name": "free-subscription"},
+    "spec": {
+      "owner": {"groups": ["system:authenticated"]},
+      "organization": {"id": "org-uuid"},
+      "model_refs": [{
+        "name": "facebook-opt-125m-simulated",
+        "namespace": "llm",
+        "token_rate_limits": [{"limit": "100", "window": "1m"}]
+      }],
+      "priority": 10
+    }
+  }' | jq .
+# → { "object": { ... }, "authPolicy": { "id": "free-subscription-policy", ... } }
+```
+
+gRPC: `ai_grid.v1.Subscriptions/{List,Get,Create,Update,Delete}`.
+
+Planning notes: [`../context/maas-subscriptions-planning.md`](../context/maas-subscriptions-planning.md).
+
+---
+
 ## 6. What is not in this API (yet)
 
 Do not expect these from provider-backend today:
 
 - Browser login / token exchange / session APIs
 - User create/update/delete, groups (read-only org member list exists)
-- Separate AuthPolicies / Subscriptions RPCs (see `feat/subscriptions_api`)
+- Separate AuthPolicies RPC / optional `create_auth_policy=false`
 - API keys (dataplane `maas-api`)
 - Nested collection URLs (everything is flat under `/api/v1/...`; member list uses `:listMembers`)
-- Evaluated `filter` / `order` on Clusters and Tenants (Models evaluates both)
-- Console PoC-flat Model shapes (OSAC `id`/`metadata`/`spec`/`status` is the API)
+- Evaluated `filter` / `order` on Clusters and Tenants (Models and Subscriptions evaluate both)
+- Console PoC-flat Model / Subscription shapes (OSAC `id`/`metadata`/`spec`/`status` is the API)
 - PoC-shaped flat `GridCluster` arrays or PoC tenant + IdP config blobs
 - Per-model ExternalModel / grid-gateway publication (platform bootstrap via acm-models)
+- `flowControlStatuses` on Subscription status
 
 For PoC → production mapping notes see
 [`POC_API_PAYLOAD_UI_MAPPING.md`](./POC_API_PAYLOAD_UI_MAPPING.md) and
@@ -563,11 +687,12 @@ this file is the current contract snapshot).
 ## 7. Local / OpenShift try-out
 
 ```bash
-# Local without a cluster (fixtures/default seeds LLMInferenceService for Models)
+# Local without a cluster (fixtures/default seeds LLMInferenceService + MaaS CRs)
 make dev-fake
 # Prefer make dev-fake over make dev-fake-poc: poc has no MaaS/LLMISvc seeds.
+# REST :9092, gRPC :9090 — curl /api/v1/models, /api/v1/subscriptions
 
-# Local against a real kubeconfig + Keycloak (needs LLMInferenceService / MaaS CRDs for Models)
+# Local against a real kubeconfig + Keycloak (needs LLMInferenceService / MaaS CRDs)
 KEYCLOAK_URL=http://127.0.0.1:8180 make run
 # Swagger: http://localhost:8081/docs/
 
@@ -584,6 +709,9 @@ curl -sS 'http://localhost:8081/api/v1/ping?name=UI'
 curl -sS 'http://localhost:8081/api/v1/clusters'
 curl -sS 'http://localhost:8081/api/v1/tenants'
 curl -sS 'http://localhost:8081/api/v1/models'
+curl -sS 'http://localhost:8081/api/v1/subscriptions'
+# Seeded on make dev-fake — REST Get returns object + authPolicies + modelRegistrations
+curl -sS 'http://localhost:8081/api/v1/subscriptions/engineering'
 
 curl -sS -X POST 'http://localhost:8081/api/v1/clusters' \
   -H 'Content-Type: application/json' \
@@ -603,9 +731,12 @@ curl -sS -X PATCH 'http://localhost:8081/api/v1/models/facebook-opt-125m' \
   -H 'Content-Type: application/json' \
   -d '{"id":"facebook-opt-125m","metadata":{"name":"facebook-opt-125m"},"spec":{"replicas":2}}'
 curl -sS -X DELETE 'http://localhost:8081/api/v1/models/facebook-opt-125m'
-```
 
-Subscriptions live on PR #13 (`feat/subscriptions_api`), not this Models branch.
+# Subscriptions create returns { object, authPolicy }; see Example create above
+curl -sS -X POST 'http://localhost:8081/api/v1/subscriptions' \
+  -H 'Content-Type: application/json' \
+  -d '{"id":"smoke-sub","metadata":{"name":"smoke-sub"},"spec":{"owner":{"groups":["smoke"]},"model_refs":[{"name":"tiny-llm","namespace":"llm","token_rate_limits":[{"limit":50,"window":"1m"}]}],"priority":5}}'
+```
 
 ---
 
@@ -619,6 +750,7 @@ If the BFF speaks gRPC instead of REST:
 | `ai_grid.v1.Clusters` | `List`, `Get`, `Create`, `Update`, `Delete` |
 | `ai_grid.v1.Tenants` | `List`, `Get`, `Create`, `Update`, `Delete` |
 | `ai_grid.v1.Models` | `List`, `Get`, `Create`, `Update`, `Delete` |
+| `ai_grid.v1.Subscriptions` | `List`, `Get`, `Create`, `Update`, `Delete` |
 
 gRPC request/response messages wrap resources as `{ "object": { ... } }` for
 Get/Create/Update; List uses `{ size, total, items }`. REST unwraps

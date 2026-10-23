@@ -28,7 +28,7 @@ rules:
   - apiGroups: ["register.open-cluster-management.io"]
     resources: ["managedclusters/accept"]
     verbs: ["update"]
-  # Models Delete guards + MaaSModelRef. Needs MaaS CRDs on the cluster.
+  # Models Delete guards + Subscriptions CRUD (+ managed AuthPolicy). Needs MaaS CRDs.
   - apiGroups: ["maas.opendatahub.io"]
     resources: ["maassubscriptions", "maasauthpolicies"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]

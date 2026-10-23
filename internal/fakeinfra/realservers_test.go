@@ -500,3 +500,115 @@ func TestRealModelsServerOnFakeHub(t *testing.T) {
 		t.Fatalf("Get after delete = %v, want NotFound", err)
 	}
 }
+
+func subscriptionsServer(t *testing.T, cfg *rest.Config) *servers.SubscriptionsServer {
+	t.Helper()
+	cfg.QPS, cfg.Burst = 1000, 1000
+	client, err := dynamic.NewForConfig(cfg)
+	if err != nil {
+		t.Fatalf("dynamic.NewForConfig() error = %v", err)
+	}
+	s, err := servers.NewSubscriptionsServer().
+		SetLogger(slog.New(slog.DiscardHandler)).
+		SetDynamicClient(client).
+		SetNamespace("models-as-a-service").
+		Build()
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+	return s
+}
+
+func TestRealSubscriptionsServerOnFakeHub(t *testing.T) {
+	h, srv := startHub(t)
+	s := subscriptionsServer(t, &rest.Config{Host: srv.URL, BearerToken: h.ServiceAccountToken()})
+	ctx := context.Background()
+
+	list, err := s.List(ctx, &aigridv1.SubscriptionsListRequest{})
+	if err != nil {
+		t.Fatalf("List() error = %v", err)
+	}
+	if list.GetTotal() != 2 {
+		t.Fatalf("List() total = %d, want 2", list.GetTotal())
+	}
+	var names []string
+	for _, item := range list.GetItems() {
+		names = append(names, item.GetId())
+	}
+	if !slices.Equal(names, []string{"engineering", "onboarding"}) {
+		t.Fatalf("List() ids = %v", names)
+	}
+
+	got, err := s.Get(ctx, &aigridv1.SubscriptionsGetRequest{Id: "engineering"})
+	if err != nil {
+		t.Fatalf("Get() error = %v", err)
+	}
+	if got.GetObject().GetStatus().GetPhase() != "Active" {
+		t.Fatalf("phase = %q", got.GetObject().GetStatus().GetPhase())
+	}
+	if len(got.GetAuthPolicies()) == 0 || got.GetAuthPolicies()[0].GetId() != "engineering-policy" {
+		t.Fatalf("auth_policies = %#v", got.GetAuthPolicies())
+	}
+	if len(got.GetModelRegistrations()) == 0 || got.GetModelRegistrations()[0].GetPhase() != "Ready" {
+		t.Fatalf("model_registrations = %#v", got.GetModelRegistrations())
+	}
+	if len(got.GetObject().GetSpec().GetModelRefs()) == 0 ||
+		got.GetObject().GetSpec().GetModelRefs()[0].GetDisplayName() != "Granite 8B Instruct" {
+		t.Fatalf("enriched model_refs = %#v", got.GetObject().GetSpec().GetModelRefs())
+	}
+
+	created, err := s.Create(ctx, &aigridv1.SubscriptionsCreateRequest{
+		Object: &aigridv1.Subscription{
+			Id:       "team-smoke",
+			Metadata: &aigridv1.Metadata{Name: "team-smoke"},
+			Spec: &aigridv1.SubscriptionSpec{
+				Owner: &aigridv1.SubscriptionOwner{Groups: []string{"smoke"}},
+				ModelRefs: []*aigridv1.SubscriptionModelRef{{
+					Name: "tiny-llm", Namespace: "llm",
+					TokenRateLimits: []*aigridv1.TokenRateLimit{{Limit: 50, Window: "1m"}},
+				}},
+				Priority: 7,
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	if created.GetAuthPolicy() == nil || created.GetAuthPolicy().GetId() != "team-smoke-policy" {
+		t.Fatalf("Create auth_policy = %#v", created.GetAuthPolicy())
+	}
+
+	created.GetObject().Spec.Priority = 11
+	created.GetObject().Spec.Owner = &aigridv1.SubscriptionOwner{Groups: []string{"smoke-admins"}}
+	updated, err := s.Update(ctx, &aigridv1.SubscriptionsUpdateRequest{
+		Object:     created.GetObject(),
+		UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec"}},
+	})
+	if err != nil {
+		t.Fatalf("Update() error = %v", err)
+	}
+	if updated.GetObject().GetSpec().GetPriority() != 11 {
+		t.Fatalf("updated priority = %d", updated.GetObject().GetSpec().GetPriority())
+	}
+
+	after, err := s.Get(ctx, &aigridv1.SubscriptionsGetRequest{Id: "team-smoke"})
+	if err != nil {
+		t.Fatalf("Get after update: %v", err)
+	}
+	foundSynced := false
+	for _, pol := range after.GetAuthPolicies() {
+		if pol.GetId() == "team-smoke-policy" && slices.Contains(pol.GetSubjectGroups(), "smoke-admins") {
+			foundSynced = true
+		}
+	}
+	if !foundSynced {
+		t.Fatalf("managed policy not synced: %#v", after.GetAuthPolicies())
+	}
+
+	if _, err := s.Delete(ctx, &aigridv1.SubscriptionsDeleteRequest{Id: "team-smoke"}); err != nil {
+		t.Fatalf("Delete() error = %v", err)
+	}
+	if _, err := s.Get(ctx, &aigridv1.SubscriptionsGetRequest{Id: "team-smoke"}); connect.CodeOf(err) != connect.CodeNotFound {
+		t.Fatalf("Get after delete = %v, want NotFound", err)
+	}
+}
