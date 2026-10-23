@@ -51,6 +51,7 @@ func (b *Builder) Build(ctx context.Context) (*Client, error) {
 		aiGrid:     aigridv1.NewAiGridClient(connection),
 		clusters:   aigridv1.NewClustersClient(connection),
 		tenants:    aigridv1.NewTenantsClient(connection),
+		models:     aigridv1.NewModelsClient(connection),
 	}, nil
 }
 
@@ -60,6 +61,7 @@ type Client struct {
 	aiGrid     aigridv1.AiGridClient
 	clusters   aigridv1.ClustersClient
 	tenants    aigridv1.TenantsClient
+	models     aigridv1.ModelsClient
 }
 
 // Ping invokes ai_grid.v1.AiGrid/Ping.
@@ -168,6 +170,51 @@ func (c *Client) ListTenantMembers(ctx context.Context, id string) ([]*aigridv1.
 		return nil, err
 	}
 	return response.GetItems(), nil
+}
+
+// ListModels returns Model objects from the models namespace.
+func (c *Client) ListModels(ctx context.Context) ([]*aigridv1.Model, error) {
+	response, err := c.models.List(ctx, &aigridv1.ModelsListRequest{})
+	if err != nil {
+		return nil, err
+	}
+	return response.GetItems(), nil
+}
+
+// GetModel returns a single Model by id.
+func (c *Client) GetModel(ctx context.Context, id string) (*aigridv1.Model, error) {
+	response, err := c.models.Get(ctx, &aigridv1.ModelsGetRequest{Id: id})
+	if err != nil {
+		return nil, err
+	}
+	return response.GetObject(), nil
+}
+
+// CreateModel creates (deploys) a Model.
+func (c *Client) CreateModel(ctx context.Context, object *aigridv1.Model) (*aigridv1.Model, error) {
+	response, err := c.models.Create(ctx, &aigridv1.ModelsCreateRequest{Object: object})
+	if err != nil {
+		return nil, err
+	}
+	return response.GetObject(), nil
+}
+
+// UpdateModel patches an existing Model. A nil mask updates all mutable fields.
+func (c *Client) UpdateModel(ctx context.Context, object *aigridv1.Model, mask *fieldmaskpb.FieldMask) (*aigridv1.Model, error) {
+	response, err := c.models.Update(ctx, &aigridv1.ModelsUpdateRequest{
+		Object:     object,
+		UpdateMask: mask,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return response.GetObject(), nil
+}
+
+// DeleteModel deletes a Model by id.
+func (c *Client) DeleteModel(ctx context.Context, id string) error {
+	_, err := c.models.Delete(ctx, &aigridv1.ModelsDeleteRequest{Id: id})
+	return err
 }
 
 // Close releases the underlying gRPC connection.
