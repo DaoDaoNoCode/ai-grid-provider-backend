@@ -41,8 +41,7 @@ smoke_cleanup() {
   done
   for id in "${cleanup_tenant_ids[@]+"${cleanup_tenant_ids[@]}"}"; do
     [[ -n "$id" ]] || continue
-    grpcurl -plaintext -d "{\"id\":\"${id}\"}" "$addr" ai_grid.v1.Tenants/Delete >/dev/null 2>&1 || true
-    curl -sS -o /dev/null -X DELETE "${http_addr}/api/v1/tenants/${id}" >/dev/null 2>&1 || true
+    delete_tenant_quietly "$id"
   done
 }
 trap smoke_cleanup EXIT
@@ -129,6 +128,26 @@ for item in data.get("items") or []:
 ' "$name" 2>/dev/null || true
 }
 
+# tenant_version prints a tenant's metadata.version as Get answers it, or
+# nothing when Get fails. Update and Delete require it.
+tenant_version() {
+  local out
+  out="$(grpcurl -plaintext -d "{\"id\":\"$1\"}" "$addr" ai_grid.v1.Tenants/Get 2>/dev/null || true)"
+  json_get "$out" '((data.get("object") or {}).get("metadata") or {}).get("version") or ""'
+}
+
+# delete_tenant_quietly deletes a tenant at its current version, ignoring
+# failures: a gRPC Delete, then a REST one in case gRPC is down.
+delete_tenant_quietly() {
+  local id="$1" version
+  version="$(tenant_version "$id")"
+  [[ -n "$version" ]] || return 0
+  grpcurl -plaintext -d "{\"id\":\"${id}\",\"version\":${version}}" "$addr" \
+    ai_grid.v1.Tenants/Delete >/dev/null 2>&1 \
+    || curl -sS -o /dev/null -X DELETE "${http_addr}/api/v1/tenants/${id}?version=${version}" >/dev/null 2>&1 \
+    || true
+}
+
 printf 'gRPC target: %s\n' "$addr"
 printf 'HTTP target: %s\n' "$http_addr"
 
@@ -190,8 +209,7 @@ else
 
   prior_id="$(tenant_id_by_name "$smoke_tenant_grpc")"
   if [[ -n "$prior_id" ]]; then
-    grpcurl -plaintext -d "{\"id\":\"${prior_id}\"}" "$addr" \
-      ai_grid.v1.Tenants/Delete >/dev/null 2>&1 || true
+    delete_tenant_quietly "$prior_id"
   fi
 
   CALL_OUT=""
@@ -206,11 +224,13 @@ else
   if [[ -n "$smoke_tenant_id" ]]; then
     cleanup_tenant_ids+=("$smoke_tenant_id")
     call_grpc 'Tenants/Get' "{\"id\":\"${smoke_tenant_id}\"}" 'ai_grid.v1.Tenants/Get'
+    version="$(json_get "$CALL_OUT" '((data.get("object") or {}).get("metadata") or {}).get("version") or 0')"
     call_grpc 'Tenants/ListMembers' "{\"id\":\"${smoke_tenant_id}\"}" 'ai_grid.v1.Tenants/ListMembers'
     call_grpc 'Tenants/Update (update_mask=spec.domains)' \
-      "{\"object\":{\"id\":\"${smoke_tenant_id}\",\"metadata\":{\"name\":\"${smoke_tenant_grpc}\"},\"spec\":{\"domains\":[\"smoke-updated.example.com\"]}},\"update_mask\":{\"paths\":[\"spec.domains\"]}}" \
+      "{\"object\":{\"id\":\"${smoke_tenant_id}\",\"metadata\":{\"name\":\"${smoke_tenant_grpc}\",\"version\":${version:-0}},\"spec\":{\"domains\":[\"smoke-updated.example.com\"]}},\"update_mask\":{\"paths\":[\"spec.domains\"]}}" \
       'ai_grid.v1.Tenants/Update'
-    call_grpc 'Tenants/Delete' "{\"id\":\"${smoke_tenant_id}\"}" 'ai_grid.v1.Tenants/Delete'
+    version="$(json_get "$CALL_OUT" '((data.get("object") or {}).get("metadata") or {}).get("version") or 0')"
+    call_grpc 'Tenants/Delete' "{\"id\":\"${smoke_tenant_id}\",\"version\":${version:-0}}" 'ai_grid.v1.Tenants/Delete'
   else
     printf 'fail Tenants gRPC CRUD (missing created id)\n' >&2
     failed=$((failed + 1))
@@ -220,7 +240,7 @@ else
   call_http 'GET /api/v1/tenants?limit=1' GET '/api/v1/tenants?limit=1'
   prior_id="$(tenant_id_by_name "$smoke_tenant_rest")"
   if [[ -n "$prior_id" ]]; then
-    curl -sS -o /dev/null -X DELETE "${http_addr}/api/v1/tenants/${prior_id}" || true
+    delete_tenant_quietly "$prior_id"
   fi
   CALL_OUT=""
   before_failed=$failed
@@ -233,10 +253,12 @@ else
   if [[ -n "$smoke_tenant_id" ]]; then
     cleanup_tenant_ids+=("$smoke_tenant_id")
     call_http "GET /api/v1/tenants/${smoke_tenant_id}" GET "/api/v1/tenants/${smoke_tenant_id}"
+    version="$(json_get "$CALL_OUT" '(data.get("metadata") or {}).get("version") or 0')"
     call_http "GET /api/v1/tenants/${smoke_tenant_id}:listMembers" GET "/api/v1/tenants/${smoke_tenant_id}:listMembers"
     call_http "PATCH /api/v1/tenants/${smoke_tenant_id}" PATCH "/api/v1/tenants/${smoke_tenant_id}" \
-      "{\"id\":\"${smoke_tenant_id}\",\"metadata\":{\"name\":\"${smoke_tenant_rest}\"},\"spec\":{\"domains\":[\"smoke-rest-updated.example.com\"]}}"
-    call_http "DELETE /api/v1/tenants/${smoke_tenant_id}" DELETE "/api/v1/tenants/${smoke_tenant_id}"
+      "{\"id\":\"${smoke_tenant_id}\",\"metadata\":{\"name\":\"${smoke_tenant_rest}\",\"version\":${version:-0}},\"spec\":{\"domains\":[\"smoke-rest-updated.example.com\"]}}"
+    version="$(json_get "$CALL_OUT" '(data.get("metadata") or {}).get("version") or 0')"
+    call_http "DELETE /api/v1/tenants/${smoke_tenant_id}" DELETE "/api/v1/tenants/${smoke_tenant_id}?version=${version:-0}"
   else
     printf 'fail Tenants REST CRUD (missing created id)\n' >&2
     failed=$((failed + 1))
