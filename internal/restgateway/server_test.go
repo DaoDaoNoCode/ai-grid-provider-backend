@@ -125,7 +125,6 @@ func TestRESTGatewayRoutes(t *testing.T) {
 		}
 	})
 
-
 	t.Run("list subscriptions", func(t *testing.T) {
 		body := mustGET(t, client, baseURL+"/api/v1/subscriptions")
 		var payload map[string]any

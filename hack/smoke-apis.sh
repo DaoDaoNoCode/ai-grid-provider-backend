@@ -301,7 +301,8 @@ else
     if (( failed == before_failed )); then
       cleanup_model_ids+=("$smoke_model_rest")
       call_http "GET /api/v1/models/${smoke_model_rest}" GET "/api/v1/models/${smoke_model_rest}"
-      call_http "PATCH /api/v1/models/${smoke_model_rest}" PATCH "/api/v1/models/${smoke_model_rest}" \
+      # HTTP body is the Model (proto body: "object"); FieldMask is a query param.
+      call_http "PATCH /api/v1/models/${smoke_model_rest}" PATCH "/api/v1/models/${smoke_model_rest}?update_mask=spec.replicas" \
         "{\"id\":\"${smoke_model_rest}\",\"metadata\":{\"name\":\"${smoke_model_rest}\"},\"spec\":{\"replicas\":2}}"
       call_http "DELETE /api/v1/models/${smoke_model_rest}" DELETE "/api/v1/models/${smoke_model_rest}"
     fi

@@ -551,4 +551,3 @@ func resourceRefStatusFromMap(m map[string]interface{}) *aigridv1.ResourceRefSta
 		Message:   stringField(m, "message"),
 	}
 }
-
