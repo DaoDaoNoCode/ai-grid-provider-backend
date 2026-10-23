@@ -155,9 +155,10 @@ func (c *Client) UpdateTenant(ctx context.Context, object *aigridv1.Tenant, mask
 	return response.GetObject(), nil
 }
 
-// DeleteTenant deletes a tenant (Keycloak Organization) by id.
-func (c *Client) DeleteTenant(ctx context.Context, id string) error {
-	_, err := c.tenants.Delete(ctx, &aigridv1.TenantsDeleteRequest{Id: id})
+// DeleteTenant deletes a tenant (Keycloak Organization) by id, at the
+// metadata.version the caller last read.
+func (c *Client) DeleteTenant(ctx context.Context, id string, version int32) error {
+	_, err := c.tenants.Delete(ctx, &aigridv1.TenantsDeleteRequest{Id: id, Version: version})
 	return err
 }
 

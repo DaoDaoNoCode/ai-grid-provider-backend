@@ -314,6 +314,8 @@ Full user CRUD and identity providers remain out of scope for this API today.
 | --- | --- |
 | `id` | Keycloak organization **UUID** (server-assigned on create) |
 | `metadata.name` | Organization name (RFC 1123 DNS label); required on create |
+| `metadata.version` | Optimistic-concurrency version, kept in the organization attribute `ai-grid/resource-version`: 1 on create, bumped by every update through this API. An organization created in Keycloak directly reads as 1. Edits made in Keycloak directly don't bump it. Output only |
+| `metadata.creation_timestamp` | From the attribute `ai-grid/create-time` (RFC 3339), stamped on create; absent for an organization created in Keycloak directly. Output only |
 | `spec.domains` | Email domains for the org (DNS hostnames, ≥2 labels, lowercase) |
 | `status` | Empty object today |
 
@@ -338,13 +340,13 @@ do not “fix” by creating a realm per tenant.
   "items": [
     {
       "id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
-      "metadata": { "name": "tenant-a" },
+      "metadata": { "name": "tenant-a", "version": 3, "creation_timestamp": "2026-10-22T13:30:00Z" },
       "spec": { "domains": ["tenant-a.example.com"] },
       "status": {}
     },
     {
       "id": "b2c3d4e5-f6a7-8901-bcde-f12345678901",
-      "metadata": { "name": "tenant-b" },
+      "metadata": { "name": "tenant-b", "version": 1 },
       "spec": { "domains": ["tenant-b.example.com"] },
       "status": {}
     }
@@ -391,7 +393,7 @@ Notes:
 ```json
 {
   "id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
-  "metadata": { "name": "acme" },
+  "metadata": { "name": "acme", "version": 1, "creation_timestamp": "2026-10-22T13:30:00Z" },
   "spec": { "domains": ["acme.example.com"] },
   "status": {}
 }
@@ -407,7 +409,8 @@ Notes:
 {
   "id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
   "metadata": {
-    "name": "acme"
+    "name": "acme",
+    "version": 1
   },
   "spec": {
     "domains": ["acme.example.com", "acme.io"]
@@ -417,20 +420,41 @@ Notes:
 
 **Behavior today:**
 
-- Empty update mask (typical gRPC with no `update_mask`) updates **name + domains**.
-  REST PATCH with no explicit mask typically derives a body mask from fields present
-  in the JSON — that is **not** identical to an empty-mask Go/gRPC update.
+- An empty update mask (gRPC without `update_mask`, or a REST PATCH without
+  `?update_mask=`) is inferred from the object: the name when `metadata.name` is
+  set, the domains when `spec` is present.
 - Supported mask paths: `metadata`, `metadata.name`, `spec`, `spec.domains`
-  (optional `object.` prefix). Unsupported paths return `InvalidArgument`.
+  (optional `object.` prefix). `id`, `metadata.version` and
+  `metadata.creation_timestamp` are accepted and change nothing. Unsupported
+  paths return `InvalidArgument`.
 - Domains in the body **replace** the domain list when domains are updated.
   Blank/whitespace-only domain entries are rejected (`InvalidArgument`), not dropped.
-- Optional query `lock` — **not enforced yet**.
+- `metadata.version` is required (`400`, `InvalidArgument`, without one) and
+  must equal the stored version, or the update is `409` (`Aborted`) and writes
+  nothing. Every organization reads as version 1 or more. Every update that
+  writes bumps the version.
+- Everything this API doesn't model (other attributes, alias, enabled,
+  description, redirect URL, identity provider links, each kept domain's
+  `verified` and identity provider alias) is written back as read.
+- A mask that names only `id`, `metadata.version` or
+  `metadata.creation_timestamp`, or a body with no name and no `spec`, writes nothing and returns the tenant as stored,
+  version unchanged.
+- The backend serializes its own writes per tenant (one replica), so of two
+  edits at the same version the second gets `409`. Keycloak has no conditional
+  write, so an edit made in Keycloak directly isn't versioned.
+- A new name or domain that another organization already has is `409`
+  (`AlreadyExists`): "the name or a domain is already used by another
+  organization".
 
 **Response `200`** — updated `Tenant`.
 
 ---
 
 ### `DELETE /api/v1/tenants/{id}`
+
+Required query `version`: without it the delete is `400` (`InvalidArgument`).
+It must equal the stored `metadata.version`, or the delete is `409`
+(`Aborted`) and removes nothing.
 
 **Response `200`**
 

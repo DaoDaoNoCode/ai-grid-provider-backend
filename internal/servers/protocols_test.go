@@ -279,7 +279,7 @@ func TestRESTPatchWithoutMaskKeepsUnnamedFields(t *testing.T) {
 	})
 	baseURL, httpClient := startBackendWithTenants(t, store)
 
-	body, status := patch(t, httpClient, baseURL+"/api/v1/tenants/"+id, `{"metadata":{"name":"acme-two"}}`)
+	body, status := patch(t, httpClient, baseURL+"/api/v1/tenants/"+id, `{"metadata":{"name":"acme-two","version":1}}`)
 	if status != http.StatusOK {
 		t.Fatalf("PATCH status = %d, want 200, body = %s", status, body)
 	}
@@ -296,6 +296,29 @@ func TestRESTPatchWithoutMaskKeepsUnnamedFields(t *testing.T) {
 	}
 	if !strings.Contains(body, "acme-two") {
 		t.Errorf("the PATCH did not apply the new name: %s", body)
+	}
+}
+
+// A PATCH body holding only the version names nothing to write, so the
+// version must stay: bumping it would make other editors stale for no change.
+func TestRESTPatchVersionOnlyWritesNothing(t *testing.T) {
+	t.Parallel()
+
+	const id = "11111111-1111-4111-8111-111111111111"
+	store := newFakeOrganizationStore(keycloak.Organization{
+		ID: id, Name: "acme", Domains: []keycloak.OrganizationDomain{{Name: "acme.example.com"}},
+	})
+	baseURL, httpClient := startBackendWithTenants(t, store)
+
+	body, status := patch(t, httpClient, baseURL+"/api/v1/tenants/"+id, `{"metadata":{"version":1}}`)
+	if status != http.StatusOK {
+		t.Fatalf("PATCH status = %d, want 200, body = %s", status, body)
+	}
+	if store.puts != 0 {
+		t.Errorf("a version-only PATCH wrote to Keycloak (%d PUTs)", store.puts)
+	}
+	if !strings.Contains(body, `"version":1`) {
+		t.Errorf("a version-only PATCH changed the version: %s", body)
 	}
 }
 

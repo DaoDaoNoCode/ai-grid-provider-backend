@@ -225,6 +225,80 @@ func TestRealTenantsServerOnFakeKeycloak(t *testing.T) {
 	}
 }
 
+// TestRealTenantsServerVersionOnFakeKeycloak runs the console's organization
+// flow against the fake Keycloak: Create stamps version 1 and the creation
+// time, a fixture organization (no attributes) reads as version 1, an update
+// at the read version bumps it, a stale one is Aborted, removing every domain
+// clears them, and a stale delete is Aborted.
+func TestRealTenantsServerVersionOnFakeKeycloak(t *testing.T) {
+	orgs, err := fakekeycloak.LoadFixtures(fixturesDir)
+	if err != nil {
+		t.Fatalf("keycloak.LoadFixtures() error = %v", err)
+	}
+	kc, err := fakekeycloak.New(fakekeycloak.Config{AdminRealm: "master", Realm: "ai-grid", Username: "admin", Password: "admin", Logger: slog.New(slog.DiscardHandler)}, orgs)
+	if err != nil {
+		t.Fatalf("keycloak fake New() error = %v", err)
+	}
+	srv := httptest.NewServer(kc.Handler())
+	t.Cleanup(srv.Close)
+	s, err := servers.NewTenantsServer().SetLogger(slog.New(slog.DiscardHandler)).SetOrganizationClient(keycloak.New(keycloak.Config{
+		BaseURL: srv.URL, AdminRealm: "master", Realm: "ai-grid", Username: "admin", Password: "admin", HTTPClient: srv.Client(),
+	})).Build()
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+	ctx := context.Background()
+
+	list, err := s.List(ctx, &aigridv1.TenantsListRequest{})
+	if err != nil {
+		t.Fatalf("List() error = %v", err)
+	}
+	if meta := list.GetItems()[0].GetMetadata(); meta.GetVersion() != 1 || meta.GetCreationTimestamp() != nil {
+		t.Fatalf("fixture tenant metadata = %v, want version 1 and no creation time", meta)
+	}
+
+	created, err := s.Create(ctx, &aigridv1.TenantsCreateRequest{Object: &aigridv1.Tenant{
+		Metadata: &aigridv1.Metadata{Name: "scratch-org"},
+		Spec:     &aigridv1.TenantSpec{Domains: []string{"scratch.example.com"}},
+	}})
+	if err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	id, meta := created.GetObject().GetId(), created.GetObject().GetMetadata()
+	if meta.GetVersion() != 1 || meta.GetCreationTimestamp() == nil || time.Since(meta.GetCreationTimestamp().AsTime()) > time.Minute {
+		t.Fatalf("Create() metadata = %v", meta)
+	}
+	got, err := s.Get(ctx, &aigridv1.TenantsGetRequest{Id: id})
+	if err != nil || got.GetObject().GetMetadata().GetVersion() != 1 || !got.GetObject().GetMetadata().GetCreationTimestamp().AsTime().Equal(meta.GetCreationTimestamp().AsTime()) {
+		t.Fatalf("Get() = %v, %v", got, err)
+	}
+
+	clear := &aigridv1.TenantsUpdateRequest{
+		Object:     &aigridv1.Tenant{Id: id, Metadata: &aigridv1.Metadata{Version: 1}, Spec: &aigridv1.TenantSpec{}},
+		UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.domains"}},
+		Lock:       true,
+	}
+	updated, err := s.Update(ctx, clear)
+	if err != nil {
+		t.Fatalf("Update(clear domains) error = %v", err)
+	}
+	if updated.GetObject().GetMetadata().GetVersion() != 2 || len(updated.GetObject().GetSpec().GetDomains()) != 0 {
+		t.Fatalf("Update(clear domains) = %v", updated.GetObject())
+	}
+	if !updated.GetObject().GetMetadata().GetCreationTimestamp().AsTime().Equal(meta.GetCreationTimestamp().AsTime()) {
+		t.Fatalf("Update() changed the creation time: %v", updated.GetObject().GetMetadata())
+	}
+	if _, err := s.Update(ctx, clear); connect.CodeOf(err) != connect.CodeAborted {
+		t.Fatalf("Update(stale version) error = %v, want Aborted", err)
+	}
+	if _, err := s.Delete(ctx, &aigridv1.TenantsDeleteRequest{Id: id, Version: 1}); connect.CodeOf(err) != connect.CodeAborted {
+		t.Fatalf("Delete(stale version) error = %v, want Aborted", err)
+	}
+	if _, err := s.Delete(ctx, &aigridv1.TenantsDeleteRequest{Id: id, Version: 2}); err != nil {
+		t.Fatalf("Delete(current version) error = %v", err)
+	}
+}
+
 // TestRealClustersServerUpdateVersion covers the console's Add to and Remove
 // from AI Grid writes: metadata.version is the hub resourceVersion, a stale
 // one is Aborted, and the request's labels are the whole set of console keys.

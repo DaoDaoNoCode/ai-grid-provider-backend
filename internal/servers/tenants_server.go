@@ -4,14 +4,32 @@ import (
 	connect "connectrpc.com/connect/v2"
 	"context"
 	"errors"
+	"hash/fnv"
 	"log/slog"
+	"maps"
+	"math"
 	"regexp"
+	"strconv"
 	"strings"
+	"time"
 
 	aigridv1 "github.com/osac-project/ai-grid-provider-backend/gen/ai_grid/v1"
 	"github.com/osac-project/ai-grid-provider-backend/gen/ai_grid/v1/aigridv1connect"
 	"github.com/osac-project/ai-grid-provider-backend/internal/keycloak"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
+	"google.golang.org/protobuf/types/known/timestamppb"
+)
+
+// Keycloak organization attributes this backend owns. Keycloak keeps no
+// version or creation time for an organization, so the backend stores them.
+const (
+	// tenantVersionAttribute is metadata.version, bumped on every write the
+	// backend makes. An organization without it (created in Keycloak
+	// directly) reads as version 1.
+	tenantVersionAttribute = "ai-grid/resource-version"
+	// tenantCreateTimeAttribute is metadata.creation_timestamp in RFC 3339,
+	// stamped on Create.
+	tenantCreateTimeAttribute = "ai-grid/create-time"
 )
 
 // RFC 1123 DNS label: 1–63 chars, lowercase alphanumeric, hyphens allowed inside.
@@ -45,6 +63,35 @@ type TenantsServer struct {
 	aigridv1connect.UnimplementedTenantsHandler
 	logger  *slog.Logger
 	tenants organizationClient
+	now     func() time.Time
+
+	// writeLocks serializes writes per organization id. Update and Delete
+	// hold one from their read to their write, so two writes through this
+	// backend can't both pass the version check; Keycloak has no conditional
+	// write. It works because the backend runs one replica and only it bumps
+	// versions. Revisit it before running more than one. A fixed set, picked
+	// by a hash of the id, keeps memory bounded whatever ids callers send; two
+	// tenants that share a lock only wait for each other. Each lock is a
+	// one-slot channel, so a waiting request gives up when its context ends.
+	writeLocks [64]chan struct{}
+}
+
+// lockTenant serializes this backend's writes to one organization and
+// returns the unlock function, or an error when ctx ends first.
+func (s *TenantsServer) lockTenant(ctx context.Context, id string) (func(), error) {
+	h := fnv.New32a()
+	h.Write([]byte(id))
+	lock := s.writeLocks[h.Sum32()%uint32(len(s.writeLocks))]
+	select {
+	case lock <- struct{}{}:
+		return func() { <-lock }, nil
+	case <-ctx.Done():
+		code := connect.CodeCanceled
+		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+			code = connect.CodeDeadlineExceeded
+		}
+		return nil, connect.Errorf(code, "wait for tenant %q: %v", id, ctx.Err())
+	}
 }
 
 var _ aigridv1connect.TenantsHandler = (*TenantsServer)(nil)
@@ -81,7 +128,11 @@ func (b *TenantsServerBuilder) Build() (*TenantsServer, error) {
 	if logger == nil {
 		logger = slog.Default()
 	}
-	return &TenantsServer{logger: logger, tenants: b.tenants}, nil
+	server := &TenantsServer{logger: logger, tenants: b.tenants, now: time.Now}
+	for i := range server.writeLocks {
+		server.writeLocks[i] = make(chan struct{}, 1)
+	}
+	return server, nil
 }
 
 // List returns Keycloak Organizations from the configured realm.
@@ -141,6 +192,10 @@ func (s *TenantsServer) Create(ctx context.Context, req *aigridv1.TenantsCreateR
 		Name:    name,
 		Alias:   name,
 		Domains: domains,
+		Attributes: map[string][]string{
+			tenantVersionAttribute:    {"1"},
+			tenantCreateTimeAttribute: {s.now().UTC().Format(time.RFC3339)},
+		},
 	}
 	created, err := s.tenants.CreateOrganization(ctx, org)
 	if err != nil {
@@ -161,14 +216,33 @@ func (s *TenantsServer) Update(ctx context.Context, req *aigridv1.TenantsUpdateR
 		return nil, err
 	}
 
+	version := object.GetMetadata().GetVersion()
+	if version == 0 {
+		return nil, errTenantVersionRequired
+	}
+
+	unlock, err := s.lockTenant(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	defer unlock()
 	current, err := s.tenants.GetOrganization(ctx, id)
 	if err != nil {
 		return nil, mapTenantKeycloakError("get", id, err)
+	}
+	// A stale version is Aborted before anything else is checked.
+	if version != organizationVersion(current) {
+		return nil, staleTenantError("update", id)
 	}
 
 	updateName, updateDomains, nameRequired, err := tenantUpdatePaths(req.GetUpdateMask(), req.GetObject())
 	if err != nil {
 		return nil, err
+	}
+	if !updateName && !updateDomains {
+		// The mask names only id, version or creation time: nothing to
+		// write, so the version stays and other editors aren't made stale.
+		return &aigridv1.TenantsUpdateResponse{Object: tenantFromOrganization(current)}, nil
 	}
 	next := current
 	if updateName {
@@ -193,25 +267,60 @@ func (s *TenantsServer) Update(ctx context.Context, req *aigridv1.TenantsUpdateR
 			if err != nil {
 				return nil, err
 			}
-			next.Domains = domains
+			next.Domains = keepDomainDetails(domains, current.Domains)
 		}
 		if err := validateTenantDomains(next.Domains); err != nil {
 			return nil, err
 		}
 	}
 
+	// The rest of the representation, attributes this backend doesn't own
+	// included, goes back as read.
+	next.Attributes = maps.Clone(current.Attributes)
+	if next.Attributes == nil {
+		next.Attributes = map[string][]string{}
+	}
+	next.Attributes[tenantVersionAttribute] = []string{strconv.FormatInt(nextVersion(organizationVersion(current)), 10)}
+
 	updated, err := s.tenants.UpdateOrganization(ctx, next)
+	if readBack := (*keycloak.ReadBackError)(nil); errors.As(err, &readBack) {
+		// The write landed; answer with what was written rather than make
+		// the caller retry into a 409 for its own change.
+		s.logger.WarnContext(ctx, "tenant updated, but reading it back failed", "id", id, "error", readBack.Err)
+		updated, err = readBack.Written, nil
+	}
 	if err != nil {
 		return nil, mapTenantKeycloakError("update", id, err)
 	}
 	return &aigridv1.TenantsUpdateResponse{Object: tenantFromOrganization(updated)}, nil
 }
 
+// errTenantVersionRequired answers an Update or Delete without a version.
+// Every organization reads as version 1 or more, so a caller that read the
+// tenant always has one.
+var errTenantVersionRequired = connect.Errorf(connect.CodeInvalidArgument, "a version is required: send the organization's metadata.version")
+
 // Delete deletes a Keycloak Organization by id.
 func (s *TenantsServer) Delete(ctx context.Context, req *aigridv1.TenantsDeleteRequest) (*aigridv1.TenantsDeleteResponse, error) {
 	id := req.GetId()
 	if err := validateTenantID(id); err != nil {
 		return nil, err
+	}
+	version := req.GetVersion()
+	if version == 0 {
+		return nil, errTenantVersionRequired
+	}
+	unlock, err := s.lockTenant(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	defer unlock()
+	current, err := s.tenants.GetOrganization(ctx, id)
+	if err != nil {
+		return nil, mapTenantKeycloakError("get", id, err)
+	}
+	if version != organizationVersion(current) {
+		return nil, staleTenantError("delete", id)
 	}
 	if err := s.tenants.DeleteOrganization(ctx, id); err != nil {
 		return nil, mapTenantKeycloakError("delete", id, err)
@@ -249,13 +358,78 @@ func tenantFromOrganization(organization keycloak.Organization) *aigridv1.Tenant
 	return &aigridv1.Tenant{
 		Id: organization.ID,
 		Metadata: &aigridv1.Metadata{
-			Name: organization.Name,
+			Name:              organization.Name,
+			Version:           organizationVersion(organization),
+			CreationTimestamp: organizationCreateTime(organization),
 		},
 		Spec: &aigridv1.TenantSpec{
 			Domains: organization.DomainNames(),
 		},
 		Status: &aigridv1.TenantStatus{},
 	}
+}
+
+// organizationVersion reads the version attribute. An organization without
+// one, or with a value that isn't a positive int32, is version 1, so a client
+// can lock even its first update.
+func organizationVersion(organization keycloak.Organization) int32 {
+	values := organization.Attributes[tenantVersionAttribute]
+	if len(values) == 0 {
+		return 1
+	}
+	v, err := strconv.ParseInt(values[0], 10, 32)
+	if err != nil || v < 1 {
+		return 1
+	}
+	return int32(v)
+}
+
+// nextVersion is the version after v, wrapping to 2 past the int32 maximum
+// so it never returns 0 (no check) or 1 (an unstamped organization).
+func nextVersion(v int32) int64 {
+	if v == math.MaxInt32 {
+		return 2
+	}
+	return int64(v) + 1
+}
+
+// organizationCreateTime reads the creation-time attribute; nil when it's
+// missing, not RFC 3339, or outside the range a protobuf Timestamp holds.
+func organizationCreateTime(organization keycloak.Organization) *timestamppb.Timestamp {
+	values := organization.Attributes[tenantCreateTimeAttribute]
+	if len(values) == 0 {
+		return nil
+	}
+	t, err := time.Parse(time.RFC3339, values[0])
+	if err != nil {
+		return nil
+	}
+	ts := timestamppb.New(t)
+	if ts.CheckValid() != nil {
+		return nil
+	}
+	return ts
+}
+
+// keepDomainDetails carries each kept domain's stored representation
+// (verified, identity provider link, keys the client doesn't model) over to
+// the new list, so an update that only adds or removes domains leaves the
+// others as they were.
+func keepDomainDetails(next, current []keycloak.OrganizationDomain) []keycloak.OrganizationDomain {
+	for i, d := range next {
+		for _, c := range current {
+			if c.Name == d.Name {
+				next[i] = c
+				break
+			}
+		}
+	}
+	return next
+}
+
+// staleTenantError is the Aborted error for a write against an old version.
+func staleTenantError(op, id string) error {
+	return connect.Errorf(connect.CodeAborted, "%s tenant %q: the tenant changed since it was read; reload and retry", op, id)
 }
 
 func tenantMemberFromOrganizationMember(member keycloak.OrganizationMember) *aigridv1.TenantMember {
@@ -306,13 +480,16 @@ func domainsFromTenantSpec(spec *aigridv1.TenantSpec) ([]keycloak.OrganizationDo
 // everything" made a name-only PATCH clear the tenant's domains.
 func tenantUpdatePaths(mask *fieldmaskpb.FieldMask, object *aigridv1.Tenant) (name, domains, nameRequired bool, err error) {
 	if mask == nil || len(mask.GetPaths()) == 0 {
-		return object.GetMetadata() != nil, object.GetSpec() != nil, false, nil
+		// Only a name counts: metadata holding just the version or creation
+		// time names nothing to write, so it stays a no-op.
+		return object.GetMetadata().GetName() != "", object.GetSpec() != nil, false, nil
 	}
 	for _, path := range mask.GetPaths() {
 		p := strings.TrimPrefix(path, "object.")
 		switch p {
-		case "id":
-			// Identity is taken from the path / object.id; ignore in the mask.
+		case "id", "metadata.version", "metadata.creation_timestamp":
+			// Identity is taken from the path / object.id, the version is a
+			// precondition, and the creation time is output only.
 		case "metadata", "metadata.name":
 			name = true
 			nameRequired = true
@@ -382,6 +559,10 @@ func mapTenantKeycloakError(op, id string, err error) error {
 			return connect.Errorf(connect.CodeNotFound, "tenant not found").WithCause(err)
 		}
 		return connect.Errorf(connect.CodeNotFound, "tenant %q not found", id).WithCause(err)
+	case keycloak.IsConflict(err) && op == "update":
+		// On an update Keycloak's 409 means the new name or a domain belongs
+		// to another organization; id is this tenant's own.
+		return connect.Errorf(connect.CodeAlreadyExists, "update tenant %q: the name or a domain is already used by another organization", id).WithCause(err)
 	case keycloak.IsConflict(err):
 		if id == "" {
 			return connect.Errorf(connect.CodeAlreadyExists, "tenant already exists").WithCause(err)

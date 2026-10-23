@@ -27,7 +27,13 @@ const (
 type Tenant struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// Unique identifier of the tenant (Keycloak organization id / UUID).
-	Id            string        `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
+	Id string `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
+	// metadata.name is the organization name. metadata.version is kept in the
+	// organization attribute ai-grid/resource-version: 1 on Create, bumped on
+	// every Update this backend makes, and 1 for an organization without the
+	// attribute (created in Keycloak directly). metadata.creation_timestamp comes from
+	// the attribute ai-grid/create-time (RFC 3339), stamped on Create; it's
+	// unset for an organization created elsewhere. Both are output only.
 	Metadata      *Metadata     `protobuf:"bytes,2,opt,name=metadata,proto3" json:"metadata,omitempty"`
 	Spec          *TenantSpec   `protobuf:"bytes,3,opt,name=spec,proto3" json:"spec,omitempty"`
 	Status        *TenantStatus `protobuf:"bytes,4,opt,name=status,proto3" json:"status,omitempty"`
