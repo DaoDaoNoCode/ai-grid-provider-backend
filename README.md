@@ -21,7 +21,7 @@ The current API includes:
 - `ai_grid.v1.Tenants/Update`
 - `ai_grid.v1.Tenants/Delete`
 - `ai_grid.v1.Subscriptions/List`
-- `ai_grid.v1.Subscriptions/Get` (joins covering AuthPolicies + ModelRegistrations)
+- `ai_grid.v1.Subscriptions/Get` (gRPC/REST join covering AuthPolicies + ModelRegistrations; the Go `client.GetSubscription` helper returns the Subscription object only)
 - `ai_grid.v1.Subscriptions/Create` (managed `MaaSAuthPolicy` `<id>-policy`; returned in response)
 - `ai_grid.v1.Subscriptions/Update` (syncs managed AuthPolicy when present)
 - `ai_grid.v1.Subscriptions/Delete` (deletes managed AuthPolicy when present)
@@ -536,7 +536,7 @@ Manifests live under [deploy/openshift/](deploy/openshift/).
 
 ```text
 cmd/ai-grid-provider-backend/             service entrypoint
-client/                          reusable gRPC client
+client/                          reusable gRPC client (GetSubscription returns object only; REST Get joins authPolicies + modelRegistrations)
 proto/                           protobuf + buf config
 proto/ai_grid/v1/                per-resource *_type.proto / *_service.proto + metadata
 gen/ai_grid/v1/                  generated protobuf, gRPC, and Connect code

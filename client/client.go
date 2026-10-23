@@ -182,6 +182,9 @@ func (c *Client) ListSubscriptions(ctx context.Context) ([]*aigridv1.Subscriptio
 }
 
 // GetSubscription returns a single Subscription by id.
+// Unlike REST GET /api/v1/subscriptions/{id}, this helper returns only the
+// Subscription object; authPolicies and modelRegistrations from the gRPC Get
+// response are not exposed here.
 func (c *Client) GetSubscription(ctx context.Context, id string) (*aigridv1.Subscription, error) {
 	response, err := c.subscriptions.Get(ctx, &aigridv1.SubscriptionsGetRequest{Id: id})
 	if err != nil {

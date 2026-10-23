@@ -514,6 +514,12 @@ intersect the subscription’s models. `modelRegistrations` come from
 `MaaSModelRef` CRs. `model_refs[].display_name` / `description` are output
 enrichment from ModelRef annotations (ignored on write).
 
+**Go client note:** `client.GetSubscription` returns only the Subscription
+`object` (same unwrap as Clusters/Tenants helpers). REST `GET
+/api/v1/subscriptions/{id}` returns the full join (`object` + `authPolicies` +
+`modelRegistrations`). Callers that need the join should use REST or the raw
+gRPC `Subscriptions/Get` response, not the Go helper.
+
 Display name / description for the subscription itself stay in
 `metadata.annotations` (`openshift.io/display-name`,
 `openshift.io/description`). Optimistic concurrency uses `metadata.version`
@@ -620,8 +626,9 @@ this file is the current contract snapshot).
 ## 6. Local / OpenShift try-out
 
 ```bash
-# Local without a cluster (fake hub seeds MaaS CRs for Subscriptions)
+# Local without a cluster (fixtures/default seeds MaaS CRs for Subscriptions)
 make dev-fake
+# Prefer make dev-fake over make dev-fake-poc: poc has no MaaS seeds.
 # REST :9092, gRPC :9090 — curl /api/v1/subscriptions, Get engineering
 
 # Local against a real kubeconfig + Keycloak (needs MaaS CRDs for Subscriptions)
@@ -641,6 +648,8 @@ curl -sS 'http://localhost:8081/api/v1/ping?name=UI'
 curl -sS 'http://localhost:8081/api/v1/clusters'
 curl -sS 'http://localhost:8081/api/v1/tenants'
 curl -sS 'http://localhost:8081/api/v1/subscriptions'
+# Seeded on make dev-fake — REST Get returns object + authPolicies + modelRegistrations
+curl -sS 'http://localhost:8081/api/v1/subscriptions/engineering'
 
 curl -sS -X POST 'http://localhost:8081/api/v1/clusters' \
   -H 'Content-Type: application/json' \
@@ -649,7 +658,14 @@ curl -sS -X POST 'http://localhost:8081/api/v1/clusters' \
 curl -sS -X PATCH 'http://localhost:8081/api/v1/clusters/demo-cluster' \
   -H 'Content-Type: application/json' \
   -d '{"id":"demo-cluster","metadata":{"labels":{"ai-grid/enabled":"true"}},"spec":{"hub_accepts_client":true}}'
+
+# Subscriptions create returns { object, authPolicy }; see Example create above
+curl -sS -X POST 'http://localhost:8081/api/v1/subscriptions' \
+  -H 'Content-Type: application/json' \
+  -d '{"id":"smoke-sub","metadata":{"name":"smoke-sub"},"spec":{"owner":{"groups":["smoke"]},"model_refs":[{"name":"tiny-llm","namespace":"llm","token_rate_limits":[{"limit":50,"window":"1m"}]}],"priority":5}}'
 ```
+
+Models deploy API lives on PR #26 (`feat/maas`), not this Subscriptions branch.
 
 ---
 
