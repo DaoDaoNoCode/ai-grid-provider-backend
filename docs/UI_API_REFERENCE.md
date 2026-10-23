@@ -158,6 +158,10 @@ Hub-side ACM/OCM `ManagedCluster` CRs. **Does not provision spoke clusters.**
 | `spec.hub_accepts_client` | Hub accepts spoke registration |
 | `status.available` / `joined` | Derived from OCM conditions |
 | `status.available_condition` | Raw `"True"` / `"False"` / `"Unknown"` / `""` — useful for Ready/Offline/Unknown |
+| `status.conditions` | The hub's conditions (`type`, `status`, `reason`, `message`, `last_transition_time`), in the hub's order |
+| `status.kubernetes_version` | `status.version.kubernetes`, for example `"v1.34.9"`; empty until the agent reports it |
+| `status.capacity` / `allocatable` | Kubernetes quantity strings by resource name, for example `"cpu": "68"`, `"memory": "273509824Ki"`, `"nvidia.com/gpu": "1"`; absent until the agent reports them |
+| `status.cluster_claims` | `{name, value}` pairs the agent reports, for example the console URL (`consoleurl.cluster.open-cluster-management.io`), platform and product |
 | `metadata.labels["ai-grid/enabled"]` | Enroll-style flag (string `"true"` / `"false"`) |
 
 ---

@@ -1207,6 +1207,43 @@
       },
       "description": "Hub-side ACM/OCM ManagedCluster inventory object.\n\nThe `spec` contains the desired details and may be modified by the user.\nThe `status` contains the current status and is provided by the system."
     },
+    "v1ManagedClusterClaim": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "value": {
+          "type": "string"
+        }
+      },
+      "description": "One `status.clusterClaims[]` entry of a ManagedCluster."
+    },
+    "v1ManagedClusterCondition": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "description": "For example \"ManagedClusterConditionAvailable\" or \"ManagedClusterJoined\"."
+        },
+        "status": {
+          "type": "string",
+          "description": "\"True\", \"False\" or \"Unknown\"."
+        },
+        "reason": {
+          "type": "string"
+        },
+        "message": {
+          "type": "string"
+        },
+        "last_transition_time": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Unset when the hub recorded none."
+        }
+      },
+      "description": "One `status.conditions[]` entry of a ManagedCluster."
+    },
     "v1ManagedClusterSpec": {
       "type": "object",
       "properties": {
@@ -1235,6 +1272,40 @@
         "provisioning": {
           "type": "string",
           "description": "AI Grid provisioning, from the cluster's compliance with the hub's\nai-grid-ready Policy (by default ai-grid-policies/ai-grid-ready):\n\"Compliant\" (provisioned), \"NonCompliant\", or \"Pending\" (placed, no\nresult yet). Empty when the Policy doesn't cover the cluster, for\nexample because it isn't labelled ai-grid/enabled=true, or when the\nPolicy can't be read."
+        },
+        "conditions": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "$ref": "#/definitions/v1ManagedClusterCondition"
+          },
+          "description": "`status.conditions`, as the hub reports them, in the hub's order."
+        },
+        "kubernetes_version": {
+          "type": "string",
+          "description": "`status.version.kubernetes`, for example \"v1.34.9\". Empty until the\ncluster's agent reports it."
+        },
+        "capacity": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "`status.capacity`: what the cluster's nodes provide, as Kubernetes\nquantity strings keyed by resource name (for example \"cpu\": \"68\",\n\"memory\": \"273509824Ki\", \"nvidia.com/gpu\": \"1\"). Empty until the agent\nreports it."
+        },
+        "allocatable": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "`status.allocatable`, keyed and encoded like `capacity`."
+        },
+        "cluster_claims": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "$ref": "#/definitions/v1ManagedClusterClaim"
+          },
+          "description": "`status.clusterClaims`, as the cluster's agent reports them, for example\n`consoleurl.cluster.open-cluster-management.io`,\n`platform.open-cluster-management.io` and\n`product.open-cluster-management.io`."
         }
       },
       "description": "Observed state of a hub ManagedCluster."

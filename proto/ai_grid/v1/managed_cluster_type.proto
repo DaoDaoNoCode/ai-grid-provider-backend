@@ -4,6 +4,7 @@ package ai_grid.v1;
 
 import "ai_grid/v1/metadata_type.proto";
 import "buf/validate/validate.proto";
+import "google/protobuf/timestamp.proto";
 
 option go_package = "github.com/osac-project/ai-grid-provider-backend/gen/ai_grid/v1;aigridv1";
 
@@ -49,4 +50,49 @@ message ManagedClusterStatus {
   // example because it isn't labelled ai-grid/enabled=true, or when the
   // Policy can't be read.
   string provisioning = 4;
+
+  // `status.conditions`, as the hub reports them, in the hub's order.
+  repeated ManagedClusterCondition conditions = 5;
+
+  // `status.version.kubernetes`, for example "v1.34.9". Empty until the
+  // cluster's agent reports it.
+  string kubernetes_version = 6;
+
+  // `status.capacity`: what the cluster's nodes provide, as Kubernetes
+  // quantity strings keyed by resource name (for example "cpu": "68",
+  // "memory": "273509824Ki", "nvidia.com/gpu": "1"). Empty until the agent
+  // reports it.
+  map<string, string> capacity = 7;
+
+  // `status.allocatable`, keyed and encoded like `capacity`.
+  map<string, string> allocatable = 8;
+
+  // `status.clusterClaims`, as the cluster's agent reports them, for example
+  // `consoleurl.cluster.open-cluster-management.io`,
+  // `platform.open-cluster-management.io` and
+  // `product.open-cluster-management.io`.
+  repeated ManagedClusterClaim cluster_claims = 9;
+}
+
+// One `status.conditions[]` entry of a ManagedCluster.
+message ManagedClusterCondition {
+  // For example "ManagedClusterConditionAvailable" or "ManagedClusterJoined".
+  string type = 1;
+
+  // "True", "False" or "Unknown".
+  string status = 2;
+
+  string reason = 3;
+
+  string message = 4;
+
+  // Unset when the hub recorded none.
+  google.protobuf.Timestamp last_transition_time = 5;
+}
+
+// One `status.clusterClaims[]` entry of a ManagedCluster.
+message ManagedClusterClaim {
+  string name = 1;
+
+  string value = 2;
 }
