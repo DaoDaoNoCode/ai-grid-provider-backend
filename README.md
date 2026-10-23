@@ -561,7 +561,7 @@ hack/ocm-up.sh                   OCM bootstrap helper
 hack/openshift-up.sh             OpenShift deploy helper
 hack/openshift-down.sh           OpenShift teardown helper
 hack/check-prereqs.sh            local toolchain and runtime preflight
-hack/smoke-apis.sh               gRPC + REST smoke for Ping/Clusters/Tenants (make smoke)
+hack/smoke-apis.sh               gRPC + REST smoke for Ping/Clusters/Tenants/Models (make smoke)
 hack/test-kind.sh                end-to-end integration test
 integration/kind_test.go         typed gRPC integration test
 cmd/ai-grid-fake-infra/          fake hub API + fake Keycloak + draft fake for make dev-fake
