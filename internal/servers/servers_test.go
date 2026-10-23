@@ -818,7 +818,7 @@ func TestUpdateTenant(t *testing.T) {
 		got, err := server.Update(context.Background(), &aigridv1.TenantsUpdateRequest{
 			Object: &aigridv1.Tenant{
 				Id:       "org-1",
-				Metadata: &aigridv1.Metadata{Name: "acme-renamed"},
+				Metadata: &aigridv1.Metadata{Version: 1, Name: "acme-renamed"},
 				Spec:     &aigridv1.TenantSpec{Domains: []string{"renamed.example.com"}},
 			},
 		})
@@ -855,7 +855,7 @@ func TestUpdateTenant(t *testing.T) {
 		got, err := server.Update(context.Background(), &aigridv1.TenantsUpdateRequest{
 			Object: &aigridv1.Tenant{
 				Id:       "org-1",
-				Metadata: &aigridv1.Metadata{Name: "should-not-apply"},
+				Metadata: &aigridv1.Metadata{Version: 1, Name: "should-not-apply"},
 				Spec:     &aigridv1.TenantSpec{Domains: []string{"only-domains.example.com"}},
 			},
 			UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.domains"}},
@@ -888,7 +888,7 @@ func TestUpdateTenant(t *testing.T) {
 		_, err := server.Update(context.Background(), &aigridv1.TenantsUpdateRequest{
 			Object: &aigridv1.Tenant{
 				Id:       "org-1",
-				Metadata: &aigridv1.Metadata{Name: "unexpected"},
+				Metadata: &aigridv1.Metadata{Version: 1, Name: "unexpected"},
 			},
 			UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"metadata.labels"}},
 		})
@@ -913,8 +913,9 @@ func TestUpdateTenant(t *testing.T) {
 		server := mustTenantsServer(t, store)
 		got, err := server.Update(context.Background(), &aigridv1.TenantsUpdateRequest{
 			Object: &aigridv1.Tenant{
-				Id:   "org-1",
-				Spec: &aigridv1.TenantSpec{Domains: []string{"new.example.com"}},
+				Id:       "org-1",
+				Metadata: &aigridv1.Metadata{Version: 1},
+				Spec:     &aigridv1.TenantSpec{Domains: []string{"new.example.com"}},
 			},
 		})
 		if err != nil {
@@ -935,7 +936,7 @@ func TestUpdateTenant(t *testing.T) {
 		_, err := server.Update(context.Background(), &aigridv1.TenantsUpdateRequest{
 			Object: &aigridv1.Tenant{
 				Id:       "org-1",
-				Metadata: &aigridv1.Metadata{Name: ""},
+				Metadata: &aigridv1.Metadata{Version: 1, Name: ""},
 			},
 			UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"metadata.name"}},
 		})
@@ -981,7 +982,7 @@ func TestUpdateTenant(t *testing.T) {
 		_, err := server.Update(context.Background(), &aigridv1.TenantsUpdateRequest{
 			Object: &aigridv1.Tenant{
 				Id:       "org-1",
-				Metadata: &aigridv1.Metadata{Name: "acme-renamed"},
+				Metadata: &aigridv1.Metadata{Version: 1, Name: "acme-renamed"},
 				Spec:     &aigridv1.TenantSpec{Domains: []string{"renamed.example.com"}},
 			},
 		})
@@ -1003,7 +1004,7 @@ func TestUpdateTenant(t *testing.T) {
 		_, err := server.Update(context.Background(), &aigridv1.TenantsUpdateRequest{
 			Object: &aigridv1.Tenant{
 				Id:       "missing",
-				Metadata: &aigridv1.Metadata{Name: "missing"},
+				Metadata: &aigridv1.Metadata{Version: 1, Name: "missing"},
 			},
 		})
 		assertConnectCode(t, err, connect.CodeNotFound)
@@ -1058,7 +1059,7 @@ func TestDeleteTenant(t *testing.T) {
 		server := mustTenantsServer(t, newFakeOrganizationStore(
 			keycloak.Organization{ID: "org-1", Name: "acme"},
 		))
-		_, err := server.Delete(context.Background(), &aigridv1.TenantsDeleteRequest{Id: "org-1"})
+		_, err := server.Delete(context.Background(), &aigridv1.TenantsDeleteRequest{Id: "org-1", Version: 1})
 		if err != nil {
 			t.Fatalf("Delete() error = %v", err)
 		}
@@ -1069,7 +1070,7 @@ func TestDeleteTenant(t *testing.T) {
 	t.Run("not found", func(t *testing.T) {
 		t.Parallel()
 		server := mustTenantsServer(t, newFakeOrganizationStore())
-		_, err := server.Delete(context.Background(), &aigridv1.TenantsDeleteRequest{Id: "missing"})
+		_, err := server.Delete(context.Background(), &aigridv1.TenantsDeleteRequest{Id: "missing", Version: 1})
 		assertConnectCode(t, err, connect.CodeNotFound)
 	})
 }
@@ -1311,6 +1312,38 @@ func TestTenantVersion(t *testing.T) {
 		}
 	})
 
+	t.Run("a create time outside the Timestamp range is nil", func(t *testing.T) {
+		t.Parallel()
+		server := mustTenantsServer(t, newFakeOrganizationStore(
+			keycloak.Organization{ID: "org-1", Name: "acme", Attributes: map[string][]string{tenantCreateTimeAttribute: {"0000-01-01T00:00:00Z"}}},
+		))
+		list, err := server.List(ctx, &aigridv1.TenantsListRequest{})
+		if err != nil {
+			t.Fatalf("List() error = %v", err)
+		}
+		if ts := list.GetItems()[0].GetMetadata().GetCreationTimestamp(); ts != nil {
+			t.Fatalf("creation timestamp = %v, want nil", ts)
+		}
+	})
+
+	t.Run("a write waiting on the tenant lock gives up when its context ends", func(t *testing.T) {
+		t.Parallel()
+		server := mustTenantsServer(t, newFakeOrganizationStore(stamped("4")))
+		unlock, err := server.lockTenant(ctx, "org-1")
+		if err != nil {
+			t.Fatalf("lockTenant() error = %v", err)
+		}
+		defer unlock()
+		canceled, cancel := context.WithCancel(ctx)
+		cancel()
+		_, err = server.Update(canceled, update(4, true))
+		assertConnectCode(t, err, connect.CodeCanceled)
+		deadline, cancelDeadline := context.WithTimeout(ctx, time.Millisecond)
+		defer cancelDeadline()
+		_, err = server.Delete(deadline, &aigridv1.TenantsDeleteRequest{Id: "org-1", Version: 4})
+		assertConnectCode(t, err, connect.CodeDeadlineExceeded)
+	})
+
 	t.Run("update at the current version bumps it and keeps the rest", func(t *testing.T) {
 		t.Parallel()
 		store := newFakeOrganizationStore(stamped("4"))
@@ -1337,12 +1370,18 @@ func TestTenantVersion(t *testing.T) {
 		}
 	})
 
-	t.Run("an update without a version is unchecked and still bumps", func(t *testing.T) {
+	t.Run("an update or delete without a version is InvalidArgument and writes nothing", func(t *testing.T) {
 		t.Parallel()
 		store := newFakeOrganizationStore(stamped("4"))
-		got, err := mustTenantsServer(t, store).Update(ctx, update(0, false))
-		if err != nil || got.GetObject().GetMetadata().GetVersion() != 5 {
-			t.Fatalf("Update() = %v, %v; want version 5", got, err)
+		server := mustTenantsServer(t, store)
+		for _, lock := range []bool{true, false} {
+			_, err := server.Update(ctx, update(0, lock))
+			assertConnectCode(t, err, connect.CodeInvalidArgument)
+		}
+		_, err := server.Delete(ctx, &aigridv1.TenantsDeleteRequest{Id: "org-1"})
+		assertConnectCode(t, err, connect.CodeInvalidArgument)
+		if stored, ok := store.byID["org-1"]; !ok || stored.Name != "acme" {
+			t.Fatalf("a write without a version changed the store: %+v", stored)
 		}
 	})
 
@@ -1359,12 +1398,6 @@ func TestTenantVersion(t *testing.T) {
 		}
 	})
 
-	t.Run("lock without a version is InvalidArgument", func(t *testing.T) {
-		t.Parallel()
-		_, err := mustTenantsServer(t, newFakeOrganizationStore(stamped("4"))).Update(ctx, update(0, true))
-		assertConnectCode(t, err, connect.CodeInvalidArgument)
-	})
-
 	t.Run("a REST body that sends back version and creation time is accepted", func(t *testing.T) {
 		t.Parallel()
 		req := update(4, false)
@@ -1378,7 +1411,7 @@ func TestTenantVersion(t *testing.T) {
 		t.Parallel()
 		store := newFakeOrganizationStore(stamped("4"))
 		_, err := mustTenantsServer(t, store).Update(ctx, &aigridv1.TenantsUpdateRequest{
-			Object:     &aigridv1.Tenant{Id: "org-1", Spec: &aigridv1.TenantSpec{}},
+			Object:     &aigridv1.Tenant{Id: "org-1", Metadata: &aigridv1.Metadata{Version: 4}, Spec: &aigridv1.TenantSpec{}},
 			UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.domains"}},
 		})
 		if err != nil {
@@ -1398,7 +1431,7 @@ func TestTenantVersion(t *testing.T) {
 		}}
 		store := newFakeOrganizationStore(org)
 		_, err := mustTenantsServer(t, store).Update(ctx, &aigridv1.TenantsUpdateRequest{
-			Object:     &aigridv1.Tenant{Id: "org-1", Spec: &aigridv1.TenantSpec{Domains: []string{"acme.example.com", "new.example.com"}}},
+			Object:     &aigridv1.Tenant{Id: "org-1", Metadata: &aigridv1.Metadata{Version: 4}, Spec: &aigridv1.TenantSpec{Domains: []string{"acme.example.com", "new.example.com"}}},
 			UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.domains"}},
 		})
 		if err != nil {

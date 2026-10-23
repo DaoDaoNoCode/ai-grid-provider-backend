@@ -65,6 +65,9 @@ func main() {
 			Realm:      getEnv("KEYCLOAK_REALM", "ai-grid"),
 			Username:   getEnv("KEYCLOAK_ADMIN_USERNAME", "admin"),
 			Password:   getEnv("KEYCLOAK_ADMIN_PASSWORD", "admin"),
+			// A hung Keycloak call would otherwise hold its tenant's write
+			// lock until the caller gives up.
+			HTTPClient: &http.Client{Timeout: 30 * time.Second},
 		})).
 		Build()
 	if err != nil {

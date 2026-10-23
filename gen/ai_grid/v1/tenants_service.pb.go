@@ -340,10 +340,10 @@ type TenantsUpdateRequest struct {
 	state      protoimpl.MessageState `protogen:"open.v1"`
 	Object     *Tenant                `protobuf:"bytes,1,opt,name=object,proto3" json:"object,omitempty"`
 	UpdateMask *fieldmaskpb.FieldMask `protobuf:"bytes,2,opt,name=update_mask,json=updateMask,proto3" json:"update_mask,omitempty"`
-	// Lock requires object.metadata.version: without one the request is
-	// InvalidArgument. A non-zero version is checked against the stored one
-	// (Keycloak organization attribute ai-grid/resource-version) with or
-	// without lock, so a stale one is Aborted. Every update that writes bumps
+	// object.metadata.version is required, with or without lock: without one
+	// the request is InvalidArgument. It's checked against the stored version
+	// (Keycloak organization attribute ai-grid/resource-version), so a stale
+	// one is Aborted. Every organization reads as version 1 or more. Every update that writes bumps
 	// the version; one whose update_mask names only id, metadata.version or
 	// metadata.creation_timestamp writes nothing and returns the tenant as
 	// stored. The backend serializes its own writes per tenant, so of two
@@ -453,9 +453,9 @@ type TenantsDeleteRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// Keycloak Organization id.
 	Id string `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
-	// The tenant's metadata.version as the caller last read it. Zero skips the
-	// check; any other value that differs from the stored version is Aborted,
-	// so a caller doesn't delete changes it hasn't seen.
+	// The tenant's metadata.version as the caller last read it. Required: zero
+	// is InvalidArgument, and a value that differs from the stored version is
+	// Aborted, so a caller doesn't delete changes it hasn't seen.
 	Version       int32 `protobuf:"varint,2,opt,name=version,proto3" json:"version,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache

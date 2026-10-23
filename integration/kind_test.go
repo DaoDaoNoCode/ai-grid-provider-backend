@@ -191,7 +191,7 @@ func TestTenantCRUD(t *testing.T) {
 	if tenants, err := client.ListTenants(ctx); err == nil {
 		for _, tenant := range tenants {
 			if tenant.GetMetadata().GetName() == name {
-				_ = client.DeleteTenant(ctx, tenant.GetId())
+				_ = client.DeleteTenant(ctx, tenant.GetId(), tenant.GetMetadata().GetVersion())
 			}
 		}
 	}
@@ -207,7 +207,9 @@ func TestTenantCRUD(t *testing.T) {
 		t.Fatal("create returned empty Keycloak organization id")
 	}
 	t.Cleanup(func() {
-		_ = client.DeleteTenant(context.Background(), created.GetId())
+		if current, err := client.GetTenant(context.Background(), created.GetId()); err == nil {
+			_ = client.DeleteTenant(context.Background(), current.GetId(), current.GetMetadata().GetVersion())
+		}
 	})
 
 	got, err := client.GetTenant(ctx, created.GetId())
@@ -223,7 +225,7 @@ func TestTenantCRUD(t *testing.T) {
 
 	updated, err := client.UpdateTenant(ctx, &aigridv1.Tenant{
 		Id:       created.GetId(),
-		Metadata: &aigridv1.Metadata{Name: name},
+		Metadata: &aigridv1.Metadata{Name: name, Version: got.GetMetadata().GetVersion()},
 		Spec:     &aigridv1.TenantSpec{Domains: []string{"kind-crud-updated.example.com"}},
 	}, nil)
 	if err != nil {
@@ -233,7 +235,7 @@ func TestTenantCRUD(t *testing.T) {
 		t.Fatalf("updated domains = %v", domains)
 	}
 
-	if err := client.DeleteTenant(ctx, created.GetId()); err != nil {
+	if err := client.DeleteTenant(ctx, created.GetId(), updated.GetMetadata().GetVersion()); err != nil {
 		t.Fatalf("delete tenant: %v", err)
 	}
 	if _, err := client.GetTenant(ctx, created.GetId()); err == nil {

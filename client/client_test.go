@@ -235,7 +235,7 @@ func TestClientTenantCRUD(t *testing.T) {
 
 	updated, err := c.UpdateTenant(ctx, &aigridv1.Tenant{
 		Id:       created.GetId(),
-		Metadata: &aigridv1.Metadata{Name: "acme"},
+		Metadata: &aigridv1.Metadata{Name: "acme", Version: got.GetMetadata().GetVersion()},
 		Spec:     &aigridv1.TenantSpec{Domains: []string{"updated.example.com"}},
 	}, nil)
 	if err != nil {
@@ -245,7 +245,7 @@ func TestClientTenantCRUD(t *testing.T) {
 		t.Fatalf("domains = %v", domains)
 	}
 
-	if err := c.DeleteTenant(ctx, created.GetId()); err != nil {
+	if err := c.DeleteTenant(ctx, created.GetId(), updated.GetMetadata().GetVersion()); err != nil {
 		t.Fatalf("DeleteTenant() error = %v", err)
 	}
 	_, err = c.GetTenant(ctx, created.GetId())

@@ -429,9 +429,10 @@ Notes:
   paths return `InvalidArgument`.
 - Domains in the body **replace** the domain list when domains are updated.
   Blank/whitespace-only domain entries are rejected (`InvalidArgument`), not dropped.
-- A non-zero `metadata.version` must equal the stored version, or the update is
-  `409` (`Aborted`) and writes nothing. `lock=true` requires one (`400`
-  without). Zero skips the check. Every update bumps the version.
+- `metadata.version` is required (`400`, `InvalidArgument`, without one) and
+  must equal the stored version, or the update is `409` (`Aborted`) and writes
+  nothing. Every organization reads as version 1 or more. Every update that
+  writes bumps the version.
 - Everything this API doesn't model (other attributes, alias, enabled,
   description, redirect URL, identity provider links, each kept domain's
   `verified` and identity provider alias) is written back as read.
@@ -451,8 +452,9 @@ Notes:
 
 ### `DELETE /api/v1/tenants/{id}`
 
-Optional query `version`: when non-zero, it must equal the stored
-`metadata.version`, or the delete is `409` (`Aborted`) and removes nothing.
+Required query `version`: without it the delete is `400` (`InvalidArgument`).
+It must equal the stored `metadata.version`, or the delete is `409`
+(`Aborted`) and removes nothing.
 
 **Response `200`**
 

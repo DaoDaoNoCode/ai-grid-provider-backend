@@ -279,7 +279,7 @@ func TestRESTPatchWithoutMaskKeepsUnnamedFields(t *testing.T) {
 	})
 	baseURL, httpClient := startBackendWithTenants(t, store)
 
-	body, status := patch(t, httpClient, baseURL+"/api/v1/tenants/"+id, `{"metadata":{"name":"acme-two"}}`)
+	body, status := patch(t, httpClient, baseURL+"/api/v1/tenants/"+id, `{"metadata":{"name":"acme-two","version":1}}`)
 	if status != http.StatusOK {
 		t.Fatalf("PATCH status = %d, want 200, body = %s", status, body)
 	}

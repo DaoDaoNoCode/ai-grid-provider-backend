@@ -402,7 +402,7 @@
           },
           {
             "name": "version",
-            "description": "The tenant's metadata.version as the caller last read it. Zero skips the\ncheck; any other value that differs from the stored version is Aborted,\nso a caller doesn't delete changes it hasn't seen.",
+            "description": "The tenant's metadata.version as the caller last read it. Required: zero\nis InvalidArgument, and a value that differs from the stored version is\nAborted, so a caller doesn't delete changes it hasn't seen.",
             "in": "query",
             "required": false,
             "type": "integer",
@@ -510,7 +510,7 @@
           },
           {
             "name": "lock",
-            "description": "Lock requires object.metadata.version: without one the request is\nInvalidArgument. A non-zero version is checked against the stored one\n(Keycloak organization attribute ai-grid/resource-version) with or\nwithout lock, so a stale one is Aborted. Every update that writes bumps\nthe version; one whose update_mask names only id, metadata.version or\nmetadata.creation_timestamp writes nothing and returns the tenant as\nstored. The backend serializes its own writes per tenant, so of two\nupdates at the same version the second is Aborted. An edit made in\nKeycloak directly isn't versioned.",
+            "description": "object.metadata.version is required, with or without lock: without one\nthe request is InvalidArgument. It's checked against the stored version\n(Keycloak organization attribute ai-grid/resource-version), so a stale\none is Aborted. Every organization reads as version 1 or more. Every update that writes bumps\nthe version; one whose update_mask names only id, metadata.version or\nmetadata.creation_timestamp writes nothing and returns the tenant as\nstored. The backend serializes its own writes per tenant, so of two\nupdates at the same version the second is Aborted. An edit made in\nKeycloak directly isn't versioned.",
             "in": "query",
             "required": false,
             "type": "boolean"

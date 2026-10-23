@@ -11,7 +11,6 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	aigridv1 "github.com/osac-project/ai-grid-provider-backend/gen/ai_grid/v1"
@@ -72,18 +71,27 @@ type TenantsServer struct {
 	// write. It works because the backend runs one replica and only it bumps
 	// versions. Revisit it before running more than one. A fixed set, picked
 	// by a hash of the id, keeps memory bounded whatever ids callers send; two
-	// tenants that share a lock only wait for each other.
-	writeLocks [64]sync.Mutex
+	// tenants that share a lock only wait for each other. Each lock is a
+	// one-slot channel, so a waiting request gives up when its context ends.
+	writeLocks [64]chan struct{}
 }
 
 // lockTenant serializes this backend's writes to one organization and
-// returns the unlock function.
-func (s *TenantsServer) lockTenant(id string) func() {
+// returns the unlock function, or an error when ctx ends first.
+func (s *TenantsServer) lockTenant(ctx context.Context, id string) (func(), error) {
 	h := fnv.New32a()
 	h.Write([]byte(id))
-	mu := &s.writeLocks[h.Sum32()%uint32(len(s.writeLocks))]
-	mu.Lock()
-	return mu.Unlock
+	lock := s.writeLocks[h.Sum32()%uint32(len(s.writeLocks))]
+	select {
+	case lock <- struct{}{}:
+		return func() { <-lock }, nil
+	case <-ctx.Done():
+		code := connect.CodeCanceled
+		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+			code = connect.CodeDeadlineExceeded
+		}
+		return nil, connect.Errorf(code, "wait for tenant %q: %v", id, ctx.Err())
+	}
 }
 
 var _ aigridv1connect.TenantsHandler = (*TenantsServer)(nil)
@@ -120,7 +128,11 @@ func (b *TenantsServerBuilder) Build() (*TenantsServer, error) {
 	if logger == nil {
 		logger = slog.Default()
 	}
-	return &TenantsServer{logger: logger, tenants: b.tenants, now: time.Now}, nil
+	server := &TenantsServer{logger: logger, tenants: b.tenants, now: time.Now}
+	for i := range server.writeLocks {
+		server.writeLocks[i] = make(chan struct{}, 1)
+	}
+	return server, nil
 }
 
 // List returns Keycloak Organizations from the configured realm.
@@ -205,17 +217,21 @@ func (s *TenantsServer) Update(ctx context.Context, req *aigridv1.TenantsUpdateR
 	}
 
 	version := object.GetMetadata().GetVersion()
-	if req.GetLock() && version == 0 {
-		return nil, connect.Errorf(connect.CodeInvalidArgument, "lock requires metadata.version")
+	if version == 0 {
+		return nil, errTenantVersionRequired
 	}
 
-	defer s.lockTenant(id)()
+	unlock, err := s.lockTenant(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	defer unlock()
 	current, err := s.tenants.GetOrganization(ctx, id)
 	if err != nil {
 		return nil, mapTenantKeycloakError("get", id, err)
 	}
 	// A stale version is Aborted before anything else is checked.
-	if version != 0 && version != organizationVersion(current) {
+	if version != organizationVersion(current) {
 		return nil, staleTenantError("update", id)
 	}
 
@@ -279,21 +295,32 @@ func (s *TenantsServer) Update(ctx context.Context, req *aigridv1.TenantsUpdateR
 	return &aigridv1.TenantsUpdateResponse{Object: tenantFromOrganization(updated)}, nil
 }
 
+// errTenantVersionRequired answers an Update or Delete without a version.
+// Every organization reads as version 1 or more, so a caller that read the
+// tenant always has one.
+var errTenantVersionRequired = connect.Errorf(connect.CodeInvalidArgument, "a version is required: send the organization's metadata.version")
+
 // Delete deletes a Keycloak Organization by id.
 func (s *TenantsServer) Delete(ctx context.Context, req *aigridv1.TenantsDeleteRequest) (*aigridv1.TenantsDeleteResponse, error) {
 	id := req.GetId()
 	if err := validateTenantID(id); err != nil {
 		return nil, err
 	}
-	defer s.lockTenant(id)()
-	if version := req.GetVersion(); version != 0 {
-		current, err := s.tenants.GetOrganization(ctx, id)
-		if err != nil {
-			return nil, mapTenantKeycloakError("get", id, err)
-		}
-		if version != organizationVersion(current) {
-			return nil, staleTenantError("delete", id)
-		}
+	version := req.GetVersion()
+	if version == 0 {
+		return nil, errTenantVersionRequired
+	}
+	unlock, err := s.lockTenant(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	defer unlock()
+	current, err := s.tenants.GetOrganization(ctx, id)
+	if err != nil {
+		return nil, mapTenantKeycloakError("get", id, err)
+	}
+	if version != organizationVersion(current) {
+		return nil, staleTenantError("delete", id)
 	}
 	if err := s.tenants.DeleteOrganization(ctx, id); err != nil {
 		return nil, mapTenantKeycloakError("delete", id, err)
@@ -367,7 +394,7 @@ func nextVersion(v int32) int64 {
 }
 
 // organizationCreateTime reads the creation-time attribute; nil when it's
-// missing or not RFC 3339.
+// missing, not RFC 3339, or outside the range a protobuf Timestamp holds.
 func organizationCreateTime(organization keycloak.Organization) *timestamppb.Timestamp {
 	values := organization.Attributes[tenantCreateTimeAttribute]
 	if len(values) == 0 {
@@ -377,7 +404,11 @@ func organizationCreateTime(organization keycloak.Organization) *timestamppb.Tim
 	if err != nil {
 		return nil
 	}
-	return timestamppb.New(t)
+	ts := timestamppb.New(t)
+	if ts.CheckValid() != nil {
+		return nil
+	}
+	return ts
 }
 
 // keepDomainDetails carries each kept domain's stored representation
