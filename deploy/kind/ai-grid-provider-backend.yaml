@@ -32,9 +32,20 @@ rules:
   - apiGroups: ["maas.opendatahub.io"]
     resources: ["maassubscriptions", "maasauthpolicies"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  # Get/List enrich model_refs; Models Create/Update/Delete also write MaaSModelRef.
   - apiGroups: ["maas.opendatahub.io"]
     resources: ["maasmodelrefs"]
-    verbs: ["get", "list", "watch"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  # Models CRUD: LLMInferenceService (+ optional Placement / ManifestWorkReplicaSet).
+  - apiGroups: ["serving.kserve.io"]
+    resources: ["llminferenceservices"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["cluster.open-cluster-management.io"]
+    resources: ["placements", "placementdecisions"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["work.open-cluster-management.io"]
+    resources: ["manifestworkreplicasets"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
