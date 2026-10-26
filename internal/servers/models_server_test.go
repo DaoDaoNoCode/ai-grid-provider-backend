@@ -212,6 +212,75 @@ func TestModelsGetEnrichesRolloutWorks(t *testing.T) {
 	}
 }
 
+func TestModelsGetPartiallyAvailablePerLocation(t *testing.T) {
+	t.Parallel()
+	placement := &unstructured.Unstructured{Object: map[string]interface{}{
+		"apiVersion": "cluster.open-cluster-management.io/v1beta1",
+		"kind":       "Placement",
+		"metadata":   map[string]interface{}{"name": "model-split-llm", "namespace": "ai-grid-models"},
+		"spec":       map[string]interface{}{},
+	}}
+	decision := &unstructured.Unstructured{Object: map[string]interface{}{
+		"apiVersion": "cluster.open-cluster-management.io/v1beta1",
+		"kind":       "PlacementDecision",
+		"metadata": map[string]interface{}{
+			"name": "model-split-llm-decision-1", "namespace": "ai-grid-models",
+			"labels": map[string]interface{}{"cluster.open-cluster-management.io/placement": "model-split-llm"},
+		},
+		"status": map[string]interface{}{"decisions": []interface{}{
+			map[string]interface{}{"clusterName": "site-a", "reason": ""},
+			map[string]interface{}{"clusterName": "site-b", "reason": ""},
+		}},
+	}}
+	// The summary still says rolled out; the works are fresher.
+	mwrs := &unstructured.Unstructured{Object: map[string]interface{}{
+		"apiVersion": "work.open-cluster-management.io/v1alpha1",
+		"kind":       "ManifestWorkReplicaSet",
+		"metadata":   map[string]interface{}{"name": "model-split-llm", "namespace": "ai-grid-models"},
+		"status": map[string]interface{}{"conditions": []interface{}{
+			cond("PlacementVerified", "True", "AsExpected", ""),
+			cond("PlacementRolledOut", "True", "Complete", ""),
+			cond("ManifestworkApplied", "True", "AsExpected", ""),
+		}},
+	}}
+	owned := func(w unstructured.Unstructured, name string) *unstructured.Unstructured {
+		w.SetName(name)
+		w.SetLabels(map[string]string{"work.open-cluster-management.io/manifestworkreplicaset": "ai-grid-models.model-split-llm"})
+		return &w
+	}
+	workB := owned(manifestWork("site-b", "", condAppliedFalse, condAvailableUnk), "model-split-llmb2b2b")
+	workA := owned(manifestWork("site-a", "True", condAppliedTrue, condAvailableTrue, condProgressingOff, condDegradedFalse), "model-split-llma2a2a")
+	llm := &unstructured.Unstructured{Object: map[string]interface{}{
+		"apiVersion": "serving.kserve.io/v1alpha2",
+		"kind":       "LLMInferenceService",
+		"metadata": map[string]interface{}{
+			"name": "split-llm", "namespace": "ai-grid-models", "resourceVersion": "1",
+		},
+		"spec": map[string]interface{}{"model": map[string]interface{}{"uri": "hf://x"}, "replicas": int64(1)},
+	}}
+	srv := mustModelsServer(t, newModelsClient(llm, placement, decision, mwrs, workB, workA))
+	got, err := srv.Get(context.Background(), &aigridv1.ModelsGetRequest{Id: "split-llm"})
+	if err != nil {
+		t.Fatalf("Get() error = %v", err)
+	}
+	st := got.GetObject().GetStatus()
+	if st.GetPhase() != aigridv1.ModelPhase_MODEL_PHASE_PARTIALLY_AVAILABLE ||
+		st.GetReason() != "PartiallyAvailable" || st.GetMessage() != "1 of 2 clusters are serving the model." {
+		t.Fatalf("status = %v/%q/%q", st.GetPhase(), st.GetReason(), st.GetMessage())
+	}
+	works := st.GetRollout().GetWorks()
+	if len(works) != 2 || works[0].GetCluster() != "site-a" || works[1].GetCluster() != "site-b" {
+		t.Fatalf("works not in cluster order: %v", works)
+	}
+	if works[0].GetPhase() != aigridv1.ModelPhase_MODEL_PHASE_READY || !works[0].GetReady() {
+		t.Fatalf("site-a = %v", works[0])
+	}
+	if works[1].GetPhase() != aigridv1.ModelPhase_MODEL_PHASE_FAILED || works[1].GetReason() != "AppliedManifestWorkFailed" ||
+		works[1].Ready != nil || len(works[1].GetConditions()) != 2 {
+		t.Fatalf("site-b = %v", works[1])
+	}
+}
+
 func TestModelsCreateWithPlacement(t *testing.T) {
 	t.Parallel()
 	client := newModelsClient()

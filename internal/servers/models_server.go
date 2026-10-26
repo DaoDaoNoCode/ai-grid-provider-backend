@@ -567,6 +567,7 @@ func (s *ModelsServer) enrichManifestWorks(ctx context.Context, m *aigridv1.Mode
 	for i := range list.Items {
 		works = append(works, modelWorkStatusFromManifestWork(list.Items[i]))
 	}
+	sort.SliceStable(works, func(i, j int) bool { return works[i].GetCluster() < works[j].GetCluster() })
 	m.Status.Rollout.Works = works
 }
 

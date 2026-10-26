@@ -208,12 +208,51 @@ message ModelStatus {
   int64 observed_generation = 8;
 }
 
-// Derived model phase.
+// Derived model phase. LLMInferenceService has no phase, so the server
+// derives one; `status.reason` and `status.message` come from what decided it.
+//
+// Hub-only model (no ManifestWorkReplicaSet): from the LLMInferenceService
+// `Ready` condition. True is READY; False with a reason that does not recover
+// on its own (`ConfigNotFound`, `RefsInvalid`, `GatewaysNotReady`) is FAILED;
+// any other False reason, Unknown or no condition is PENDING.
+//
+// Placed model (the ManifestWorkReplicaSet `model-<id>` exists): from the
+// per-location works first, because the spoke agents write them and the
+// ManifestWorkReplicaSet summary is computed from them later, so a summary can
+// be stale while a work is not. With `total` the larger of the number of works
+// and `status.placement.number_of_selected_clusters` (a selected cluster
+// without a work yet is not serving), and `serving` the works whose phase is
+// READY, the first rule that matches decides:
+//
+//   1. READY when `total` > 0 and every location is serving, or, when there
+//      is no work to read, when the ManifestWorkReplicaSet's
+//      `PlacementRolledOut` and `ManifestworkApplied` are both True; with the
+//      reason and message of `PlacementRolledOut` when it is True, else none;
+//   2. PARTIALLY_AVAILABLE when some but not all locations are serving, reason
+//      `PartiallyAvailable`, message "<serving> of <total> clusters are
+//      serving the model.";
+//   3. FAILED when no location is serving and a work is FAILED, with that
+//      work's reason and message (the first in cluster order);
+//   4. PENDING otherwise, with the reason and message of `PlacementVerified`
+//      when it is False, of `PlacementRolledOut` when `ManifestworkApplied` is
+//      True (more clusters to come), else of `ManifestworkApplied`.
+//
+// So a ManifestWorkReplicaSet that still reports `PlacementRolledOut` and
+// `ManifestworkApplied` True does not make a model READY while one of its
+// works has failed.
 enum ModelPhase {
+  // No status yet.
   MODEL_PHASE_UNSPECIFIED = 0;
+  // Starting, rolling out, or waiting for clusters.
   MODEL_PHASE_PENDING = 1;
+  // Serving: on the hub, or on every selected location.
   MODEL_PHASE_READY = 2;
+  // Not serving anywhere and failed: `Ready` False with a terminal reason
+  // (hub), or a work that failed to apply or is degraded.
   MODEL_PHASE_FAILED = 3;
+  // Placed model only: serving on some of its selected locations but not all.
+  // Never set on a ModelWorkStatus.
+  MODEL_PHASE_PARTIALLY_AVAILABLE = 4;
 }
 
 // Placement observed state.
@@ -237,17 +276,60 @@ message ModelRolloutStatus {
   bool applied = 2;
   // Reason from the deciding condition.
   string reason = 3;
-  // Per-cluster work summaries when available.
+  // One entry per ManifestWork the ManifestWorkReplicaSet generated (one per
+  // selected cluster that has a work yet), in cluster-name order.
   repeated ModelWorkStatus works = 4;
   // MWRS conditions.
   repeated Condition conditions = 5;
 }
 
-// One generated ManifestWork summary.
+// The model on one selected location: the ManifestWork the
+// ManifestWorkReplicaSet generated in that cluster's namespace on the hub, as
+// the cluster's work agent last reported it. Output only.
 message ModelWorkStatus {
+  // Namespace of the ManifestWork: the cluster it targets.
   string cluster = 1;
+  // Status of the work's `Applied` condition (`True`, `False`, `Unknown`),
+  // empty when absent.
   string applied = 2;
+  // Status of the work's `Available` condition, empty when absent.
   string available = 3;
+  // Status of the work's `Progressing` condition, empty when absent.
   string progressing = 4;
+  // Status of the work's `Degraded` condition, empty when absent.
   string degraded = 5;
+
+  // The model's phase on this location, derived by the server. It reuses
+  // ModelPhase rather than a per-work enum because it is the same summary of
+  // the same model, read on one cluster, and the values mean the same thing
+  // (PARTIALLY_AVAILABLE is never set here). The first rule that matches
+  // decides:
+  //
+  //   1. READY when `ready` is true (the spoke reports the
+  //      LLMInferenceService Ready), with no reason;
+  //   2. FAILED when the work's `Applied` is False (the agent could not apply
+  //      it, for example the spoke has no LLMInferenceService CRD), or its
+  //      `Degraded` is True (the spoke's Ready is False with a terminal
+  //      reason), with that condition's reason and message, Applied first;
+  //   3. PENDING otherwise: with the reason and message of `Available` when it
+  //      is present and not True, else of `Progressing` when present, else
+  //      with none (the agent has not reported the work yet).
+  ModelPhase phase = 6;
+
+  // Reason of the condition that decided `phase`.
+  string reason = 7;
+
+  // Message of the condition that decided `phase`.
+  string message = 8;
+
+  // The ManifestWork's `status.conditions`: `Applied` and `Available` from the
+  // work agent, `Progressing` and `Degraded` from the template's condition
+  // rules (reason `ConditionRulesAggregated`).
+  repeated Condition conditions = 9;
+
+  // The spoke's LLMInferenceService `Ready` condition status, from the `ready`
+  // status feedback value the template asks for
+  // (`status.resourceStatus.manifests[].statusFeedback.values[]`). Unset until
+  // the agent reports it, and when it reports neither True nor False.
+  optional bool ready = 10;
 }

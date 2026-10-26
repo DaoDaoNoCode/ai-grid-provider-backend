@@ -1,11 +1,13 @@
 package servers
 
 import (
+	"fmt"
 	"regexp"
 	"strconv"
 	"strings"
 
 	aigridv1 "github.com/osac-project/ai-grid-provider-backend/gen/ai_grid/v1"
+	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -19,8 +21,35 @@ const (
 	defaultGatewayName      = "openshift-ai-inference"
 	defaultGatewayNamespace = "openshift-ingress"
 
+	llmInferenceGroup      = "serving.kserve.io"
 	llmInferenceAPIVersion = "serving.kserve.io/v1alpha2"
 	llmInferenceKind       = "LLMInferenceService"
+
+	// ManifestWorkReplicaSet condition types (open-cluster-management-io/api
+	// work/v1alpha1/types_manifestworkreplicaset.go,
+	// ManifestWorkReplicaSetCondition*).
+	condPlacementVerified   = "PlacementVerified"
+	condPlacementRolledOut  = "PlacementRolledOut"
+	condManifestworkApplied = "ManifestworkApplied"
+
+	// ManifestWork condition types (api work/v1/types.go WorkApplied,
+	// WorkAvailable, WorkProgressing, WorkDegraded). The agent writes Applied
+	// and Available; Progressing and Degraded exist only when the template's
+	// conditionRules define them.
+	condWorkApplied     = "Applied"
+	condWorkAvailable   = "Available"
+	condWorkProgressing = "Progressing"
+	condWorkDegraded    = "Degraded"
+
+	// feedbackReady names the status feedback value that carries the spoke
+	// LLMInferenceService's Ready condition status.
+	feedbackReady = "ready"
+
+	// Reason and message of a PARTIALLY_AVAILABLE model, the console's
+	// proposal P13 (ai-grid-provider-console mock/proto/ai_grid/v1/model_type.proto,
+	// ModelPhase).
+	reasonPartiallyAvailable     = "PartiallyAvailable"
+	messagePartiallyAvailableFmt = "%d of %d clusters are serving the model."
 
 	placementAPIVersion = "cluster.open-cluster-management.io/v1beta1"
 	placementKind       = "Placement"
@@ -448,15 +477,15 @@ func enrichModelFromMWRS(model *aigridv1.Model, mwrs *unstructured.Unstructured)
 	rs := &aigridv1.ModelRolloutStatus{}
 	if conds, found, err := unstructured.NestedSlice(mwrs.Object, "status", "conditions"); err == nil && found {
 		rs.Conditions = conditionsFromSlice(conds)
-		if c := conditionByType(rs.Conditions, "PlacementRolledOut"); c != nil && c.Status == aigridv1.ConditionStatus_CONDITION_STATUS_TRUE {
+		if c := conditionByType(rs.Conditions, condPlacementRolledOut); c != nil && c.Status == aigridv1.ConditionStatus_CONDITION_STATUS_TRUE {
 			rs.RolledOut = true
 		}
-		if c := conditionByType(rs.Conditions, "ManifestworkApplied"); c != nil && c.Status == aigridv1.ConditionStatus_CONDITION_STATUS_TRUE {
+		if c := conditionByType(rs.Conditions, condManifestworkApplied); c != nil && c.Status == aigridv1.ConditionStatus_CONDITION_STATUS_TRUE {
 			rs.Applied = true
 		}
-		if c := conditionByType(rs.Conditions, "ManifestworkApplied"); c != nil && c.Reason != nil {
+		if c := conditionByType(rs.Conditions, condManifestworkApplied); c != nil && c.Reason != nil {
 			rs.Reason = *c.Reason
-		} else if c := conditionByType(rs.Conditions, "PlacementRolledOut"); c != nil && c.Reason != nil {
+		} else if c := conditionByType(rs.Conditions, condPlacementRolledOut); c != nil && c.Reason != nil {
 			rs.Reason = *c.Reason
 		}
 	}
@@ -464,43 +493,155 @@ func enrichModelFromMWRS(model *aigridv1.Model, mwrs *unstructured.Unstructured)
 	deriveModelPhaseFromRollout(model)
 }
 
-// deriveModelPhaseFromRollout sets status.phase from MWRS rollout summary and
-// per-cluster works (call after works are populated when available).
+// deriveModelPhaseFromRollout sets the phase, reason and message of a placed
+// model from its works and the ManifestWorkReplicaSet conditions, replacing
+// what the hub LLMInferenceService gave (see ModelPhase in model_type.proto,
+// which is the contract; proposal P13 in the console's draft,
+// ai-grid-provider-console mock/proto/ai_grid/v1/model_type.proto). The works
+// come first: the spoke agents write them and the MWRS controller summarizes
+// them afterwards, so the MWRS conditions can still say rolled out while a
+// work has already failed. Call it again once works are populated.
 func deriveModelPhaseFromRollout(model *aigridv1.Model) {
 	if model == nil || model.Status == nil || model.Status.Rollout == nil {
 		return
 	}
-	rs := model.Status.Rollout
-	if rs.RolledOut && rs.Applied {
-		model.Status.Phase = aigridv1.ModelPhase_MODEL_PHASE_READY
-		return
-	}
-	if mwrsHasFailedOrDegradedWork(rs) {
-		model.Status.Phase = aigridv1.ModelPhase_MODEL_PHASE_FAILED
-		if rs.Reason != "" {
-			model.Status.Reason = rs.Reason
+	st := model.Status
+	rs := st.Rollout
+	works := rs.GetWorks()
+	total := max(len(works), int(st.GetPlacement().GetNumberOfSelectedClusters()))
+	serving := 0
+	var failed *aigridv1.ModelWorkStatus
+	for _, w := range works {
+		switch w.GetPhase() {
+		case aigridv1.ModelPhase_MODEL_PHASE_READY:
+			serving++
+		case aigridv1.ModelPhase_MODEL_PHASE_FAILED:
+			if failed == nil {
+				failed = w
+			}
 		}
-		return
 	}
-	if model.Status.Phase == aigridv1.ModelPhase_MODEL_PHASE_UNSPECIFIED || rs.Reason == "NotAsExpected" {
-		model.Status.Phase = aigridv1.ModelPhase_MODEL_PHASE_PENDING
-		model.Status.Reason = rs.Reason
+	verified := conditionByType(rs.GetConditions(), condPlacementVerified)
+	rolledOut := conditionByType(rs.GetConditions(), condPlacementRolledOut)
+	applied := conditionByType(rs.GetConditions(), condManifestworkApplied)
+	set := func(phase aigridv1.ModelPhase, reason, message string) {
+		st.Phase, st.Reason, st.Message = phase, reason, message
+	}
+	fromCondition := func(phase aigridv1.ModelPhase, c *aigridv1.Condition) {
+		set(phase, c.GetReason(), c.GetMessage())
+	}
+	switch {
+	case (total > 0 && serving == total) || (len(works) == 0 && rs.GetRolledOut() && rs.GetApplied()):
+		if rolledOut.GetStatus() == aigridv1.ConditionStatus_CONDITION_STATUS_TRUE {
+			fromCondition(aigridv1.ModelPhase_MODEL_PHASE_READY, rolledOut)
+		} else {
+			set(aigridv1.ModelPhase_MODEL_PHASE_READY, "", "")
+		}
+	case serving > 0:
+		set(aigridv1.ModelPhase_MODEL_PHASE_PARTIALLY_AVAILABLE, reasonPartiallyAvailable,
+			fmt.Sprintf(messagePartiallyAvailableFmt, serving, total))
+	case failed != nil:
+		set(aigridv1.ModelPhase_MODEL_PHASE_FAILED, failed.GetReason(), failed.GetMessage())
+	case verified != nil && verified.GetStatus() == aigridv1.ConditionStatus_CONDITION_STATUS_FALSE:
+		fromCondition(aigridv1.ModelPhase_MODEL_PHASE_PENDING, verified)
+	case applied.GetStatus() == aigridv1.ConditionStatus_CONDITION_STATUS_TRUE:
+		// Applied everywhere so far, more clusters to come.
+		fromCondition(aigridv1.ModelPhase_MODEL_PHASE_PENDING, rolledOut)
+	default:
+		fromCondition(aigridv1.ModelPhase_MODEL_PHASE_PENDING, applied)
 	}
 }
 
-// modelWorkStatusFromManifestWork maps one ManifestWork to ModelWorkStatus.
+// modelWorkStatusFromManifestWork maps one ManifestWork to ModelWorkStatus:
+// its conditions, the `ready` status feedback of the LLMInferenceService
+// manifest, and the phase derived from both (deriveWorkPhase).
 func modelWorkStatusFromManifestWork(mw unstructured.Unstructured) *aigridv1.ModelWorkStatus {
 	out := &aigridv1.ModelWorkStatus{Cluster: mw.GetNamespace()}
-	conds, found, err := unstructured.NestedSlice(mw.Object, "status", "conditions")
-	if err != nil || !found {
-		return out
+	if conds, found, err := unstructured.NestedSlice(mw.Object, "status", "conditions"); err == nil && found {
+		out.Conditions = conditionsFromSlice(conds)
 	}
-	parsed := conditionsFromSlice(conds)
-	out.Applied = conditionStatusName(parsed, "Applied")
-	out.Available = conditionStatusName(parsed, "Available")
-	out.Progressing = conditionStatusName(parsed, "Progressing")
-	out.Degraded = conditionStatusName(parsed, "Degraded")
+	out.Applied = conditionStatusName(out.Conditions, condWorkApplied)
+	out.Available = conditionStatusName(out.Conditions, condWorkAvailable)
+	out.Progressing = conditionStatusName(out.Conditions, condWorkProgressing)
+	out.Degraded = conditionStatusName(out.Conditions, condWorkDegraded)
+	out.Ready = readyFeedback(mw)
+	out.Phase, out.Reason, out.Message = deriveWorkPhase(out)
 	return out
+}
+
+// readyFeedback is the `ready` status feedback value of the
+// LLMInferenceService manifest in a ManifestWork: true or false for a
+// String "True"/"False" or a Boolean, nil when the agent has not reported it
+// or reports anything else (Kubernetes' "Unknown", for example). The work
+// agent writes it to status.resourceStatus.manifests[].statusFeedback.values[]
+// with fieldValue {type, string|boolean} (open-cluster-management-io/api
+// work/v1/types.go, ManifestCondition.StatusFeedbacks `json:"statusFeedback"`,
+// FeedbackValue, FieldValue; ocm pkg/work/spoke/statusfeedback/reader.go
+// getValueByJsonPath, which reports a string field as type String).
+func readyFeedback(mw unstructured.Unstructured) *bool {
+	manifests, found, err := unstructured.NestedSlice(mw.Object, "status", "resourceStatus", "manifests")
+	if err != nil || !found {
+		return nil
+	}
+	for _, raw := range manifests {
+		m, ok := raw.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		meta, _, _ := unstructured.NestedMap(m, "resourceMeta")
+		if stringField(meta, "group") != llmInferenceGroup ||
+			(stringField(meta, "kind") != llmInferenceKind && stringField(meta, "resource") != llmInferenceServicesResource.Resource) {
+			continue
+		}
+		values, _, _ := unstructured.NestedSlice(m, "statusFeedback", "values")
+		for _, rawValue := range values {
+			v, ok := rawValue.(map[string]interface{})
+			if !ok || stringField(v, "name") != feedbackReady {
+				continue
+			}
+			field, _, _ := unstructured.NestedMap(v, "fieldValue")
+			switch stringField(field, "type") {
+			case "String":
+				switch stringField(field, "string") {
+				case "True":
+					return proto.Bool(true)
+				case "False":
+					return proto.Bool(false)
+				}
+			case "Boolean":
+				if b, ok := field["boolean"].(bool); ok {
+					return proto.Bool(b)
+				}
+			}
+			return nil
+		}
+	}
+	return nil
+}
+
+// deriveWorkPhase is the model's phase on one location (ModelWorkStatus.phase
+// in model_type.proto, the console's proposal P13): READY when the spoke
+// reports ready; FAILED when Applied is False or Degraded is True, Applied
+// first; otherwise PENDING with the reason of Available while it is not
+// True, else of Progressing, else none (the agent has not reported).
+func deriveWorkPhase(w *aigridv1.ModelWorkStatus) (aigridv1.ModelPhase, string, string) {
+	if w.GetReady() {
+		return aigridv1.ModelPhase_MODEL_PHASE_READY, "", ""
+	}
+	conds := w.GetConditions()
+	if c := conditionByType(conds, condWorkApplied); c.GetStatus() == aigridv1.ConditionStatus_CONDITION_STATUS_FALSE {
+		return aigridv1.ModelPhase_MODEL_PHASE_FAILED, c.GetReason(), c.GetMessage()
+	}
+	if c := conditionByType(conds, condWorkDegraded); c.GetStatus() == aigridv1.ConditionStatus_CONDITION_STATUS_TRUE {
+		return aigridv1.ModelPhase_MODEL_PHASE_FAILED, c.GetReason(), c.GetMessage()
+	}
+	if c := conditionByType(conds, condWorkAvailable); c != nil && c.GetStatus() != aigridv1.ConditionStatus_CONDITION_STATUS_TRUE {
+		return aigridv1.ModelPhase_MODEL_PHASE_PENDING, c.GetReason(), c.GetMessage()
+	}
+	if c := conditionByType(conds, condWorkProgressing); c != nil {
+		return aigridv1.ModelPhase_MODEL_PHASE_PENDING, c.GetReason(), c.GetMessage()
+	}
+	return aigridv1.ModelPhase_MODEL_PHASE_PENDING, "", ""
 }
 
 func conditionStatusName(conds []*aigridv1.Condition, typ string) string {
@@ -516,27 +657,6 @@ func conditionStatusName(conds []*aigridv1.Condition, typ string) string {
 	default:
 		return "Unknown"
 	}
-}
-
-// mwrsHasFailedOrDegradedWork reports whether rollout status indicates a real
-// failure: a Degraded work, or Applied=False (the agent could not apply the
-// work). In-progress NotAsExpected without Applied=False is not a failure.
-func mwrsHasFailedOrDegradedWork(rs *aigridv1.ModelRolloutStatus) bool {
-	if rs == nil {
-		return false
-	}
-	for _, w := range rs.GetWorks() {
-		if w == nil {
-			continue
-		}
-		if strings.EqualFold(w.GetDegraded(), "True") {
-			return true
-		}
-		if strings.EqualFold(w.GetApplied(), "False") {
-			return true
-		}
-	}
-	return false
 }
 
 // --- builders ---
