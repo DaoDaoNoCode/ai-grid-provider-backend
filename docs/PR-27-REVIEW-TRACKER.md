@@ -32,7 +32,7 @@
 | 7 | — | replicas↔scaling explicit null | done | Update patch emits null for cleared mode; subscription optionals too |
 | 8 | — | Subscription Delete swallows policy cleanup failure | done | Managed AuthPolicy cleanup errors fail Delete |
 | 9 | — | Reject negative Models List limit | done | Models + Subscriptions validate limit < 0 → InvalidArgument |
-| 10 | — | Models Delete K8s ResourceVersion precondition | pending | |
+| 10 | — | Models Delete K8s ResourceVersion precondition | done | Preconditioned LLM delete before Placement/MWRS cleanup |
 | 11 | — | Model phase NotAsExpected→FAILED too aggressive | pending | |
 | 12 | — | Fill rollout.works (+ P13 fields) | pending | |
 | 13 | — | Locations (P7/P8) | pending | |
@@ -142,14 +142,14 @@
 - **Decision:** Accepted — honor proto contract on Models and Subscriptions.
 - **Implementation notes:** `validateListLimit` rejects `limit < 0` before paging on Models and Subscriptions List. Tests cover `limit=-1`.
 
-### 10. Models Delete K8s ResourceVersion precondition — Status: `pending`
+### 10. Models Delete K8s ResourceVersion precondition — Status: `done`
 
 - **Source:** Theia #10
 - **Description:** Pass `Preconditions{ResourceVersion}` on Models Delete; map conflict→Aborted; do not cleanup Placement/MWRS before successful delete.
 - **Pros:** Real optimistic concurrency; closes TOCTOU.
 - **Cons:** Must reorder Delete carefully.
-- **Decision:**
-- **Implementation notes:**
+- **Decision:** Accepted — atomic preconditioned LLM delete first.
+- **Implementation notes:** Nonzero `resource_version` sets `DeleteOptions.Preconditions.ResourceVersion` on LLMInferenceService delete; Conflict maps to Aborted via `mapModelAPIError`. Placement/MWRS/ModelRef cleanup runs only after successful LLM delete (best-effort warn on cleanup errors). Test asserts options include RV and conflict → Aborted without removing the model.
 
 ### 11. Model phase NotAsExpected→FAILED too aggressive — Status: `pending`
 

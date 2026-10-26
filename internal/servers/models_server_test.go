@@ -224,6 +224,39 @@ func TestModelsCreateMWRSDisabled(t *testing.T) {
 	assertConnectCode(t, err, connect.CodeFailedPrecondition)
 }
 
+func TestModelsDeleteResourceVersionPrecondition(t *testing.T) {
+	t.Parallel()
+	client := newModelsClient()
+	srv := mustModelsServer(t, client)
+	ctx := context.Background()
+	if _, err := srv.Create(ctx, &aigridv1.ModelsCreateRequest{Object: sampleModel("rv-del")}); err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+
+	var sawRV string
+	client.PrependReactor("delete", "llminferenceservices", func(action clienttesting.Action) (bool, runtime.Object, error) {
+		del := action.(clienttesting.DeleteAction)
+		if del.GetName() != "rv-del" {
+			return false, nil, nil
+		}
+		if pc := del.GetDeleteOptions().Preconditions; pc != nil && pc.ResourceVersion != nil {
+			sawRV = *pc.ResourceVersion
+		}
+		return true, nil, apierrors.NewConflict(
+			schema.GroupResource{Group: "serving.kserve.io", Resource: "llminferenceservices"},
+			"rv-del", errors.New("resource version mismatch"),
+		)
+	})
+	_, err := srv.Delete(ctx, &aigridv1.ModelsDeleteRequest{Id: "rv-del", ResourceVersion: 7})
+	assertConnectCode(t, err, connect.CodeAborted)
+	if sawRV != "7" {
+		t.Fatalf("DeleteOptions.ResourceVersion = %q, want 7", sawRV)
+	}
+	if _, getErr := client.Resource(testLLMGVR).Namespace("ai-grid-internal-models").Get(ctx, "rv-del", metav1.GetOptions{}); getErr != nil {
+		t.Fatalf("model should remain after failed preconditioned delete: %v", getErr)
+	}
+}
+
 func TestModelsDeleteGuardedBySubscription(t *testing.T) {
 	t.Parallel()
 	// Point subscription at our model namespace/name.

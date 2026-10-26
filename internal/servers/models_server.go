@@ -361,41 +361,43 @@ func (s *ModelsServer) Update(ctx context.Context, req *aigridv1.ModelsUpdateReq
 }
 
 // Delete removes the model and related Placement / MWRS / MaaSModelRef.
+// When resource_version is nonzero, it is passed as a K8s Delete precondition
+// on the LLMInferenceService so a stale delete fails atomically (Aborted)
+// before Placement/MWRS cleanup.
 func (s *ModelsServer) Delete(ctx context.Context, req *aigridv1.ModelsDeleteRequest) (*aigridv1.ModelsDeleteResponse, error) {
 	id := req.GetId()
 	if err := validateModelID(id); err != nil {
 		return nil, err
 	}
-	current, err := s.client.Resource(llmInferenceServicesResource).Namespace(s.namespace).Get(ctx, id, metav1.GetOptions{})
-	if err != nil {
+	if _, err := s.client.Resource(llmInferenceServicesResource).Namespace(s.namespace).Get(ctx, id, metav1.GetOptions{}); err != nil {
 		return nil, mapModelAPIError("get", id, err)
-	}
-	if rv := req.GetResourceVersion(); rv != 0 {
-		if strconv.FormatInt(int64(rv), 10) != current.GetResourceVersion() {
-			return nil, staleModelError("delete", id)
-		}
 	}
 
 	if err := s.ensureNotReferenced(ctx, id); err != nil {
 		return nil, err
 	}
 
+	delOpts := metav1.DeleteOptions{}
+	if rv := req.GetResourceVersion(); rv != 0 {
+		rvStr := strconv.FormatInt(int64(rv), 10)
+		delOpts.Preconditions = &metav1.Preconditions{ResourceVersion: &rvStr}
+	}
+	if err := s.client.Resource(llmInferenceServicesResource).Namespace(s.namespace).Delete(ctx, id, delOpts); err != nil {
+		return nil, mapModelAPIError("delete", id, err)
+	}
+
 	pname := placementNameForModel(id)
 	if err := s.client.Resource(manifestWorkReplicaSetsResource).Namespace(s.namespace).Delete(ctx, pname, metav1.DeleteOptions{}); err != nil && !apierrors.IsNotFound(err) {
-		return nil, mapModelAPIError("delete ManifestWorkReplicaSet", id, err)
+		s.logger.Warn("delete ManifestWorkReplicaSet after model delete", "id", id, "error", err)
 	}
 	if err := s.client.Resource(placementsResource).Namespace(s.namespace).Delete(ctx, pname, metav1.DeleteOptions{}); err != nil && !apierrors.IsNotFound(err) {
-		return nil, mapModelAPIError("delete Placement", id, err)
-	}
-	if err := s.client.Resource(llmInferenceServicesResource).Namespace(s.namespace).Delete(ctx, id, metav1.DeleteOptions{}); err != nil {
-		return nil, mapModelAPIError("delete", id, err)
+		s.logger.Warn("delete Placement after model delete", "id", id, "error", err)
 	}
 	if err := s.client.Resource(maasModelRefsResource).Namespace(s.namespace).Delete(ctx, id, metav1.DeleteOptions{}); err != nil && !apierrors.IsNotFound(err) {
 		s.logger.Warn("delete MaaSModelRef after model delete", "id", id, "error", err)
 	}
 	return &aigridv1.ModelsDeleteResponse{}, nil
 }
-
 
 func (s *ModelsServer) enrichPlacement(ctx context.Context, m *aigridv1.Model) {
 	if m == nil {
