@@ -1186,9 +1186,77 @@ func mwrsFromModel(object *aigridv1.Model, namespace string, deployment *unstruc
 				"workload": map[string]interface{}{
 					"manifests": []interface{}{manifest.Object},
 				},
+				"manifestConfigs": []interface{}{llmManifestConfig(manifest.GetNamespace(), manifest.GetName())},
 			},
 		},
 	}}
+}
+
+// The template's rules on the spoke LLMInferenceService. The CEL variable is
+// `object`, the whole manifest (ocm pkg/work/spoke/conditions/reader.go,
+// NewConditionReader); an expression that fails to evaluate sets the
+// condition False/ConditionRuleExpressionError (evaluateCelExpressions), so
+// each one guards the fields it reads: an error on Progressing would read as
+// rolled out. Degraded uses the Ready reasons that do not recover on their own
+// (the set deriveModelPhase calls FAILED on the hub), so a model that is
+// starting or stuck stays Progressing; the console's template does the same
+// (ai-grid-provider-console bff/internal/fakebackend/kserve.go,
+// terminalReadyReasons) and its messages are the template author's.
+const (
+	llmReadyFeedbackPath = `.status.conditions[?(@.type=="Ready")].status`
+
+	llmProgressingCEL = `!(has(object.status) && has(object.status.conditions) && ` +
+		`object.status.conditions.exists(c, c.type == "Ready" && c.status == "True"))`
+	llmDegradedCEL = `has(object.status) && has(object.status.conditions) && ` +
+		`object.status.conditions.exists(c, c.type == "Ready" && c.status == "False" && ` +
+		`has(c.reason) && c.reason in ["ConfigNotFound", "RefsInvalid", "GatewaysNotReady"])`
+
+	messageRuleProgressing = "LLMInferenceService rolling out"
+	messageRuleDegraded    = "LLMInferenceService not ready"
+)
+
+// llmManifestConfig is the template's manifestConfigs entry for the
+// LLMInferenceService manifest (open-cluster-management-io/api
+// work/v1/types.go, ManifestConfigOption): a JSONPaths feedback rule that
+// copies the spoke's Ready condition status back as `ready`, and CEL
+// condition rules that give the work Progressing and Degraded. The JSONPath
+// is evaluated against the whole object and must yield one string, integer or
+// bool (JsonPath.Path; ocm pkg/work/spoke/statusfeedback/reader.go
+// getValueByJsonPath). Without a rule that yields Progressing the MWRS
+// rollout keeps every cluster ToApply and PlacementRolledOut never turns True
+// (console mock/research/acm.md 4, "Rollout counting"); that is why the
+// template carries condition rules and not only the feedback rule.
+func llmManifestConfig(namespace, name string) map[string]interface{} {
+	return map[string]interface{}{
+		"resourceIdentifier": map[string]interface{}{
+			"group":     llmInferenceGroup,
+			"resource":  llmInferenceServicesResource.Resource,
+			"namespace": namespace,
+			"name":      name,
+		},
+		"feedbackRules": []interface{}{
+			map[string]interface{}{
+				"type": "JSONPaths",
+				"jsonPaths": []interface{}{
+					map[string]interface{}{"name": feedbackReady, "path": llmReadyFeedbackPath},
+				},
+			},
+		},
+		"conditionRules": []interface{}{
+			map[string]interface{}{
+				"condition":      condWorkProgressing,
+				"type":           "CEL",
+				"celExpressions": []interface{}{llmProgressingCEL},
+				"message":        messageRuleProgressing,
+			},
+			map[string]interface{}{
+				"condition":      condWorkDegraded,
+				"type":           "CEL",
+				"celExpressions": []interface{}{llmDegradedCEL},
+				"message":        messageRuleDegraded,
+			},
+		},
+	}
 }
 
 func maasModelRefFromModel(object *aigridv1.Model, namespace string) *unstructured.Unstructured {
