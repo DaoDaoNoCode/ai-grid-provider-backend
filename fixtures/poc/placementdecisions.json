@@ -1,0 +1,70 @@
+{
+  "_comment": "Hand-authored, fictional. A placed model's PlacementDecision as the hub's controllers last wrote it; the fake runs no placement scheduler, MWRS controller or work agent, so these do not change. Generated with the other placed-model files; see fixtures/README.md.",
+  "apiVersion": "cluster.open-cluster-management.io/v1beta1",
+  "kind": "PlacementDecisionList",
+  "metadata": {},
+  "items": [
+    {
+      "apiVersion": "cluster.open-cluster-management.io/v1beta1",
+      "kind": "PlacementDecision",
+      "metadata": {
+        "name": "model-fixture-placed-llm-decision-1",
+        "namespace": "ai-grid-models",
+        "uid": "c2000000-0000-4000-8000-000000000021",
+        "resourceVersion": "121",
+        "generation": 1,
+        "creationTimestamp": "2026-10-20T09:00:01Z",
+        "labels": {
+          "cluster.open-cluster-management.io/placement": "model-fixture-placed-llm",
+          "cluster.open-cluster-management.io/decision-group-index": "0",
+          "cluster.open-cluster-management.io/decision-group-name": ""
+        }
+      },
+      "status": {
+        "decisions": [
+          {
+            "clusterName": "site1",
+            "reason": ""
+          },
+          {
+            "clusterName": "site2",
+            "reason": ""
+          },
+          {
+            "clusterName": "site3",
+            "reason": ""
+          }
+        ]
+      }
+    },
+    {
+      "apiVersion": "cluster.open-cluster-management.io/v1beta1",
+      "kind": "PlacementDecision",
+      "metadata": {
+        "name": "model-fixture-ready-llm-decision-1",
+        "namespace": "ai-grid-models",
+        "uid": "c2000000-0000-4000-8000-000000000022",
+        "resourceVersion": "122",
+        "generation": 1,
+        "creationTimestamp": "2026-10-21T10:00:01Z",
+        "labels": {
+          "cluster.open-cluster-management.io/placement": "model-fixture-ready-llm",
+          "cluster.open-cluster-management.io/decision-group-index": "0",
+          "cluster.open-cluster-management.io/decision-group-name": ""
+        }
+      },
+      "status": {
+        "decisions": [
+          {
+            "clusterName": "site1",
+            "reason": ""
+          },
+          {
+            "clusterName": "site2",
+            "reason": ""
+          }
+        ]
+      }
+    }
+  ]
+}

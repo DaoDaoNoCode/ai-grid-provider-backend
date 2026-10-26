@@ -1,5 +1,5 @@
 {
-  "_comment": "LLMInferenceService CRs for Models List/Get against make dev-fake. Namespace ai-grid-models matches AI_GRID_MODELS_NAMESPACE. Shape matches Models Create (hub-only, replicas=1).",
+  "_comment": "LLMInferenceService CRs for Models List/Get against make dev-fake. Namespace ai-grid-models matches AI_GRID_MODELS_NAMESPACE. Shape matches Models Create (hub-only, replicas=1). The placed models (fixture-placed-llm, ...) pair with placements.json, manifestworkreplicasets.json and manifestworks.json; see fixtures/README.md, Placed models.",
   "apiVersion": "serving.kserve.io/v1alpha2",
   "kind": "LLMInferenceServiceList",
   "metadata": {},
@@ -57,6 +57,126 @@
       },
       "status": {
         "url": "https://fixture-cpu-llm.example.com"
+      }
+    },
+    {
+      "apiVersion": "serving.kserve.io/v1alpha2",
+      "kind": "LLMInferenceService",
+      "metadata": {
+        "name": "fixture-placed-llm",
+        "namespace": "ai-grid-models",
+        "uid": "c2000000-0000-4000-8000-000000000015",
+        "resourceVersion": "115",
+        "generation": 1,
+        "creationTimestamp": "2026-10-20T09:00:00Z",
+        "labels": {
+          "ai-grid/model": "fixture-placed-llm",
+          "app.kubernetes.io/managed-by": "ai-grid-provider-backend"
+        },
+        "annotations": {
+          "openshift.io/display-name": "Fixture placed LLM"
+        }
+      },
+      "spec": {
+        "model": {
+          "uri": "hf://facebook/opt-125m",
+          "name": "facebook/opt-125m"
+        },
+        "replicas": 1,
+        "baseRefs": [
+          {
+            "name": "v3-6-0-kserve-config-llm-template-cpu"
+          }
+        ],
+        "router": {
+          "route": {},
+          "gateway": {
+            "refs": [
+              {
+                "name": "openshift-ai-inference",
+                "namespace": "openshift-ingress"
+              }
+            ]
+          }
+        },
+        "template": {
+          "containers": [
+            {
+              "name": "main",
+              "image": "quay.io/example/vllm:latest",
+              "resources": {
+                "requests": {
+                  "cpu": "100m",
+                  "memory": "8Gi"
+                },
+                "limits": {
+                  "cpu": "1",
+                  "memory": "10Gi"
+                }
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "apiVersion": "serving.kserve.io/v1alpha2",
+      "kind": "LLMInferenceService",
+      "metadata": {
+        "name": "fixture-failing-llm",
+        "namespace": "ai-grid-models",
+        "uid": "c2000000-0000-4000-8000-000000000016",
+        "resourceVersion": "116",
+        "generation": 1,
+        "creationTimestamp": "2026-10-21T10:00:00Z",
+        "labels": {
+          "ai-grid/model": "fixture-failing-llm",
+          "app.kubernetes.io/managed-by": "ai-grid-provider-backend"
+        },
+        "annotations": {
+          "openshift.io/display-name": "Fixture failing LLM"
+        }
+      },
+      "spec": {
+        "model": {
+          "uri": "hf://facebook/opt-125m",
+          "name": "fixture-failing-llm"
+        },
+        "replicas": 1,
+        "baseRefs": [
+          {
+            "name": "v3-6-0-kserve-config-llm-template-cpu"
+          }
+        ],
+        "router": {
+          "route": {},
+          "gateway": {
+            "refs": [
+              {
+                "name": "openshift-ai-inference",
+                "namespace": "openshift-ingress"
+              }
+            ]
+          }
+        },
+        "template": {
+          "containers": [
+            {
+              "name": "main",
+              "image": "quay.io/example/vllm:latest",
+              "resources": {
+                "requests": {
+                  "cpu": "100m",
+                  "memory": "8Gi"
+                },
+                "limits": {
+                  "cpu": "1",
+                  "memory": "10Gi"
+                }
+              }
+            }
+          ]
+        }
       }
     }
   ]

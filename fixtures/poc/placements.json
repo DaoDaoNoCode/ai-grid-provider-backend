@@ -1,0 +1,116 @@
+{
+  "_comment": "Hand-authored, fictional. A placed model's Placement as the hub's controllers last wrote it; the fake runs no placement scheduler, MWRS controller or work agent, so these do not change. Generated with the other placed-model files; see fixtures/README.md.",
+  "apiVersion": "cluster.open-cluster-management.io/v1beta1",
+  "kind": "PlacementList",
+  "metadata": {},
+  "items": [
+    {
+      "apiVersion": "cluster.open-cluster-management.io/v1beta1",
+      "kind": "Placement",
+      "metadata": {
+        "name": "model-fixture-placed-llm",
+        "namespace": "ai-grid-models",
+        "uid": "c2000000-0000-4000-8000-000000000019",
+        "resourceVersion": "119",
+        "generation": 1,
+        "creationTimestamp": "2026-10-20T09:00:00Z",
+        "labels": {
+          "ai-grid/model": "fixture-placed-llm",
+          "app.kubernetes.io/managed-by": "ai-grid-provider-backend"
+        }
+      },
+      "spec": {
+        "predicates": [
+          {
+            "requiredClusterSelector": {
+              "labelSelector": {
+                "matchLabels": {
+                  "ai-grid/enabled": "true",
+                  "ai-grid/provisioned": "true"
+                }
+              }
+            }
+          }
+        ]
+      },
+      "status": {
+        "numberOfSelectedClusters": 3,
+        "conditions": [
+          {
+            "type": "PlacementMisconfigured",
+            "status": "False",
+            "lastTransitionTime": "2026-10-20T09:00:01Z",
+            "reason": "Succeedconfigured",
+            "message": "Placement configurations check pass"
+          },
+          {
+            "type": "PlacementSatisfied",
+            "status": "True",
+            "lastTransitionTime": "2026-10-20T09:00:01Z",
+            "reason": "AllDecisionsScheduled",
+            "message": "All cluster decisions scheduled"
+          }
+        ]
+      }
+    },
+    {
+      "apiVersion": "cluster.open-cluster-management.io/v1beta1",
+      "kind": "Placement",
+      "metadata": {
+        "name": "model-fixture-ready-llm",
+        "namespace": "ai-grid-models",
+        "uid": "c2000000-0000-4000-8000-000000000020",
+        "resourceVersion": "120",
+        "generation": 1,
+        "creationTimestamp": "2026-10-21T10:00:00Z",
+        "labels": {
+          "ai-grid/model": "fixture-ready-llm",
+          "app.kubernetes.io/managed-by": "ai-grid-provider-backend"
+        }
+      },
+      "spec": {
+        "predicates": [
+          {
+            "requiredClusterSelector": {
+              "labelSelector": {
+                "matchLabels": {
+                  "ai-grid/enabled": "true",
+                  "ai-grid/provisioned": "true"
+                },
+                "matchExpressions": [
+                  {
+                    "key": "location",
+                    "operator": "In",
+                    "values": [
+                      "site1",
+                      "site2"
+                    ]
+                  }
+                ]
+              }
+            }
+          }
+        ]
+      },
+      "status": {
+        "numberOfSelectedClusters": 2,
+        "conditions": [
+          {
+            "type": "PlacementMisconfigured",
+            "status": "False",
+            "lastTransitionTime": "2026-10-21T10:00:01Z",
+            "reason": "Succeedconfigured",
+            "message": "Placement configurations check pass"
+          },
+          {
+            "type": "PlacementSatisfied",
+            "status": "True",
+            "lastTransitionTime": "2026-10-21T10:00:01Z",
+            "reason": "AllDecisionsScheduled",
+            "message": "All cluster decisions scheduled"
+          }
+        ]
+      }
+    }
+  ]
+}

@@ -2,6 +2,7 @@ package hub
 
 import (
 	"context"
+	"slices"
 	"testing"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -112,15 +113,23 @@ func TestMAASNamespacedCRUD(t *testing.T) {
 
 func TestShippedDefaultHasMAASFixtures(t *testing.T) {
 	fx := loadShipped(t, "default")
-	if len(fx.MaaSSubscriptions) != 2 || len(fx.MaaSAuthPolicies) != 2 || len(fx.MaaSModelRefs) != 3 {
+	// Model refs: two in llm/, one per model in ai-grid-models.
+	if len(fx.MaaSSubscriptions) != 2 || len(fx.MaaSAuthPolicies) != 2 || len(fx.MaaSModelRefs) != 5 {
 		t.Fatalf("default MaaS counts: subs=%d policies=%d modelrefs=%d",
 			len(fx.MaaSSubscriptions), len(fx.MaaSAuthPolicies), len(fx.MaaSModelRefs))
 	}
-	if len(fx.LLMInferenceServices) != 1 {
-		t.Fatalf("default LLMInferenceServices = %d, want 1", len(fx.LLMInferenceServices))
+	var got []string
+	for _, llm := range fx.LLMInferenceServices {
+		got = append(got, llm.GetNamespace()+"/"+llm.GetName())
 	}
-	llm := fx.LLMInferenceServices[0]
-	if llm.GetName() != "fixture-cpu-llm" || llm.GetNamespace() != "ai-grid-models" {
-		t.Fatalf("LLMInferenceService = %s/%s", llm.GetNamespace(), llm.GetName())
+	want := []string{"ai-grid-models/fixture-cpu-llm", "ai-grid-models/fixture-placed-llm", "ai-grid-models/fixture-failing-llm"}
+	if !slices.Equal(got, want) {
+		t.Fatalf("LLMInferenceServices = %v, want %v", got, want)
+	}
+	// One Placement, PlacementDecision and MWRS per placed model, one work
+	// per selected cluster.
+	if len(fx.Placements) != 2 || len(fx.PlacementDecisions) != 2 || len(fx.ManifestWorkReplicaSets) != 2 || len(fx.ManifestWorks) != 3 {
+		t.Fatalf("default placed-model counts: placements=%d decisions=%d mwrs=%d works=%d",
+			len(fx.Placements), len(fx.PlacementDecisions), len(fx.ManifestWorkReplicaSets), len(fx.ManifestWorks))
 	}
 }

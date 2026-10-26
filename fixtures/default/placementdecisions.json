@@ -1,0 +1,62 @@
+{
+  "_comment": "Hand-authored, fictional. A placed model's PlacementDecision as the hub's controllers last wrote it; the fake runs no placement scheduler, MWRS controller or work agent, so these do not change. Generated with the other placed-model files; see fixtures/README.md.",
+  "apiVersion": "cluster.open-cluster-management.io/v1beta1",
+  "kind": "PlacementDecisionList",
+  "metadata": {},
+  "items": [
+    {
+      "apiVersion": "cluster.open-cluster-management.io/v1beta1",
+      "kind": "PlacementDecision",
+      "metadata": {
+        "name": "model-fixture-placed-llm-decision-1",
+        "namespace": "ai-grid-models",
+        "uid": "c2000000-0000-4000-8000-000000000003",
+        "resourceVersion": "103",
+        "generation": 1,
+        "creationTimestamp": "2026-10-20T09:00:01Z",
+        "labels": {
+          "cluster.open-cluster-management.io/placement": "model-fixture-placed-llm",
+          "cluster.open-cluster-management.io/decision-group-index": "0",
+          "cluster.open-cluster-management.io/decision-group-name": ""
+        }
+      },
+      "status": {
+        "decisions": [
+          {
+            "clusterName": "site-madrid-1",
+            "reason": ""
+          },
+          {
+            "clusterName": "site-paris-1",
+            "reason": ""
+          }
+        ]
+      }
+    },
+    {
+      "apiVersion": "cluster.open-cluster-management.io/v1beta1",
+      "kind": "PlacementDecision",
+      "metadata": {
+        "name": "model-fixture-failing-llm-decision-1",
+        "namespace": "ai-grid-models",
+        "uid": "c2000000-0000-4000-8000-000000000004",
+        "resourceVersion": "104",
+        "generation": 1,
+        "creationTimestamp": "2026-10-21T10:00:01Z",
+        "labels": {
+          "cluster.open-cluster-management.io/placement": "model-fixture-failing-llm",
+          "cluster.open-cluster-management.io/decision-group-index": "0",
+          "cluster.open-cluster-management.io/decision-group-name": ""
+        }
+      },
+      "status": {
+        "decisions": [
+          {
+            "clusterName": "site-paris-1",
+            "reason": ""
+          }
+        ]
+      }
+    }
+  ]
+}

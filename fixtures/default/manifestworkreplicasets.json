@@ -1,0 +1,338 @@
+{
+  "_comment": "Hand-authored, fictional. A placed model's ManifestWorkReplicaSet as the hub's controllers last wrote it; the fake runs no placement scheduler, MWRS controller or work agent, so these do not change. Generated with the other placed-model files; see fixtures/README.md.",
+  "apiVersion": "work.open-cluster-management.io/v1alpha1",
+  "kind": "ManifestWorkReplicaSetList",
+  "metadata": {},
+  "items": [
+    {
+      "apiVersion": "work.open-cluster-management.io/v1alpha1",
+      "kind": "ManifestWorkReplicaSet",
+      "metadata": {
+        "name": "model-fixture-placed-llm",
+        "namespace": "ai-grid-models",
+        "uid": "c2000000-0000-4000-8000-000000000005",
+        "resourceVersion": "105",
+        "generation": 1,
+        "creationTimestamp": "2026-10-20T09:00:00Z",
+        "labels": {
+          "ai-grid/model": "fixture-placed-llm",
+          "app.kubernetes.io/managed-by": "ai-grid-provider-backend"
+        },
+        "finalizers": [
+          "work.open-cluster-management.io/manifest-work-cleanup"
+        ]
+      },
+      "spec": {
+        "placementRefs": [
+          {
+            "name": "model-fixture-placed-llm",
+            "rolloutStrategy": {
+              "type": "All"
+            }
+          }
+        ],
+        "manifestWorkTemplate": {
+          "workload": {
+            "manifests": [
+              {
+                "apiVersion": "serving.kserve.io/v1alpha2",
+                "kind": "LLMInferenceService",
+                "metadata": {
+                  "name": "fixture-placed-llm",
+                  "namespace": "ai-grid-models",
+                  "labels": {
+                    "ai-grid/model": "fixture-placed-llm",
+                    "app.kubernetes.io/managed-by": "ai-grid-provider-backend"
+                  },
+                  "annotations": {
+                    "openshift.io/display-name": "Fixture placed LLM"
+                  }
+                },
+                "spec": {
+                  "model": {
+                    "uri": "hf://facebook/opt-125m",
+                    "name": "facebook/opt-125m"
+                  },
+                  "replicas": 1,
+                  "baseRefs": [
+                    {
+                      "name": "v3-6-0-kserve-config-llm-template-cpu"
+                    }
+                  ],
+                  "router": {
+                    "route": {},
+                    "gateway": {
+                      "refs": [
+                        {
+                          "name": "openshift-ai-inference",
+                          "namespace": "openshift-ingress"
+                        }
+                      ]
+                    }
+                  },
+                  "template": {
+                    "containers": [
+                      {
+                        "name": "main",
+                        "image": "quay.io/example/vllm:latest",
+                        "resources": {
+                          "requests": {
+                            "cpu": "100m",
+                            "memory": "8Gi"
+                          },
+                          "limits": {
+                            "cpu": "1",
+                            "memory": "10Gi"
+                          }
+                        }
+                      }
+                    ]
+                  }
+                }
+              }
+            ]
+          },
+          "manifestConfigs": [
+            {
+              "resourceIdentifier": {
+                "group": "serving.kserve.io",
+                "resource": "llminferenceservices",
+                "namespace": "ai-grid-models",
+                "name": "fixture-placed-llm"
+              },
+              "feedbackRules": [
+                {
+                  "type": "JSONPaths",
+                  "jsonPaths": [
+                    {
+                      "name": "ready",
+                      "path": ".status.conditions[?(@.type==\"Ready\")].status"
+                    }
+                  ]
+                }
+              ],
+              "conditionRules": [
+                {
+                  "condition": "Progressing",
+                  "type": "CEL",
+                  "celExpressions": [
+                    "!(has(object.status) && has(object.status.conditions) && object.status.conditions.exists(c, c.type == \"Ready\" && c.status == \"True\"))"
+                  ],
+                  "message": "LLMInferenceService rolling out"
+                },
+                {
+                  "condition": "Degraded",
+                  "type": "CEL",
+                  "celExpressions": [
+                    "has(object.status) && has(object.status.conditions) && object.status.conditions.exists(c, c.type == \"Ready\" && c.status == \"False\" && has(c.reason) && c.reason in [\"ConfigNotFound\", \"RefsInvalid\", \"GatewaysNotReady\"])"
+                  ],
+                  "message": "LLMInferenceService not ready"
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "status": {
+        "summary": {
+          "total": 2,
+          "applied": 2,
+          "available": 2,
+          "progressing": 1,
+          "degraded": 0
+        },
+        "conditions": [
+          {
+            "type": "PlacementVerified",
+            "status": "True",
+            "lastTransitionTime": "2026-10-20T09:04:30Z",
+            "reason": "AsExpected",
+            "message": "",
+            "observedGeneration": 1
+          },
+          {
+            "type": "PlacementRolledOut",
+            "status": "False",
+            "lastTransitionTime": "2026-10-20T09:04:30Z",
+            "reason": "Progressing",
+            "message": "",
+            "observedGeneration": 1
+          },
+          {
+            "type": "ManifestworkApplied",
+            "status": "False",
+            "lastTransitionTime": "2026-10-20T09:04:30Z",
+            "reason": "Processing",
+            "message": "",
+            "observedGeneration": 1
+          }
+        ]
+      }
+    },
+    {
+      "apiVersion": "work.open-cluster-management.io/v1alpha1",
+      "kind": "ManifestWorkReplicaSet",
+      "metadata": {
+        "name": "model-fixture-failing-llm",
+        "namespace": "ai-grid-models",
+        "uid": "c2000000-0000-4000-8000-000000000007",
+        "resourceVersion": "107",
+        "generation": 1,
+        "creationTimestamp": "2026-10-21T10:00:00Z",
+        "labels": {
+          "ai-grid/model": "fixture-failing-llm",
+          "app.kubernetes.io/managed-by": "ai-grid-provider-backend"
+        },
+        "finalizers": [
+          "work.open-cluster-management.io/manifest-work-cleanup"
+        ]
+      },
+      "spec": {
+        "placementRefs": [
+          {
+            "name": "model-fixture-failing-llm",
+            "rolloutStrategy": {
+              "type": "All"
+            }
+          }
+        ],
+        "manifestWorkTemplate": {
+          "workload": {
+            "manifests": [
+              {
+                "apiVersion": "serving.kserve.io/v1alpha2",
+                "kind": "LLMInferenceService",
+                "metadata": {
+                  "name": "fixture-failing-llm",
+                  "namespace": "ai-grid-models",
+                  "labels": {
+                    "ai-grid/model": "fixture-failing-llm",
+                    "app.kubernetes.io/managed-by": "ai-grid-provider-backend"
+                  },
+                  "annotations": {
+                    "openshift.io/display-name": "Fixture failing LLM"
+                  }
+                },
+                "spec": {
+                  "model": {
+                    "uri": "hf://facebook/opt-125m",
+                    "name": "fixture-failing-llm"
+                  },
+                  "replicas": 1,
+                  "baseRefs": [
+                    {
+                      "name": "v3-6-0-kserve-config-llm-template-cpu"
+                    }
+                  ],
+                  "router": {
+                    "route": {},
+                    "gateway": {
+                      "refs": [
+                        {
+                          "name": "openshift-ai-inference",
+                          "namespace": "openshift-ingress"
+                        }
+                      ]
+                    }
+                  },
+                  "template": {
+                    "containers": [
+                      {
+                        "name": "main",
+                        "image": "quay.io/example/vllm:latest",
+                        "resources": {
+                          "requests": {
+                            "cpu": "100m",
+                            "memory": "8Gi"
+                          },
+                          "limits": {
+                            "cpu": "1",
+                            "memory": "10Gi"
+                          }
+                        }
+                      }
+                    ]
+                  }
+                }
+              }
+            ]
+          },
+          "manifestConfigs": [
+            {
+              "resourceIdentifier": {
+                "group": "serving.kserve.io",
+                "resource": "llminferenceservices",
+                "namespace": "ai-grid-models",
+                "name": "fixture-failing-llm"
+              },
+              "feedbackRules": [
+                {
+                  "type": "JSONPaths",
+                  "jsonPaths": [
+                    {
+                      "name": "ready",
+                      "path": ".status.conditions[?(@.type==\"Ready\")].status"
+                    }
+                  ]
+                }
+              ],
+              "conditionRules": [
+                {
+                  "condition": "Progressing",
+                  "type": "CEL",
+                  "celExpressions": [
+                    "!(has(object.status) && has(object.status.conditions) && object.status.conditions.exists(c, c.type == \"Ready\" && c.status == \"True\"))"
+                  ],
+                  "message": "LLMInferenceService rolling out"
+                },
+                {
+                  "condition": "Degraded",
+                  "type": "CEL",
+                  "celExpressions": [
+                    "has(object.status) && has(object.status.conditions) && object.status.conditions.exists(c, c.type == \"Ready\" && c.status == \"False\" && has(c.reason) && c.reason in [\"ConfigNotFound\", \"RefsInvalid\", \"GatewaysNotReady\"])"
+                  ],
+                  "message": "LLMInferenceService not ready"
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "status": {
+        "summary": {
+          "total": 1,
+          "applied": 1,
+          "available": 1,
+          "progressing": 1,
+          "degraded": 1
+        },
+        "conditions": [
+          {
+            "type": "PlacementVerified",
+            "status": "True",
+            "lastTransitionTime": "2026-10-21T10:01:10Z",
+            "reason": "AsExpected",
+            "message": "",
+            "observedGeneration": 1
+          },
+          {
+            "type": "PlacementRolledOut",
+            "status": "False",
+            "lastTransitionTime": "2026-10-21T10:01:10Z",
+            "reason": "Progressing",
+            "message": "",
+            "observedGeneration": 1
+          },
+          {
+            "type": "ManifestworkApplied",
+            "status": "False",
+            "lastTransitionTime": "2026-10-21T10:01:10Z",
+            "reason": "NotAsExpected",
+            "message": "",
+            "observedGeneration": 1
+          }
+        ]
+      }
+    }
+  ]
+}

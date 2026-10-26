@@ -13,7 +13,7 @@ at commit `537df38`:
 | Directory here | Console directory | Preset |
 |---|---|---|
 | `default/` | `mock/fixtures/` | Ten clusters in every state the ACM console distinguishes, six organizations, a timeline of cluster events. |
-| `poc/` | `mock/fixtures-poc/` | The PoC's four sites (`site1`-`site4`) and three organizations; no timeline, so nothing changes over time. Also seeds the same hand-authored MaaS / LLMInferenceService CRs as `default/` so `make dev-fake-poc` exercises Models and Subscriptions. |
+| `poc/` | `mock/fixtures-poc/` | The PoC's four sites (`site1`-`site4`) and three organizations; no timeline, so nothing changes over time. Also seeds the hand-authored MaaS / LLMInferenceService CRs of `default/` and its own placed models, so `make dev-fake-poc` exercises Models and Subscriptions. |
 
 `draft/` is different: the draft fake's fixtures, the console's protojson of its draft API
 copied **verbatim, not converted**. `hack/convert-console-fixtures` and everything below about
@@ -71,9 +71,44 @@ objects via the dynamic client. `llminferenceservices.json` seeds one hub-only
 model (`fixture-cpu-llm`) whose shape matches Models Create; Subscriptions use
 the MaaS CR fixtures above instead of the console's flat `subscriptions.json`.
 
+## Placed models
+
+`llminferenceservices.json` and `maasmodelrefs.json` also carry placed models,
+and four more files hold their ACM objects, all in `ai-grid-models` except the
+works, which live in each cluster's namespace:
+
+| File | Shape |
+|---|---|
+| `placements.json` | A `PlacementList` (`cluster.open-cluster-management.io/v1beta1`): the spec the backend writes (`placementFromModel`), with `status` (`numberOfSelectedClusters`, `PlacementSatisfied`, `PlacementMisconfigured`). |
+| `placementdecisions.json` | A `PlacementDecisionList`: `model-<id>-decision-1`, labelled `cluster.open-cluster-management.io/placement=model-<id>`, decisions in cluster-name order. |
+| `manifestworkreplicasets.json` | A `ManifestWorkReplicaSetList` (`work.open-cluster-management.io/v1alpha1`): the spec the backend writes (`mwrsFromModel`, with its `manifestConfigs`), `status.summary` and the three MWRS conditions. |
+| `manifestworks.json` | A `ManifestWorkList` (`work.open-cluster-management.io/v1`): one work per selected cluster, the MWRS template as spec, owner labels, and the status the cluster's work agent reports: `Applied`, `Available`, the rule conditions `Progressing` and `Degraded`, and the LLMInferenceService manifest's `ready` status feedback. |
+
+They are what the hub's controllers last wrote: the fake runs no placement
+scheduler, MWRS controller or work agent, so these objects do not change over
+time (a cluster that recovers in `scenarios.json` keeps its work's old
+report), and a model placed through the API gets a Placement and an MWRS but
+no decisions, MWRS status or works. Deleting an MWRS deletes its works.
+CRD defaults the API server would add to a Placement are left out. The
+strings come from the console's `mock/research/acm.md` section 4.
+
+| Preset | Model | Locations | Phase |
+|---|---|---|---|
+| `default` | `fixture-placed-llm` | `site-paris-1` READY; `site-madrid-1` PENDING (still starting when its agent stopped reporting; a toleration keeps the unreachable cluster selected) | PARTIALLY_AVAILABLE, 1 of 2 |
+| `default` | `fixture-failing-llm` | `site-paris-1` FAILED (`Degraded`: Ready False with `ConfigNotFound`); selected by a claim expression | FAILED |
+| `poc` | `fixture-placed-llm` | `site1`, `site2` READY; `site3` FAILED (`Applied` False: the spoke has no LLMInferenceService CRD) | PARTIALLY_AVAILABLE, 2 of 3 |
+| `poc` | `fixture-ready-llm` | `site1`, `site2` READY | READY |
+
+The placed-model objects are hand-authored and generated together so they
+agree with each other; `go test ./internal/servers/` checks that every
+fixture MWRS template and work spec is what `mwrsFromModel` writes today, and
+`go test ./internal/fakeinfra/` reads each model's phase through the real
+Models server.
+
 `fixtures/poc` includes the same hand-authored MaaS / LLMInferenceService files as
 `default/` (copied, not console-converted) so `make dev-fake-poc` can exercise
-Models and Subscriptions against the PoC cluster set.
+Models and Subscriptions against the PoC cluster set; its placed models differ
+(see "Placed models").
 
 ## Regenerating
 

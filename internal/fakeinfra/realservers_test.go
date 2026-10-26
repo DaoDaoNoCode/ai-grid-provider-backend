@@ -501,6 +501,120 @@ func TestRealModelsServerOnFakeHub(t *testing.T) {
 	}
 }
 
+// workPhases maps each location of a model to its phase.
+func workPhases(m *aigridv1.Model) map[string]aigridv1.ModelPhase {
+	out := map[string]aigridv1.ModelPhase{}
+	for _, w := range m.GetStatus().GetRollout().GetWorks() {
+		out[w.GetCluster()] = w.GetPhase()
+	}
+	return out
+}
+
+// TestRealModelsServerPlacedFixtures: the placed models seeded in
+// fixtures/default and fixtures/poc read with the per-location status the
+// console's Models page shows (proposal P13).
+func TestRealModelsServerPlacedFixtures(t *testing.T) {
+	const (
+		ready   = aigridv1.ModelPhase_MODEL_PHASE_READY
+		pending = aigridv1.ModelPhase_MODEL_PHASE_PENDING
+		failed  = aigridv1.ModelPhase_MODEL_PHASE_FAILED
+		partial = aigridv1.ModelPhase_MODEL_PHASE_PARTIALLY_AVAILABLE
+	)
+	tests := []struct {
+		preset, id  string
+		phase       aigridv1.ModelPhase
+		reason, msg string
+		works       map[string]aigridv1.ModelPhase
+		locations   []string
+	}{
+		{"default", "fixture-placed-llm", partial, "PartiallyAvailable", "1 of 2 clusters are serving the model.",
+			map[string]aigridv1.ModelPhase{"site-paris-1": ready, "site-madrid-1": pending}, []string{"madrid", "paris"}},
+		{"default", "fixture-failing-llm", failed, "ConditionRulesAggregated", "LLMInferenceService not ready",
+			map[string]aigridv1.ModelPhase{"site-paris-1": failed}, []string{"paris"}},
+		{"poc", "fixture-placed-llm", partial, "PartiallyAvailable", "2 of 3 clusters are serving the model.",
+			map[string]aigridv1.ModelPhase{"site1": ready, "site2": ready, "site3": failed}, []string{"site1", "site2", "site3"}},
+		{"poc", "fixture-ready-llm", ready, "Complete", "",
+			map[string]aigridv1.ModelPhase{"site1": ready, "site2": ready}, []string{"site1", "site2"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.preset+"/"+tt.id, func(t *testing.T) {
+			fx, err := hub.LoadFixtures(filepath.Join("..", "..", "fixtures", tt.preset))
+			if err != nil {
+				t.Fatalf("LoadFixtures: %v", err)
+			}
+			h, err := hub.New(fx, hub.WithLogger(slog.New(slog.DiscardHandler)))
+			if err != nil {
+				t.Fatalf("hub.New: %v", err)
+			}
+			srv := httptest.NewServer(h.Handler())
+			t.Cleanup(srv.Close)
+			s := modelsServer(t, &rest.Config{Host: srv.URL, BearerToken: h.ServiceAccountToken()})
+			got, err := s.Get(context.Background(), &aigridv1.ModelsGetRequest{Id: tt.id})
+			if err != nil {
+				t.Fatalf("Get: %v", err)
+			}
+			st := got.GetObject().GetStatus()
+			if st.GetPhase() != tt.phase || st.GetReason() != tt.reason || st.GetMessage() != tt.msg {
+				t.Fatalf("status = %v/%q/%q, want %v/%q/%q", st.GetPhase(), st.GetReason(), st.GetMessage(), tt.phase, tt.reason, tt.msg)
+			}
+			if phases := workPhases(got.GetObject()); !maps.Equal(phases, tt.works) {
+				t.Fatalf("works = %v, want %v", phases, tt.works)
+			}
+			if !slices.Equal(st.GetPlacement().GetLocations(), tt.locations) {
+				t.Fatalf("locations = %v, want %v", st.GetPlacement().GetLocations(), tt.locations)
+			}
+			for _, w := range st.GetRollout().GetWorks() {
+				if len(w.GetConditions()) == 0 {
+					t.Fatalf("work %s has no conditions", w.GetCluster())
+				}
+				if (w.GetPhase() == ready) != w.GetReady() {
+					t.Fatalf("work %s phase %v with ready %v", w.GetCluster(), w.GetPhase(), w.Ready)
+				}
+			}
+		})
+	}
+}
+
+func TestRealModelsServerPlacedFixtureSpec(t *testing.T) {
+	h, srv := startHub(t)
+	s := modelsServer(t, &rest.Config{Host: srv.URL, BearerToken: h.ServiceAccountToken()})
+	ctx := context.Background()
+	placed, err := s.Get(ctx, &aigridv1.ModelsGetRequest{Id: "fixture-placed-llm"})
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	tol := placed.GetObject().GetSpec().GetPlacement().GetTolerations()
+	if len(tol) != 1 || tol[0].GetKey() != "cluster.open-cluster-management.io/unreachable" || tol[0].GetOperator() != "Exists" {
+		t.Fatalf("tolerations = %v", tol)
+	}
+	failing, err := s.Get(ctx, &aigridv1.ModelsGetRequest{Id: "fixture-failing-llm"})
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	claims := failing.GetObject().GetSpec().GetPlacement().GetClaimExpressions()
+	if len(claims) != 1 || claims[0].GetKey() != "platform.open-cluster-management.io" {
+		t.Fatalf("claim_expressions = %v", claims)
+	}
+	if name := failing.GetObject().GetSpec().GetModel().GetName(); name != "fixture-failing-llm" {
+		t.Fatalf("spec.model.name = %q", name)
+	}
+
+	// Deleting a placed model removes its works with its MWRS.
+	if _, err := s.Delete(ctx, &aigridv1.ModelsDeleteRequest{Id: "fixture-placed-llm"}); err != nil {
+		t.Fatalf("Delete: %v", err)
+	}
+	if _, err := s.Get(ctx, &aigridv1.ModelsGetRequest{Id: "fixture-placed-llm"}); connect.CodeOf(err) != connect.CodeNotFound {
+		t.Fatalf("Get after delete = %v, want NotFound", err)
+	}
+	still, err := s.Get(ctx, &aigridv1.ModelsGetRequest{Id: "fixture-failing-llm"})
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if len(still.GetObject().GetStatus().GetRollout().GetWorks()) != 1 {
+		t.Fatalf("fixture-failing-llm works = %v", still.GetObject().GetStatus().GetRollout().GetWorks())
+	}
+}
+
 func subscriptionsServer(t *testing.T, cfg *rest.Config) *servers.SubscriptionsServer {
 	t.Helper()
 	cfg.QPS, cfg.Burst = 1000, 1000

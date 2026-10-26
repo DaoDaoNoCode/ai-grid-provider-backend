@@ -1,5 +1,5 @@
 {
-  "_comment": "MaaSModelRef catalog: llm/ entries for Subscriptions enrichment; ai-grid-models/fixture-cpu-llm pairs with llminferenceservices.json for Models.",
+  "_comment": "MaaSModelRef catalog: llm/ entries for Subscriptions enrichment; ai-grid-models/fixture-cpu-llm pairs with llminferenceservices.json for Models. The other ai-grid-models entries pair with the placed models.",
   "apiVersion": "maas.opendatahub.io/v1alpha1",
   "kind": "MaaSModelRefList",
   "metadata": {},
@@ -83,6 +83,56 @@
       "status": {
         "phase": "Ready",
         "endpoint": "/llm/fixture-cpu-llm"
+      }
+    },
+    {
+      "apiVersion": "maas.opendatahub.io/v1alpha1",
+      "kind": "MaaSModelRef",
+      "metadata": {
+        "name": "fixture-placed-llm",
+        "namespace": "ai-grid-models",
+        "uid": "c2000000-0000-4000-8000-000000000017",
+        "resourceVersion": "117",
+        "generation": 1,
+        "creationTimestamp": "2026-10-20T09:00:00Z",
+        "labels": {
+          "ai-grid/model": "fixture-placed-llm",
+          "app.kubernetes.io/managed-by": "ai-grid-provider-backend"
+        },
+        "annotations": {
+          "openshift.io/display-name": "Fixture placed LLM"
+        }
+      },
+      "spec": {
+        "modelRef": {
+          "kind": "LLMInferenceService",
+          "name": "fixture-placed-llm"
+        }
+      }
+    },
+    {
+      "apiVersion": "maas.opendatahub.io/v1alpha1",
+      "kind": "MaaSModelRef",
+      "metadata": {
+        "name": "fixture-failing-llm",
+        "namespace": "ai-grid-models",
+        "uid": "c2000000-0000-4000-8000-000000000018",
+        "resourceVersion": "118",
+        "generation": 1,
+        "creationTimestamp": "2026-10-21T10:00:00Z",
+        "labels": {
+          "ai-grid/model": "fixture-failing-llm",
+          "app.kubernetes.io/managed-by": "ai-grid-provider-backend"
+        },
+        "annotations": {
+          "openshift.io/display-name": "Fixture failing LLM"
+        }
+      },
+      "spec": {
+        "modelRef": {
+          "kind": "LLMInferenceService",
+          "name": "fixture-failing-llm"
+        }
       }
     }
   ]
