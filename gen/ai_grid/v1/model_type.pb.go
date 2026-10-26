@@ -80,8 +80,9 @@ func (ModelRolloutStrategy) EnumDescriptor() ([]byte, []int) {
 //
 // Hub-only model (no ManifestWorkReplicaSet): from the LLMInferenceService
 // `Ready` condition. True is READY; False with a reason that does not recover
-// on its own (`ConfigNotFound`, `RefsInvalid`, `GatewaysNotReady`) is FAILED;
-// any other False reason, Unknown or no condition is PENDING.
+// on its own (`ConfigNotFound`, `RefsInvalid`) is FAILED; any other False
+// reason (including `GatewaysNotReady`, a Gateway that isn't Ready yet),
+// Unknown or no condition is PENDING.
 //
 // Placed model (the ManifestWorkReplicaSet `model-<id>` exists): from the
 // per-location works first, because the spoke agents write them and the

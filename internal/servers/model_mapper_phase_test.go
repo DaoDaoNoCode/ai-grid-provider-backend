@@ -499,3 +499,28 @@ func TestDeriveModelPhaseFromRolloutReplacesHubPhase(t *testing.T) {
 }
 
 func boolPtr(b bool) *bool { return &b }
+
+// A hub-only model's phase from its Ready condition: KServe's terminal
+// reasons are FAILED, and GatewaysNotReady (a Gateway that exists but isn't
+// Ready yet) is PENDING, since a starting Gateway recovers on its own.
+func TestDeriveModelPhaseHubReasons(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		reason string
+		want   aigridv1.ModelPhase
+	}{
+		{"ConfigNotFound", aigridv1.ModelPhase_MODEL_PHASE_FAILED},
+		{"RefsInvalid", aigridv1.ModelPhase_MODEL_PHASE_FAILED},
+		{"GatewaysNotReady", aigridv1.ModelPhase_MODEL_PHASE_PENDING},
+		{"MinimumReplicasUnavailable", aigridv1.ModelPhase_MODEL_PHASE_PENDING},
+	} {
+		reason := tc.reason
+		status := &aigridv1.ModelStatus{Conditions: []*aigridv1.Condition{{
+			Type: "Ready", Status: aigridv1.ConditionStatus_CONDITION_STATUS_FALSE, Reason: &reason,
+		}}}
+		deriveModelPhase(status)
+		if status.GetPhase() != tc.want || status.GetReason() != tc.reason {
+			t.Errorf("%s: phase %v reason %q, want %v", tc.reason, status.GetPhase(), status.GetReason(), tc.want)
+		}
+	}
+}

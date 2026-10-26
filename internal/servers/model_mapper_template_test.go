@@ -174,7 +174,9 @@ func TestConditionRulesCEL(t *testing.T) {
 		{"Ready without reason", spokeLLM("False", ""), true, false},
 		{"Unknown", spokeLLM("Unknown", ""), true, false},
 		{"terminal ConfigNotFound", spokeLLM("False", "ConfigNotFound"), true, true},
-		{"terminal GatewaysNotReady", spokeLLM("False", "GatewaysNotReady"), true, true},
+		{"terminal RefsInvalid", spokeLLM("False", "RefsInvalid"), true, true},
+		// A Gateway that exists but isn't Ready yet: still rolling out, not failed.
+		{"waiting for a Gateway", spokeLLM("False", "GatewaysNotReady"), true, false},
 		{"ready", spokeLLM("True", ""), false, false},
 		{"ready at the current generation", spokeLLMAt("True", "", 3, 3), false, false},
 		{"Ready left from an older generation", spokeLLMAt("True", "", 3, 2), true, false},

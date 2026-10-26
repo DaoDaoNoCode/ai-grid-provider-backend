@@ -319,8 +319,14 @@ func deriveModelPhase(status *aigridv1.ModelStatus) {
 	case aigridv1.ConditionStatus_CONDITION_STATUS_TRUE:
 		status.Phase = aigridv1.ModelPhase_MODEL_PHASE_READY
 	case aigridv1.ConditionStatus_CONDITION_STATUS_FALSE:
+		// KServe's terminal reasons: a preset that doesn't exist (PresetsCombined,
+		// llm_inference_service_lifecycle.go) and a Gateway reference that fails
+		// validation (router_validation.go RefsInvalidReason). GatewaysNotReady is
+		// not one: KServe sets it while a referenced Gateway exists but isn't
+		// Ready yet (router.go, EvaluateGatewayReadiness), which a starting
+		// Gateway recovers from on its own.
 		switch reason {
-		case "ConfigNotFound", "RefsInvalid", "GatewaysNotReady":
+		case "ConfigNotFound", "RefsInvalid":
 			status.Phase = aigridv1.ModelPhase_MODEL_PHASE_FAILED
 		default:
 			status.Phase = aigridv1.ModelPhase_MODEL_PHASE_PENDING
@@ -1400,7 +1406,7 @@ const (
 		`object.status.conditions.exists(c, c.type == "Ready" && c.status == "True"))`
 	llmDegradedCEL = `has(object.status) && has(object.status.conditions) && ` + llmCurrentGenerationCEL + ` && ` +
 		`object.status.conditions.exists(c, c.type == "Ready" && c.status == "False" && ` +
-		`has(c.reason) && c.reason in ["ConfigNotFound", "RefsInvalid", "GatewaysNotReady"])`
+		`has(c.reason) && c.reason in ["ConfigNotFound", "RefsInvalid"])`
 
 	messageRuleProgressing = "LLMInferenceService rolling out"
 	messageRuleDegraded    = "LLMInferenceService not ready"

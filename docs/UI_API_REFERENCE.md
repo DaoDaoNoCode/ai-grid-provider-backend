@@ -591,7 +591,7 @@ the whole placement, and a field you leave out is removed.
 | --- | --- | --- |
 | `READY` | `Ready` True | every selected location serving (or, with no work readable, the MWRS rolled out and applied) |
 | `PARTIALLY_AVAILABLE` | never | some but not all selected locations serving; message "`<n>` of `<m>` clusters are serving the model." |
-| `FAILED` | `Ready` False with `ConfigNotFound`, `RefsInvalid` or `GatewaysNotReady` | no location serving and a work FAILED (its reason and message) |
+| `FAILED` | `Ready` False with `ConfigNotFound` or `RefsInvalid` (`GatewaysNotReady`, a Gateway still starting, is `PENDING`) | no location serving and a work FAILED (its reason and message) |
 | `PENDING` | otherwise | otherwise, with the MWRS condition's reason |
 
 The works win over the MWRS conditions: an MWRS that still says rolled out
