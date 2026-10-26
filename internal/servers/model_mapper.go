@@ -346,25 +346,103 @@ func modelPlacementFromUnstructured(item unstructured.Unstructured) *aigridv1.Mo
 				sel.MatchLabels = ml
 			}
 			if exprs, found, err := unstructured.NestedSlice(pred, "requiredClusterSelector", "labelSelector", "matchExpressions"); err == nil && found {
-				for _, raw := range exprs {
-					m, ok := raw.(map[string]interface{})
-					if !ok {
-						continue
-					}
-					req := &aigridv1.ModelLabelSelectorRequirement{
-						Key:      stringField(m, "key"),
-						Operator: stringField(m, "operator"),
-					}
-					if vals, _, _ := unstructured.NestedStringSlice(m, "values"); len(vals) > 0 {
-						req.Values = vals
-					}
-					sel.MatchExpressions = append(sel.MatchExpressions, req)
-				}
+				sel.MatchExpressions = requirementsFromSlice(exprs)
+			}
+			if exprs, found, err := unstructured.NestedSlice(pred, "requiredClusterSelector", "claimSelector", "matchExpressions"); err == nil && found {
+				out.ClaimExpressions = requirementsFromSlice(exprs)
 			}
 		}
 	}
 	if len(sel.MatchLabels) > 0 || len(sel.MatchExpressions) > 0 {
 		out.LabelSelector = sel
+	}
+	if tolerations, found, err := unstructured.NestedSlice(item.Object, "spec", "tolerations"); err == nil && found {
+		for _, raw := range tolerations {
+			m, ok := raw.(map[string]interface{})
+			if !ok {
+				continue
+			}
+			t := &aigridv1.ModelToleration{
+				Key:      stringField(m, "key"),
+				Operator: stringField(m, "operator"),
+				Value:    stringField(m, "value"),
+				Effect:   stringField(m, "effect"),
+			}
+			if _, found, _ := unstructured.NestedFieldNoCopy(m, "tolerationSeconds"); found {
+				t.TolerationSeconds = proto.Int64(nestedInt64(m, "tolerationSeconds"))
+			}
+			out.Tolerations = append(out.Tolerations, t)
+		}
+	}
+	return out
+}
+
+// requirementsFromSlice maps metav1.LabelSelectorRequirement entries (label
+// and claim selectors use the same type, open-cluster-management-io/api
+// cluster/v1beta1/types_placement.go ClusterClaimSelector).
+func requirementsFromSlice(exprs []interface{}) []*aigridv1.ModelLabelSelectorRequirement {
+	var out []*aigridv1.ModelLabelSelectorRequirement
+	for _, raw := range exprs {
+		m, ok := raw.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		req := &aigridv1.ModelLabelSelectorRequirement{
+			Key:      stringField(m, "key"),
+			Operator: stringField(m, "operator"),
+		}
+		if vals, _, _ := unstructured.NestedStringSlice(m, "values"); len(vals) > 0 {
+			req.Values = vals
+		}
+		out = append(out, req)
+	}
+	return out
+}
+
+// requirementsToSlice is the inverse of requirementsFromSlice.
+func requirementsToSlice(reqs []*aigridv1.ModelLabelSelectorRequirement) []interface{} {
+	var out []interface{}
+	for _, e := range reqs {
+		if e == nil {
+			continue
+		}
+		entry := map[string]interface{}{
+			"key":      e.GetKey(),
+			"operator": e.GetOperator(),
+		}
+		if len(e.GetValues()) > 0 {
+			vals := make([]interface{}, 0, len(e.GetValues()))
+			for _, v := range e.GetValues() {
+				vals = append(vals, v)
+			}
+			entry["values"] = vals
+		}
+		out = append(out, entry)
+	}
+	return out
+}
+
+// tolerationsToSlice writes Placement spec.tolerations (api
+// cluster/v1beta1/types_placement.go Toleration); empty fields are left out,
+// as the typed client's omitempty does.
+func tolerationsToSlice(tolerations []*aigridv1.ModelToleration) []interface{} {
+	var out []interface{}
+	for _, t := range tolerations {
+		if t == nil {
+			continue
+		}
+		entry := map[string]interface{}{}
+		for k, v := range map[string]string{
+			"key": t.GetKey(), "operator": t.GetOperator(), "value": t.GetValue(), "effect": t.GetEffect(),
+		} {
+			if v != "" {
+				entry[k] = v
+			}
+		}
+		if t.TolerationSeconds != nil {
+			entry["tolerationSeconds"] = t.GetTolerationSeconds()
+		}
+		out = append(out, entry)
 	}
 	return out
 }
@@ -1073,23 +1151,7 @@ func placementFromModel(object *aigridv1.Model, namespace string) *unstructured.
 		for k, v := range sel.GetMatchLabels() {
 			matchLabels[k] = v
 		}
-		for _, e := range sel.GetMatchExpressions() {
-			if e == nil {
-				continue
-			}
-			entry := map[string]interface{}{
-				"key":      e.GetKey(),
-				"operator": e.GetOperator(),
-			}
-			if len(e.GetValues()) > 0 {
-				vals := make([]interface{}, 0, len(e.GetValues()))
-				for _, v := range e.GetValues() {
-					vals = append(vals, v)
-				}
-				entry["values"] = vals
-			}
-			exprs = append(exprs, entry)
-		}
+		exprs = requirementsToSlice(sel.GetMatchExpressions())
 	}
 	labelSelector := map[string]interface{}{
 		"matchLabels": stringMapToInterfaceMap(matchLabels),
@@ -1097,13 +1159,20 @@ func placementFromModel(object *aigridv1.Model, namespace string) *unstructured.
 	if len(exprs) > 0 {
 		labelSelector["matchExpressions"] = exprs
 	}
+	clusterSelector := map[string]interface{}{
+		"labelSelector": labelSelector,
+	}
+	if claims := requirementsToSlice(placement.GetClaimExpressions()); len(claims) > 0 {
+		clusterSelector["claimSelector"] = map[string]interface{}{"matchExpressions": claims}
+	}
 	predicate := map[string]interface{}{
-		"requiredClusterSelector": map[string]interface{}{
-			"labelSelector": labelSelector,
-		},
+		"requiredClusterSelector": clusterSelector,
 	}
 	spec := map[string]interface{}{
 		"predicates": []interface{}{predicate},
+	}
+	if tolerations := tolerationsToSlice(placement.GetTolerations()); len(tolerations) > 0 {
+		spec["tolerations"] = tolerations
 	}
 	if placement != nil {
 		if len(placement.GetClusterSets()) > 0 {

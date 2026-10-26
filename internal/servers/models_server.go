@@ -615,6 +615,10 @@ func (s *ModelsServer) requireMWRS(ctx context.Context) error {
 	return nil
 }
 
+// placementOptionalSpecKeys are the Placement spec keys placementFromModel
+// writes only when the model sets them.
+var placementOptionalSpecKeys = []string{"clusterSets", "numberOfClusters", "tolerations"}
+
 func (s *ModelsServer) syncPlacementSideEffects(ctx context.Context, model *aigridv1.Model, deployment *unstructured.Unstructured) error {
 	id := modelID(model)
 	pname := placementNameForModel(id)
@@ -636,6 +640,14 @@ func (s *ModelsServer) syncPlacementSideEffects(ctx context.Context, model *aigr
 		return mapModelAPIError("get Placement", id, err)
 	} else {
 		spec, _, _ := unstructured.NestedMap(placement.Object, "spec")
+		// The placement is replaced as a whole: a merge patch keeps keys it
+		// does not mention, so the optional ones the model leaves out are
+		// cleared explicitly (predicates is a list and replaced anyway).
+		for _, key := range placementOptionalSpecKeys {
+			if _, ok := spec[key]; !ok {
+				spec[key] = nil
+			}
+		}
 		patch, _ := json.Marshal(map[string]interface{}{"spec": spec})
 		if _, err := s.client.Resource(placementsResource).Namespace(s.namespace).Patch(
 			ctx, pname, types.MergePatchType, patch, metav1.PatchOptions{},
@@ -984,12 +996,55 @@ func validateModelSpec(spec *aigridv1.ModelSpec) error {
 				}
 			}
 		}
+		for i, e := range placement.GetClaimExpressions() {
+			if e == nil {
+				continue
+			}
+			switch e.GetOperator() {
+			case "In", "NotIn", "Exists", "DoesNotExist":
+			default:
+				return connect.Errorf(connect.CodeInvalidArgument, "spec.placement.claim_expressions[%d].operator %q is invalid", i, e.GetOperator())
+			}
+		}
+		if err := validateTolerations(placement.GetTolerations()); err != nil {
+			return err
+		}
 		if placement.NumberOfClusters != nil && *placement.NumberOfClusters < 0 {
 			return connect.NewError(connect.CodeInvalidArgument, "spec.placement.number_of_clusters must be non-negative")
 		}
 	}
 	if rollout := spec.GetRollout(); rollout != nil && spec.GetPlacement() == nil {
 		return connect.NewError(connect.CodeInvalidArgument, "spec.rollout requires spec.placement")
+	}
+	return nil
+}
+
+// validateTolerations applies the Placement Toleration rules
+// (open-cluster-management-io/api cluster/v1beta1/types_placement.go): the
+// operator is Equal (the CRD default when empty) or Exists, an empty key needs
+// Exists, Exists takes no value, and the effect, when set, is NoSelect,
+// PreferNoSelect or NoSelectIfNew (the CRD enum).
+func validateTolerations(tolerations []*aigridv1.ModelToleration) error {
+	for i, t := range tolerations {
+		if t == nil {
+			continue
+		}
+		switch t.GetOperator() {
+		case "", "Equal", "Exists":
+		default:
+			return connect.Errorf(connect.CodeInvalidArgument, "spec.placement.tolerations[%d].operator %q is invalid; use Equal or Exists", i, t.GetOperator())
+		}
+		if t.GetKey() == "" && t.GetOperator() != "Exists" {
+			return connect.Errorf(connect.CodeInvalidArgument, "spec.placement.tolerations[%d]: an empty key requires operator Exists", i)
+		}
+		if t.GetOperator() == "Exists" && t.GetValue() != "" {
+			return connect.Errorf(connect.CodeInvalidArgument, "spec.placement.tolerations[%d]: operator Exists takes no value", i)
+		}
+		switch t.GetEffect() {
+		case "", "NoSelect", "PreferNoSelect", "NoSelectIfNew":
+		default:
+			return connect.Errorf(connect.CodeInvalidArgument, "spec.placement.tolerations[%d].effect %q is invalid; use NoSelect, PreferNoSelect or NoSelectIfNew", i, t.GetEffect())
+		}
 	}
 	return nil
 }

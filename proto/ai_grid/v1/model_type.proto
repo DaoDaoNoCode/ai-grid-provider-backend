@@ -144,6 +144,38 @@ message ModelPlacement {
 
   // Cap on selected clusters. Unset means all matching.
   optional int32 number_of_clusters = 3;
+
+  // `spec.predicates[0].requiredClusterSelector.claimSelector.matchExpressions`:
+  // requirements over the ManagedCluster's `status.clusterClaims` (for example
+  // `platform.open-cluster-management.io`), AND-ed with `label_selector`. Same
+  // operators as a label requirement.
+  repeated ModelLabelSelectorRequirement claim_expressions = 4;
+
+  // `spec.tolerations`. The hub taints a cluster that is unreachable or
+  // unavailable with `NoSelect`; a Placement must tolerate the taint to keep
+  // such a cluster selected.
+  repeated ModelToleration tolerations = 5;
+}
+
+// One Placement toleration (`spec.tolerations[]`).
+message ModelToleration {
+  // Taint key, for example `cluster.open-cluster-management.io/unreachable`.
+  // Empty matches every key and requires operator `Exists`.
+  string key = 1;
+
+  // `Equal` (the default when empty) or `Exists`, which takes no value.
+  string operator = 2;
+
+  // Taint value for `Equal`.
+  string value = 3;
+
+  // Taint effect to tolerate: `NoSelect`, `PreferNoSelect` or
+  // `NoSelectIfNew`. Empty tolerates every effect.
+  string effect = 4;
+
+  // How long the taint is tolerated, counted from the taint's `timeAdded`.
+  // Unset tolerates it forever.
+  optional int64 toleration_seconds = 5;
 }
 
 // Label selector for Placement predicates.

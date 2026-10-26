@@ -1438,6 +1438,22 @@
           "type": "integer",
           "format": "int32",
           "description": "Cap on selected clusters. Unset means all matching."
+        },
+        "claim_expressions": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "$ref": "#/definitions/v1ModelLabelSelectorRequirement"
+          },
+          "description": "`spec.predicates[0].requiredClusterSelector.claimSelector.matchExpressions`:\nrequirements over the ManagedCluster's `status.clusterClaims` (for example\n`platform.open-cluster-management.io`), AND-ed with `label_selector`. Same\noperators as a label requirement."
+        },
+        "tolerations": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "$ref": "#/definitions/v1ModelToleration"
+          },
+          "description": "`spec.tolerations`. The hub taints a cluster that is unreachable or\nunavailable with `NoSelect`; a Placement must tolerate the taint to keep\nsuch a cluster selected."
         }
       },
       "description": "ACM Placement desired state (subset used by the Models API)."
@@ -1725,6 +1741,33 @@
         }
       },
       "description": "Observed state of a Model."
+    },
+    "v1ModelToleration": {
+      "type": "object",
+      "properties": {
+        "key": {
+          "type": "string",
+          "description": "Taint key, for example `cluster.open-cluster-management.io/unreachable`.\nEmpty matches every key and requires operator `Exists`."
+        },
+        "operator": {
+          "type": "string",
+          "description": "`Equal` (the default when empty) or `Exists`, which takes no value."
+        },
+        "value": {
+          "type": "string",
+          "description": "Taint value for `Equal`."
+        },
+        "effect": {
+          "type": "string",
+          "description": "Taint effect to tolerate: `NoSelect`, `PreferNoSelect` or\n`NoSelectIfNew`. Empty tolerates every effect."
+        },
+        "toleration_seconds": {
+          "type": "string",
+          "format": "int64",
+          "description": "How long the taint is tolerated, counted from the taint's `timeAdded`.\nUnset tolerates it forever."
+        }
+      },
+      "description": "One Placement toleration (`spec.tolerations[]`)."
     },
     "v1ModelWorkStatus": {
       "type": "object",
