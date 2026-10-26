@@ -12,6 +12,7 @@ package celfilter
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"sync"
 	"time"
@@ -110,10 +111,10 @@ func (f *Filter) Match(ctx context.Context, obj proto.Message, id string, now ti
 }
 
 func contextError(err error) error {
-	switch err {
-	case context.Canceled:
+	switch {
+	case errors.Is(err, context.Canceled):
 		return connect.NewError(connect.CodeCanceled, err.Error())
-	case context.DeadlineExceeded:
+	case errors.Is(err, context.DeadlineExceeded):
 		return connect.NewError(connect.CodeDeadlineExceeded, err.Error())
 	default:
 		return connect.Errorf(connect.CodeInternal, "%v", err)

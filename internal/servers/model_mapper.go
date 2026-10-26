@@ -19,8 +19,6 @@ const (
 	defaultGatewayName      = "openshift-ai-inference"
 	defaultGatewayNamespace = "openshift-ingress"
 
-	annotationCreatedAt = "ai-grid/created-at"
-
 	llmInferenceAPIVersion = "serving.kserve.io/v1alpha2"
 	llmInferenceKind       = "LLMInferenceService"
 
