@@ -566,7 +566,7 @@ func subscriptionUpdatePatch(stored, candidate, incoming *aigridv1.Subscription,
 		return patchBody
 	}
 	if paths.wholeSpec {
-		patchBody["spec"] = subscriptionSpecMap(candidate.GetSpec())
+		patchBody["spec"] = subscriptionSpecUpdateMap(candidate.GetSpec())
 		return patchBody
 	}
 	specPatch := map[string]interface{}{}

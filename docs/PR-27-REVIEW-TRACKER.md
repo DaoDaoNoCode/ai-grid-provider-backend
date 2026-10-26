@@ -29,7 +29,7 @@
 | 4 | — | Models Update writes unmasked spec.main fields | done | Exact main FieldMask paths; env-only no longer clears image |
 | 5 | — | Metadata maps merge instead of replace | done | Replace semantics via null removals; Models preserve owned labels |
 | 6 | — | Create compensation deletes preexisting Placement/MWRS | done | Compensate only UID-tracked creates from this call |
-| 7 | — | replicas↔scaling explicit null | pending | |
+| 7 | — | replicas↔scaling explicit null | done | Update patch emits null for cleared mode; subscription optionals too |
 | 8 | — | Subscription Delete swallows policy cleanup failure | pending | |
 | 9 | — | Reject negative Models List limit | pending | |
 | 10 | — | Models Delete K8s ResourceVersion precondition | pending | |
@@ -38,7 +38,7 @@
 | 13 | — | Locations (P7/P8) | pending | |
 | 14 | — | Subscription Delete resource_version / If-Match | pending | |
 | 15 | — | Agree models namespace | pending | |
-| 16 | — | resourceVersionToVersion int32 overflow→0 unlocks | pending | |
+| 16 | — | resourceVersionToVersion int32 overflow→0 unlocks | later | Deferred: fail-closed or wider type; shared helper + console string-version ADR |
 | 17 | — | Fakeinfra duplicated resource-handler (P3) | pending | |
 | 18 | — | Retire draft Models/Subscriptions surfaces | pending | |
 
@@ -115,14 +115,14 @@
 - **Decision:** Accepted — compensate only objects this Create call made.
 - **Implementation notes:** Create appends `createdObjectRef{gvr,name,uid}` after each successful create; `compensateCreate` deletes those refs in reverse with UID preconditions. Preexisting Placement on AlreadyExists is left alone (test `TestModelsCreatePlacementAlreadyExistsKeepsPreexisting`).
 
-### 7. replicas↔scaling explicit null — Status: `pending`
+### 7. replicas↔scaling explicit null — Status: `done`
 
 - **Source:** Theia #7; DaoDao #5
 - **Description:** Emit explicit null for removed mutually exclusive fields (replicas vs scaling), including optional Subscription clears.
 - **Pros:** CR will not keep both; matches ModelSpec contract.
 - **Cons:** Update-specific patch logic.
-- **Decision:**
-- **Implementation notes:**
+- **Decision:** Accepted — explicit nulls on Update merge patch.
+- **Implementation notes:** `modelSpecUpdatePatch` nulls `replicas` when switching to scaling and `scaling` when switching to replicas. Subscriptions whole-spec updates use `subscriptionSpecUpdateMap` to null cleared `tokenMetadata` / `inferencePriority` / `guardrails`. Test covers both mode transitions.
 
 ### 8. Subscription Delete swallows policy cleanup failure — Status: `pending`
 
@@ -196,13 +196,17 @@
 - **Decision:**
 - **Implementation notes:**
 
-### 16. resourceVersionToVersion int32 overflow→0 unlocks — Status: `pending`
+### 16. resourceVersionToVersion int32 overflow→0 unlocks — Status: `later`
 
 - **Source:** DaoDao #8
 - **Description:** Fail closed (or use a wider type) when resourceVersion→int32 overflows instead of returning 0 (which unlocks).
 - **Pros:** Long-lived hubs stay locked correctly.
 - **Cons:** Shared helper change; broader API version discussion.
-- **Decision:**
+- **Decision:** `later`
+- **Notes / TODO:**
+  - Deferred: fail-closed or wider type for `resourceVersionToVersion` when value does not fit int32 (currently returns 0 and unlocks).
+  - Touches shared helper (Clusters too); may need broader API version discussion with console string-version ADR.
+  - Revisit after merge-blocking P1/P2 items land.
 - **Implementation notes:**
 
 ### 17. Fakeinfra duplicated resource-handler (P3) — Status: `pending`

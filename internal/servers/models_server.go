@@ -314,7 +314,7 @@ func (s *ModelsServer) Update(ctx context.Context, req *aigridv1.ModelsUpdateReq
 		patchBody["metadata"] = patchMeta
 	}
 	if paths.anyLLM() {
-		patchBody["spec"] = modelSpecToLLMMap(merged.GetSpec(), id)
+		patchBody["spec"] = modelSpecUpdatePatch(merged.GetSpec(), id, paths)
 	}
 	if version != 0 {
 		meta, _ := patchBody["metadata"].(map[string]interface{})

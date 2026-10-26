@@ -537,6 +537,20 @@ func modelSpecToLLMMap(spec *aigridv1.ModelSpec, id string) map[string]interface
 	return out
 }
 
+// modelSpecUpdatePatch is like modelSpecToLLMMap but emits explicit nulls for
+// mutually exclusive fields cleared by the FieldMask (JSON Merge Patch omits
+// missing keys and would otherwise leave the old mode on the CR).
+func modelSpecUpdatePatch(spec *aigridv1.ModelSpec, id string, paths modelUpdatePaths) map[string]interface{} {
+	out := modelSpecToLLMMap(spec, id)
+	if paths.scaling && (spec == nil || spec.Replicas == nil) {
+		out["replicas"] = nil
+	}
+	if paths.replicas && (spec == nil || spec.GetScaling() == nil) {
+		out["scaling"] = nil
+	}
+	return out
+}
+
 func modelRouterToMap(router *aigridv1.ModelRouter) map[string]interface{} {
 	out := map[string]interface{}{}
 	managedRoute := true

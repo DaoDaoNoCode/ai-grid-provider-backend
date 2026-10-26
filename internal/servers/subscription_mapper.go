@@ -217,6 +217,22 @@ func subscriptionSpecMap(spec *aigridv1.SubscriptionSpec) map[string]interface{}
 	return out
 }
 
+// subscriptionSpecUpdateMap is like subscriptionSpecMap but emits null for
+// optional fields that are cleared so JSON Merge Patch removes them.
+func subscriptionSpecUpdateMap(spec *aigridv1.SubscriptionSpec) map[string]interface{} {
+	out := subscriptionSpecMap(spec)
+	if spec == nil || spec.GetTokenMetadata() == nil {
+		out["tokenMetadata"] = nil
+	}
+	if spec == nil || spec.InferencePriority == nil {
+		out["inferencePriority"] = nil
+	}
+	if spec == nil || len(spec.GetGuardrails()) == 0 {
+		out["guardrails"] = nil
+	}
+	return out
+}
+
 func ownerToUnstructured(owner *aigridv1.SubscriptionOwner) map[string]interface{} {
 	out := map[string]interface{}{
 		"groups": []interface{}{},

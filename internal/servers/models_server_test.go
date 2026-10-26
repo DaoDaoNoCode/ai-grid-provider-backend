@@ -300,6 +300,67 @@ func TestModelsCreateScalingOnly(t *testing.T) {
 	}
 }
 
+func TestModelsUpdateReplicasScalingMutualExclusionNulls(t *testing.T) {
+	t.Parallel()
+	client := newModelsClient()
+	srv := mustModelsServer(t, client)
+	ctx := context.Background()
+
+	if _, err := srv.Create(ctx, &aigridv1.ModelsCreateRequest{Object: sampleModel("mode-switch")}); err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+
+	_, err := srv.Update(ctx, &aigridv1.ModelsUpdateRequest{
+		Object: &aigridv1.Model{
+			Id: "mode-switch",
+			Spec: &aigridv1.ModelSpec{
+				Scaling: &aigridv1.ModelScaling{
+					MinReplicas: 1,
+					MaxReplicas: 3,
+					Keda:        true,
+					Triggers: []*aigridv1.ModelKedaTrigger{{
+						Type:     "cpu",
+						Metadata: map[string]string{"value": "70"},
+					}},
+				},
+			},
+		},
+		UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.scaling"}},
+	})
+	if err != nil {
+		t.Fatalf("replicas→scaling Update() error = %v", err)
+	}
+	llm, err := client.Resource(testLLMGVR).Namespace("ai-grid-internal-models").Get(ctx, "mode-switch", metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("get LLM: %v", err)
+	}
+	if _, found, _ := unstructured.NestedFieldNoCopy(llm.Object, "spec", "replicas"); found {
+		t.Fatalf("replicas key still present after scaling update: %#v", llm.Object["spec"])
+	}
+	if _, found, _ := unstructured.NestedMap(llm.Object, "spec", "scaling"); !found {
+		t.Fatal("expected scaling after update")
+	}
+
+	replicas := int32(2)
+	_, err = srv.Update(ctx, &aigridv1.ModelsUpdateRequest{
+		Object: &aigridv1.Model{
+			Id:   "mode-switch",
+			Spec: &aigridv1.ModelSpec{Replicas: &replicas},
+		},
+		UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.replicas"}},
+	})
+	if err != nil {
+		t.Fatalf("scaling→replicas Update() error = %v", err)
+	}
+	llm, err = client.Resource(testLLMGVR).Namespace("ai-grid-internal-models").Get(ctx, "mode-switch", metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("get LLM after reverse: %v", err)
+	}
+	if _, found, _ := unstructured.NestedFieldNoCopy(llm.Object, "spec", "scaling"); found {
+		t.Fatalf("scaling key still present after replicas update: %#v", llm.Object["spec"])
+	}
+}
+
 func TestModelsUpdateLabelsReplaceClearsRemovedKeys(t *testing.T) {
 	t.Parallel()
 	srv := mustModelsServer(t, newModelsClient())
