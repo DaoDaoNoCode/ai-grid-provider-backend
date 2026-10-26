@@ -126,11 +126,9 @@ func parseScenarios(events []ScenarioEvent, clusters map[string]*aigriddraftv1.M
 	return out, nil
 }
 
-// advance fires every due event, then runs the model controllers. It is
-// called under s.mu by every read and write, so transitions are evaluated
-// lazily from the clock and no goroutine is needed; the result is the same as
-// controllers that ran in between. It returns the scenario time (see
-// Server.scenarioTime) the models are derived at.
+// advance fires every due event. It is called under s.mu by every read and
+// write, so transitions are evaluated lazily from the clock and no goroutine
+// is needed. It returns the scenario time (see Server.scenarioTime).
 func (s *Server) advance() time.Time {
 	now := s.clock()
 	elapsed := time.Duration(float64(now.Sub(s.start)) * s.speed)
@@ -143,23 +141,13 @@ func (s *Server) advance() time.Time {
 		if !ok {
 			continue // detached earlier
 		}
-		// The controllers ran under the state before the event up to its
-		// time, so the models catch up to it first: what the rollout did in
-		// between does not depend on whether the fake was read.
-		s.reconcileModels(s.start.Add(sc.At.Duration()))
 		// The event happened at its scheduled wall-clock time, not when it
 		// was noticed, so lastTransitionTime and timeAdded are consistent.
 		at := s.start.Add(time.Duration(float64(sc.At.Duration()) / s.speed))
 		s.applyEvent(c, sc, at)
 		s.logger.Info("scenario", "cluster", sc.Cluster, "event", sc.Event, "at", sc.At.Duration())
-		// The placement controller reacts to the cluster change when it
-		// happens, so a cluster that joins a decision is recorded at the
-		// event's time, not when the fake was next polled.
-		s.reconcileModels(s.start.Add(sc.At.Duration()))
 	}
-	scenarioNow := s.start.Add(elapsed)
-	s.reconcileModels(scenarioNow)
-	return scenarioNow
+	return s.start.Add(elapsed)
 }
 
 func (s *Server) applyEvent(c *aigriddraftv1.ManagedCluster, sc *scenario, now time.Time) {

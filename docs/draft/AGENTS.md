@@ -14,7 +14,7 @@ draft here.
 | Every endpoint, JSON shape, body rule and error mapping | [the console's docs/plan/bff-api.md](https://github.com/ai-grid-cloud/ai-grid-provider-console/blob/main/docs/plan/bff-api.md) |
 | The draft proto the BFF and the fake compile against, and the deliberate stubs | [proto/README.md](proto/README.md) |
 | The fixture files and what each one seeds | [fixtures/default.md](fixtures/default.md), [fixtures/poc.md](fixtures/poc.md) |
-| What the fake and the BFF implement per area, deviations, invented texts, what remains | [areas/clusters.md](areas/clusters.md), [areas/tenants.md](areas/tenants.md), [areas/models.md](areas/models.md) |
+| What the fake and the BFF implement per area, deviations, invented texts, what remains | [areas/clusters.md](areas/clusters.md), [areas/tenants.md](areas/tenants.md) (Models/Subscriptions retired to `ai_grid.v1`) |
 | What the BFF returns for the shipped fixtures | [the console's mock/examples/](https://github.com/ai-grid-cloud/ai-grid-provider-console/blob/main/mock/examples) (below) |
 
 Background reading, not needed to build against the fake: [README.md](README.md) on why the
@@ -219,28 +219,15 @@ tenant has `resourceVersion` `"1"`. Replace the file with `{"unavailable": "<tex
 `{"realmMissing": true}` or `{"organizationsDisabled": true}` for Keycloak's failure modes
 (503, 412, 412).
 
-**Models** (`models.json`, namespace `ai-grid-models`):
-
-| Model | `phase` at start | What it shows |
-|---|---|---|
-| `tiny-llm` | `ready` | a hub deployment, no placement |
-| `granite-8b-instruct` | `ready` (`Complete`) | placed on enrolled and provisioned sites: `site-paris-1` at start; `site-madrid-1` joins at 300 s, when its lease recovers (`pending` until about 345 s, then `ready` on two sites) |
-| `mistral-7b-instruct` | `pending` (`NotAsExpected` at 0 s, then `Processing`) | created when the fake starts; a Progressive rollout one site at a time in cluster-name order: `site-frankfurt-1` at once (ready at about 45 s), `site-berlin-1` (selected once it joins at 20 s; applied at about 75 s, after `minSuccessTime` 30 s), `site-paris-1` (applied at about 150 s), `ready` at about 195 s; `site-madrid-1` is added at 300 s (`pending` again until about 345 s) |
-| `llama-3-70b` | `failed` (`ConfigNotFound`) | a preset the hub lacks |
-| `codellama-13b` | `pending` (`PlacementDecisionEmpty`) | a placement that matches no cluster |
-
 `settings.json` holds `latency` (40ms per RPC), `speed` and the hub capabilities (see
 [fixtures/default.md](fixtures/default.md) for what a missing file defaults to);
-`access.json` the tokens; `presets.json` the installed KServe presets; `scenarios.json` the
-cluster events below. A fixture that fails to load stops the fake with the reason.
+`access.json` the tokens; `scenarios.json` the cluster events below. A fixture that fails to load stops the fake with the reason.
 
 ## Timed scenarios
 
-Times below are scenario seconds after the fake starts (for a model: after it was created; for a
-placed model's site: after its agent first reported). `speed` in `settings.json` scales
+Times below are scenario seconds after the fake starts. `speed` in `settings.json` scales
 wall-clock time: an event at scenario time `t` happens `t / speed` real seconds in, so `10` plays
-the 300 s cluster scenario in 30 s (default `1`). It applies to the cluster events and the model
-lifecycles alike. Restart the fake to replay.
+the 300 s cluster scenario in 30 s (default `1`). Restart the fake to replay.
 
 | At | What changes |
 |---|---|
@@ -248,42 +235,16 @@ lifecycles alike. Restart the fake to replay.
 | 30 s | `edge-lyon-2` finishes detaching and disappears from the list |
 | 70 s | `site-berlin-1`'s `ManagedClusterImportSucceeded` condition turns True (and its `resourceVersion` moves); `status` stays `ready` |
 | 90 s, 130 s | `site-berlin-1` add-ons become available (three, then all seven) |
-| 300 s | `site-madrid-1` recovers its lease: `unknown` to `ready`; `granite-8b-instruct` and `mistral-7b-instruct` roll out to it (both `pending` until its work is ready, about 45 s later) |
+| 300 s | `site-madrid-1` recovers its lease: `unknown` to `ready` |
 
-A model created with `POST /api/v1/models` (and `mistral-7b-instruct` at start) walks
-KServe's conditions, counted from its creation:
-
-| At | `Ready` and what else changes |
-|---|---|
-| 0 s | no conditions yet |
-| 5 s | `False/WaitingForGateway`: nine conditions; presets combined (`appliedConfigs` filled), gateways ready, the Deployment and the route created, so `url` and the six `addresses` appear now, before the model is ready |
-| 15 s | `False/Progressing`: route, pool and scheduler accepted and ready |
-| 20 s | `False/MinimumReplicasUnavailable` |
-| 45 s | `True`, so `phase` reads `ready` (the Deployment's ready replica count is in the gRPC `status.workloads` only; the BFF does not return it yet) |
-
-A hub deployment's `phase` reads `pending` while it starts, with the reason KServe reports
-(`WaitingForGateway`, `Progressing`, `MinimumReplicasUnavailable`), and `failed` only for a
-reason that does not recover on its own (`ConfigNotFound`, `RefsInvalid`, `GatewaysNotReady`). A
-placed model's sites follow the same table, counted from the moment the site's agent reports its
-work: `Applied` at once, `Available` 2 s later, the spoke ready at 45 s; `Progressive` moves to
-the next site once the current one is ready and `minSuccessTime` has passed. Failures on demand:
-an unknown `baseRefs` entry stops at 5 s with `ConfigNotFound` (no `url`); a gateway other than
-`openshift-ingress/openshift-ai-inference` or `openshift-ingress/maas-default-gateway` is
-`RefsInvalid` "Gateway <ns>/<name> does not exist" from 5 s, with no `url`, while the workload
-still deploys; a `runtimeImage` or `modelName` (default: the model's `name`) containing `oom` or
-`fail` stays at `MinimumReplicasUnavailable` from 20 s for good, as KServe does (it never turns
-into `ProgressDeadlineExceeded`; `docs/draft/areas/models.md` has the source lines), so the model
-reads `pending` with that reason for good: no condition tells it apart from a slow start; on a
-spoke such a model keeps its work `Progressing` and the placed model reads
-`pending`/`Processing` for good; the rollout's `progressDeadline` times that cluster out (a
-`Progressive` rollout moves on to the next one), which no condition shows; a cluster labelled
-`ai-grid-mock/fail-apply=true` fails to apply its work: the model reads `failed`/`NotAsExpected`
-and the work `applied: "False"`, `available: "Unknown"`, with
-`Applied=False/AppliedManifestWorkFailed` "Failed to apply manifest work" (the manifest's own
-text, `Failed to apply manifest: the server doesn't have a resource type "LLMInferenceService"`,
-is in the gRPC status only).
+Models and Subscriptions are not in the draft fake; use the real `ai_grid.v1` servers on
+`make dev-fake` (fake hub fixtures).
 
 ## Errors worth building UI for
+
+Models and Subscriptions errors now come from the real `ai_grid.v1` servers (and the BFF in
+front of them), not the draft fake. Rows that still mention `/models` describe the console BFF
+against that real path.
 
 | Status | How to get it from the fake | Message |
 |---|---|---|

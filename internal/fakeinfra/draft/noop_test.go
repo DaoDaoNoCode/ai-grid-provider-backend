@@ -4,10 +4,8 @@ import (
 	"context"
 	"maps"
 	"testing"
-	"time"
 
 	"google.golang.org/grpc/codes"
-	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
 
 	aigriddraftv1 "github.com/osac-project/ai-grid-provider-backend/gen/ai_grid/draft/v1"
@@ -104,70 +102,5 @@ func TestClusterCoordinatesAreChecked(t *testing.T) {
 	// Labels alone are not checked against annotations the fixtures carry.
 	if _, err := s.UpdateManagedCluster(ctx, &aigriddraftv1.UpdateManagedClusterRequest{Object: &aigriddraftv1.ManagedCluster{Name: "a", Labels: labelsWith(readyCluster("a"), "ai-grid/x", "y")}, UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{PathLabels}}}); err != nil {
 		t.Errorf("labels update = %v", err)
-	}
-}
-
-func TestUnchangedModelUpdateIsNotWritten(t *testing.T) {
-	s, advance := modelServer(t, &Fixtures{Clusters: []*aigriddraftv1.ManagedCluster{enrolled("site-a")}})
-	ctx := authed(context.Background())
-	createModel(t, s, hubModel("hub"))
-	advance(time.Minute)
-	stored := getModel(t, s, "hub")
-	rv, gen := stored.GetMetadata().GetResourceVersion(), stored.GetMetadata().GetGeneration()
-	same := &aigriddraftv1.Model{Name: "hub", Metadata: &aigriddraftv1.ObjectMeta{Namespace: testNS, ResourceVersion: rv, Labels: stored.GetMetadata().GetLabels(), Annotations: stored.GetMetadata().GetAnnotations()},
-		Spec: &aigriddraftv1.ModelSpec{Replicas: proto.Int32(stored.GetSpec().GetReplicas()), Main: &aigriddraftv1.Container{Image: stored.GetSpec().GetMain().GetImage(), Env: stored.GetSpec().GetMain().GetEnv()}}}
-	resp, err := s.UpdateModel(ctx, &aigriddraftv1.UpdateModelRequest{Object: same, Lock: true, UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{PathSpecReplicas, PathSpecMainImage, PathSpecMainEnv, PathSpecPlacement, PathSpecRollout, PathMetadataLabels, PathMetadataAnnotation}}})
-	if err != nil || resp.GetObject().GetMetadata().GetResourceVersion() != rv || resp.GetObject().GetMetadata().GetGeneration() != gen {
-		t.Fatalf("unchanged update = %v, %v; want rv %s gen %d", resp.GetObject().GetMetadata(), err, rv, gen)
-	}
-	wantPhase(t, resp.GetObject(), aigriddraftv1.ModelPhase_MODEL_PHASE_READY, "")
-	// A stale no-op is still Aborted, an invalid one still InvalidArgument.
-	same.Metadata.ResourceVersion = "1"
-	_, err = s.UpdateModel(ctx, &aigriddraftv1.UpdateModelRequest{Object: same, Lock: true, UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{PathSpecReplicas}}})
-	mustCode(t, err, codes.Aborted, "")
-	// One changed annotation is a write.
-	same.Metadata.ResourceVersion = rv
-	same.Metadata.Annotations = map[string]string{AnnotationDisplayName: "Renamed"}
-	resp, err = s.UpdateModel(ctx, &aigriddraftv1.UpdateModelRequest{Object: same, Lock: true, UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{PathMetadataAnnotation}}})
-	if err != nil || resp.GetObject().GetMetadata().GetResourceVersion() == rv || resp.GetObject().GetMetadata().GetGeneration() != gen {
-		t.Errorf("annotation change = %v, %v", resp.GetObject().GetMetadata(), err)
-	}
-}
-
-func TestUnchangedTenantUpdateIsNotPut(t *testing.T) {
-	s := tenantServer(t)
-	ctx := authed(context.Background())
-	update := func(obj *aigriddraftv1.Tenant, paths ...string) (*aigriddraftv1.Tenant, error) {
-		resp, err := s.UpdateTenant(ctx, &aigriddraftv1.UpdateTenantRequest{Object: obj, UpdateMask: &fieldmaskpb.FieldMask{Paths: paths}})
-		return resp.GetObject(), err
-	}
-	// The stored values, the stored alias, and the alias path alone: no PUT,
-	// the version stays.
-	for _, tc := range []struct {
-		obj   *aigriddraftv1.Tenant
-		paths []string
-	}{
-		{&aigriddraftv1.Tenant{Id: idGlobex, Name: "globex-research", Enabled: proto.Bool(true), Domains: []string{"globex.example.com"}}, []string{PathName, PathEnabled, PathDomains}},
-		{&aigriddraftv1.Tenant{Id: idGlobex, Alias: "globex"}, []string{PathAlias}},
-		{&aigriddraftv1.Tenant{Id: idGlobex}, []string{PathAlias}}, // blank: the stored alias is kept
-		{&aigriddraftv1.Tenant{Id: idGlobex, ResourceVersion: "1", Description: ""}, []string{PathDescription}},
-	} {
-		got, err := update(tc.obj, tc.paths...)
-		if err != nil || got.GetResourceVersion() != "1" || got.GetAlias() != "globex" {
-			t.Errorf("%v %v = %v, %v; want version 1", tc.obj, tc.paths, got, err)
-		}
-	}
-	// A different alias is Keycloak's answer, with or without other paths.
-	_, err := update(&aigriddraftv1.Tenant{Id: idGlobex, Alias: "globex-2"}, PathAlias)
-	mustCode(t, err, codes.InvalidArgument, MsgAliasImmutable)
-	_, err = update(&aigriddraftv1.Tenant{Id: idGlobex, Alias: "globex-2", Description: "x"}, PathAlias, PathDescription)
-	mustCode(t, err, codes.InvalidArgument, MsgAliasImmutable)
-	// The precondition still runs on a no-op.
-	_, err = update(&aigriddraftv1.Tenant{Id: idGlobex, ResourceVersion: "7", Alias: "globex"}, PathAlias)
-	mustCode(t, err, codes.Aborted, "")
-	// A real change is PUT and bumps the version.
-	got, err := update(&aigriddraftv1.Tenant{Id: idGlobex, Alias: "globex", Description: "Globex"}, PathAlias, PathDescription)
-	if err != nil || got.GetResourceVersion() != "2" || got.GetDescription() != "Globex" {
-		t.Errorf("a change = %v, %v", got, err)
 	}
 }

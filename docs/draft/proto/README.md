@@ -12,13 +12,13 @@ shapes it starts from are in `docs/draft/research/backend-conventions.md` sectio
 
 ## What it is
 
-This backend's real API, `ai_grid.v1`, covers clusters and tenants so far. The console needs more than that, so it carries a
-**draft** of the next proto in `proto/ai_grid/draft/v1/`, split by type as the style guide in
-`docs/draft/research/backend-conventions.md` section 5 says (`ai_grid.proto`, `condition_type.proto`,
-`metadata_type.proto`, `managed_cluster_type.proto`, `managed_clusters_service.proto`,
-`tenant_type.proto`, `tenants_service.proto`, `model_type.proto`, `models_service.proto`, and the
-`subscriptions_service.proto`, `subscription_type.proto`, and `grid_service.proto`, whose
-`Grid/GetNetwork` and the whole of `catalog_items_service.proto` are still placeholders). It is the
+This backend's real API, `ai_grid.v1`, covers clusters, tenants, models and subscriptions.
+The console still needs Grid and Catalog, so the draft in `proto/ai_grid/draft/v1/` keeps
+`ai_grid.proto`, `condition_type.proto`, `metadata_type.proto`, `managed_cluster_type.proto`,
+`managed_clusters_service.proto`, `tenant_type.proto`, `tenants_service.proto`,
+`grid_service.proto` and `catalog_items_service.proto` (`Grid/GetNetwork` and CatalogItems
+are still placeholders). `model_*.proto` and `subscription_*.proto` were deleted when PR #27
+retired those areas to `ai_grid.v1`. It is the
 console's **proposal** to the backend team, nothing more: the shapes are the ones drafted in
 section 6 of that report, every file says so in its header, and the package is the
 draft's own (`ai_grid.draft.v1`, `go_package` `gen/ai_grid/draft/v1;aigriddraftv1`), not the
@@ -37,7 +37,7 @@ backend's `ai_grid.v1`.
   `ai_grid.v1.Tenants`, and protobuf-go panics when two registrations share a file path or a
   full name. Field names, numbers and types are unchanged, so the protojson and the binary
   encoding of every message are the same; the gRPC method paths and the full names (CEL's
-  `ai_grid.draft.v1.ModelPhase.MODEL_PHASE_READY`) carry the new package.
+  for example `ai_grid.draft.v1.ManagedClusterState`) carry the new package.
   The comments still name the console's paths (`mock/research/...`): here those pages are
   `docs/draft/research/...`.
 - **Generation.** `make generate` runs `proto/buf.gen.yaml` for `ai_grid.v1` (which excludes
@@ -78,7 +78,7 @@ What keeps it honest:
   `Unimplemented` answer, except for the methods listed in `intentionallyUnimplemented`
   (`fakebackend_test.go`), each with its reason: the placeholder `Grid/GetNetwork` and
   `CatalogItems` methods until they are agreed with the backend team, and `GetCurrentUser`,
-  which the BFF does not need yet (`Models` and `GetHubCapabilities` are implemented and
+  which the BFF does not need yet (`GetHubCapabilities` and Grid overview are implemented and
   probed like every other method). An entry whose
   method starts answering fails the test until the entry is removed, so the allowlist is
   always exactly the set of stubs.
@@ -109,6 +109,11 @@ console's derivation order documented on the enum. The flattened claim fields an
 `addon_status` map from that proposal were not added: the BFF derives them from
 `cluster_claims` and the `feature.open-cluster-management.io/addon-*` labels, which the proto
 already carries verbatim.
+
+**Retired (PR #27):** the Models and Subscriptions draft services (`model_type.proto`,
+`models_service.proto`, `subscription_type.proto`, `subscriptions_service.proto`) and their
+fake implementations were deleted when `ai_grid.v1` shipped those areas. The historical
+shape description below is kept for context; those files no longer exist in the draft.
 
 The Models area filled the placeholder `Models` service (`model_type.proto`,
 `models_service.proto`) with `Model { name, metadata, spec, status }`: the spec is the subset

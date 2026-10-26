@@ -7,16 +7,47 @@ import (
 	"testing"
 	"time"
 
+	"google.golang.org/genproto/googleapis/rpc/errdetails"
+	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
 
 	aigriddraftv1 "github.com/osac-project/ai-grid-provider-backend/gen/ai_grid/draft/v1"
 )
 
-// pocFixtures is the preset `make dev-fake-poc` loads: the PoC's four sites
-// and three models (shared/grid-clusters.mjs seedClusters() and
-// src/services/subscriptions/fixtures.ts at 62319b8), for the visual
-// comparison and the browser tests.
+// fixedNow is the clock of newRepoServer / newPoCServer.
+var fixedNow = time.Date(2026, 10, 16, 9, 0, 0, 0, time.UTC)
+
+// pocFixtures is the preset `make dev-fake-poc` loads.
 const pocFixtures = "../../../fixtures/draft/poc"
+
+// newRepoServer is a server on the shipped fixtures whose clock stands still
+// at fixedNow.
+func newRepoServer(t *testing.T) *Server {
+	t.Helper()
+	fx, err := Load(repoFixtures)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s, err := New(fx, slog.New(slog.DiscardHandler))
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.SetClock(func() time.Time { return fixedNow })
+	return s
+}
+
+// fieldViolations are the BadRequest field violations of err, by field.
+func fieldViolations(err error) map[string]string {
+	out := map[string]string{}
+	for _, d := range status.Convert(err).Details() {
+		if br, ok := d.(*errdetails.BadRequest); ok {
+			for _, v := range br.GetFieldViolations() {
+				out[v.GetField()] = v.GetDescription()
+			}
+		}
+	}
+	return out
+}
 
 // pocCluster is what the PoC shows for one of its sites.
 type pocCluster struct {
@@ -31,7 +62,6 @@ var pocClusters = []pocCluster{
 	{"site4", "sydney", "Sydney", "asia-pacific", "-33.8688", "151.2093", false, false},
 }
 
-// newPoCServer is a server on the preset whose clock stands still at fixedNow.
 func newPoCServer(t *testing.T) *Server {
 	t.Helper()
 	fx, err := Load(pocFixtures)
@@ -46,9 +76,9 @@ func newPoCServer(t *testing.T) *Server {
 	return s
 }
 
-// TestPoCPresetMatchesThePoC: the preset seeds what the PoC shows at
-// 62319b8, so a difference in the visual comparison comes from code, not
-// data, and it passes the checks PR 12's fixtures pass.
+// TestPoCPresetMatchesThePoC: the preset seeds the PoC's cluster and tenant
+// inventory. Models and subscriptions live in ai_grid.v1 (fake hub fixtures),
+// not the draft fake.
 func TestPoCPresetMatchesThePoC(t *testing.T) {
 	fx, err := Load(pocFixtures)
 	if err != nil {
@@ -56,7 +86,6 @@ func TestPoCPresetMatchesThePoC(t *testing.T) {
 	}
 	checkClustersLookLikeTheHub(t, fx)
 	checkClustersUseOnlyHubStrings(t, fx)
-	checkModelsUseOnlyKnownStrings(t, fx, nil)
 	if fx.Latency.Duration() != 0 || fx.Speed != 1 || fx.ManifestWorkReplicaSetEnabled == nil || !*fx.ManifestWorkReplicaSetEnabled || len(fx.Scenarios) != 0 {
 		t.Errorf("settings: latency %s, speed %v, MWRS %v, %d scenario events; want 0s, 1, true, none", fx.Latency.Duration(), fx.Speed, fx.ManifestWorkReplicaSetEnabled, len(fx.Scenarios))
 	}
@@ -87,39 +116,13 @@ func TestPoCPresetMatchesThePoC(t *testing.T) {
 		}
 	}
 
-	locations, err := s.ListLocations(ctx, &aigriddraftv1.ListLocationsRequest{})
-	if err != nil || !slices.Equal(locations.GetLocations(), []string{"site1", "site2", "site3"}) {
-		t.Fatalf("locations %v %v", locations, err)
-	}
-
-	models, err := s.ListModels(ctx, &aigriddraftv1.ListModelsRequest{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	wantModels := map[string]string{"granite-3-8b": "Granite 3.3 8B Instruct", "granite-research": "Granite research endpoint", "llama-3-70b": "Llama 3.3 70B Instruct"}
-	if len(models.GetItems()) != len(wantModels) {
-		t.Fatalf("%d models, want %d", len(models.GetItems()), len(wantModels))
-	}
-	for _, m := range models.GetItems() {
-		ann := m.GetMetadata().GetAnnotations()
-		if want, ok := wantModels[m.GetName()]; !ok || ann[AnnotationDisplayName] != want || ann["openshift.io/description"] != "" {
-			t.Errorf("model %s display name %q description %q, want %q and none", m.GetName(), ann[AnnotationDisplayName], ann["openshift.io/description"], want)
-		}
-		if m.GetMetadata().GetNamespace() != DefaultModelNamespace || m.GetSpec().GetPlacement() != nil {
-			t.Errorf("%s: namespace %q placement %v; want %s and no locations", m.GetName(), m.GetMetadata().GetNamespace(), m.GetSpec().GetPlacement(), DefaultModelNamespace)
-		}
-		wantPhase(t, m, aigriddraftv1.ModelPhase_MODEL_PHASE_READY, "")
-	}
-
 	tenants, err := s.ListTenants(ctx, &aigriddraftv1.ListTenantsRequest{})
 	if err != nil {
 		t.Fatal(err)
 	}
 	var tenantNames []string
-	tenantIDs := map[string]bool{}
 	for _, tn := range tenants.GetTenants() {
 		tenantNames = append(tenantNames, tn.GetName())
-		tenantIDs[tn.GetId()] = true
 		if tn.GetIdentityProvider() == nil || tn.GetResourceVersion() == "" || tn.GetCreateTime() == nil {
 			t.Errorf("%s: identity provider %v, version %q, created %v; want all three", tn.GetName(), tn.GetIdentityProvider(), tn.GetResourceVersion(), tn.GetCreateTime())
 		}
@@ -128,36 +131,10 @@ func TestPoCPresetMatchesThePoC(t *testing.T) {
 	if !slices.Equal(tenantNames, []string{"acme-robotics", "globex-research", "initech-labs"}) {
 		t.Errorf("organizations %v", tenantNames)
 	}
-
-	subs, err := s.ListSubscriptions(ctx, &aigriddraftv1.ListSubscriptionsRequest{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	var subNames []string
-	for _, sub := range subs.GetSubscriptions() {
-		subNames = append(subNames, sub.GetName())
-		// The form requires an organization, so every preset subscription has one.
-		if !tenantIDs[sub.GetTokenMetadata().GetOrganizationId()] {
-			t.Errorf("%s: organization %q is not a preset organization", sub.GetName(), sub.GetTokenMetadata().GetOrganizationId())
-		}
-		if sub.GetPhase() != phaseActive {
-			t.Errorf("%s: phase %s, want Active", sub.GetName(), sub.GetPhase())
-		}
-		info, err := s.GetSubscription(ctx, &aigriddraftv1.GetSubscriptionRequest{Name: sub.GetName()})
-		if err != nil {
-			t.Fatal(err)
-		}
-		if len(info.GetModelRefs()) != len(sub.GetModelRefs()) {
-			t.Errorf("%s: %d of %d model references resolve", sub.GetName(), len(info.GetModelRefs()), len(sub.GetModelRefs()))
-		}
-	}
-	if !slices.Equal(subNames, []string{"data-science", "engineering", "research"}) {
-		t.Errorf("subscriptions %v", subNames)
-	}
 }
 
 // TestPoCPresetEnrollsSite4AsProvisioning: as in the PoC, enrolling site4
-// makes it a member that is not provisioned, so it isn't a location yet.
+// makes it a member that is not provisioned.
 func TestPoCPresetEnrollsSite4AsProvisioning(t *testing.T) {
 	s := newPoCServer(t)
 	ctx := authed(context.Background())
@@ -176,9 +153,5 @@ func TestPoCPresetEnrollsSite4AsProvisioning(t *testing.T) {
 	}
 	if l := resp.GetObject().GetLabels(); l[LabelAIGridEnabled] != "true" || l[LabelAIGridProvisioned] == "true" {
 		t.Fatalf("site4 labels %v", l)
-	}
-	locations, err := s.ListLocations(ctx, &aigriddraftv1.ListLocationsRequest{})
-	if err != nil || !slices.Equal(locations.GetLocations(), []string{"site1", "site2", "site3"}) {
-		t.Fatalf("locations after enrolling site4 %v %v", locations, err)
 	}
 }

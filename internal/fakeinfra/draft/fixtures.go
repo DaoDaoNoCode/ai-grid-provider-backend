@@ -23,15 +23,6 @@ import (
 //	                      ai-grid realm (the dev hub today), or
 //	                      {"organizationsDisabled": true} for a realm whose
 //	                      organizations feature is off
-//	models.json           {"models": [Model...]} in protojson, plus
-//	                      {"bindings": {"<namespace>": ["global"]}} naming the
-//	                      ManagedClusterSets bound into a model namespace (a
-//	                      namespace not listed is bound to `global`; an empty
-//	                      list simulates a namespace without a binding)
-//	subscriptions.json    {"subscriptions": [Subscription...],
-//	                      "authPolicies": [AuthPolicy...]} in protojson
-//	presets.json          {"namespace": "...", "presets": [...]} the installed
-//	                      LLMInferenceServiceConfigs baseRefs resolve against
 //	access.json           who is a provider admin (the console's format; the
 //	                      fake hub reads its converted copy)
 //	settings.json         latency, scenario speed, hub capabilities
@@ -51,13 +42,6 @@ type Fixtures struct {
 	// Zero (not set) means 1.
 	Speed     float64
 	Scenarios []ScenarioEvent
-	// Models and what they resolve against.
-	Models        []*aigriddraftv1.Model
-	ModelBindings map[string][]string
-	Presets       *Presets
-	// MaaS subscriptions and the authorization policies paired with them.
-	Subscriptions []*aigriddraftv1.Subscription
-	AuthPolicies  []*aigriddraftv1.AuthPolicy
 	// Hub capabilities (settings.json). ManifestWorkReplicaSetEnabled nil
 	// means true; false mirrors the dev hub, where nothing reconciles an MWRS.
 	ManifestWorkReplicaSetEnabled *bool
@@ -195,72 +179,6 @@ func Load(dir string) (*Fixtures, error) {
 			}
 			fx.Speed = *doc.Speed
 		}
-	}
-
-	if raw, ok, err := readFile(filepath.Join(dir, "models.json")); err != nil {
-		return nil, err
-	} else if ok {
-		var doc struct {
-			Models   []json.RawMessage   `json:"models"`
-			Bindings map[string][]string `json:"bindings"`
-		}
-		if err := json.Unmarshal(raw, &doc); err != nil {
-			return nil, fmt.Errorf("models.json: %w", err)
-		}
-		for i, raw := range doc.Models {
-			m := &aigriddraftv1.Model{}
-			if err := protojson.Unmarshal(raw, m); err != nil {
-				return nil, fmt.Errorf("models.json model %d: %w", i, err)
-			}
-			fx.Models = append(fx.Models, m)
-		}
-		fx.ModelBindings = doc.Bindings
-		for ns, sets := range doc.Bindings {
-			for _, set := range sets {
-				if !knownClusterSets[set] {
-					return nil, fmt.Errorf("models.json bindings[%q]: ManagedClusterSet %q does not exist on the hub", ns, set)
-				}
-			}
-		}
-	}
-
-	if raw, ok, err := readFile(filepath.Join(dir, "subscriptions.json")); err != nil {
-		return nil, err
-	} else if ok {
-		var doc struct {
-			Subscriptions []json.RawMessage `json:"subscriptions"`
-			AuthPolicies  []json.RawMessage `json:"authPolicies"`
-		}
-		if err := json.Unmarshal(raw, &doc); err != nil {
-			return nil, fmt.Errorf("subscriptions.json: %w", err)
-		}
-		for i, m := range doc.Subscriptions {
-			sub := &aigriddraftv1.Subscription{}
-			if err := protojson.Unmarshal(m, sub); err != nil {
-				return nil, fmt.Errorf("subscriptions.json subscription %d: %w", i, err)
-			}
-			fx.Subscriptions = append(fx.Subscriptions, sub)
-		}
-		for i, m := range doc.AuthPolicies {
-			p := &aigriddraftv1.AuthPolicy{}
-			if err := protojson.Unmarshal(m, p); err != nil {
-				return nil, fmt.Errorf("subscriptions.json auth policy %d: %w", i, err)
-			}
-			fx.AuthPolicies = append(fx.AuthPolicies, p)
-		}
-	}
-
-	if raw, ok, err := readFile(filepath.Join(dir, "presets.json")); err != nil {
-		return nil, err
-	} else if ok {
-		var doc Presets
-		if err := json.Unmarshal(raw, &doc); err != nil {
-			return nil, fmt.Errorf("presets.json: %w", err)
-		}
-		if doc.Namespace == "" || len(doc.Names) == 0 {
-			return nil, errors.New("presets.json: namespace and presets are required")
-		}
-		fx.Presets = &doc
 	}
 
 	if raw, ok, err := readFile(filepath.Join(dir, "scenarios.json")); err != nil {

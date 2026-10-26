@@ -40,7 +40,7 @@
 | 15 | — | Agree models namespace | done | Default `ai-grid-models`; `AI_GRID_MODELS_NAMESPACE` override kept |
 | 16 | — | resourceVersionToVersion int32 overflow→0 unlocks | later | Deferred: fail-closed or wider type; shared helper + console string-version ADR |
 | 17 | — | Fakeinfra duplicated resource-handler (P3) | done | Shared writeNamespacedUpdate + decodeTypedObject |
-| 18 | — | Retire draft Models/Subscriptions surfaces | pending | |
+| 18 | — | Retire draft Models/Subscriptions surfaces | done | Draft protos, fake, fixtures, docs retired per workflow |
 
 ## How we use this
 
@@ -218,11 +218,11 @@
 - **Decision:** Accepted — dedupe Models NS and MaaS update paths.
 - **Implementation notes:** Extracted `writeNamespacedUpdate` + `decodeTypedObject` in `hub/resource_update.go`; `writeNSUpdate`/`writeMAASUpdate` and `decodeNSObject`/`decodeMAASObject` are thin wrappers. Behavior unchanged; `go test ./internal/fakeinfra/...` green.
 
-### 18. Retire draft Models/Subscriptions surfaces — Status: `pending`
+### 18. Retire draft Models/Subscriptions surfaces — Status: `done`
 
 - **Source:** Theia workflow note
 - **Description:** Delete draft Models/Subscriptions area now, or explicitly link a follow-up.
 - **Pros:** Advances draft retirement workflow.
 - **Cons:** Bigger cleanup; next PR OK.
-- **Decision:**
-- **Implementation notes:**
+- **Decision:** Accepted — complete retirement now (not a follow-up link).
+- **Implementation notes:** Removed draft `model_*.proto` / `subscription_*.proto` (+ gen), fake handlers (`models.go`, `subscriptions.go`, `kserve.go`, `placement.go`, `work.go`, `subscription/`), fixtures (`models.json`, `subscriptions.json`, `presets.json` in default+poc), `areas/models.md`, and ListLocations from the draft fake (P7 lives on `ai_grid.v1.Models`). Kept Grid, CatalogItems stubs, Clusters, Tenants, GetHubCapabilities. Updated registration, intentionallyUnimplemented expectations, validation FrontendOnly, draft docs, and tests. Shared helpers (`cTrue`/`ClusterSetDefault`, `newRepoServer`, GetHubCapabilities) moved out of deleted files.

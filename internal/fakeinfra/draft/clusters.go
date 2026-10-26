@@ -234,7 +234,7 @@ func (s *Server) UpdateManagedCluster(ctx context.Context, req *aigriddraftv1.Up
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	scenarioNow := s.advance()
+	s.advance()
 	c, ok := s.clusters[obj.GetName()]
 	if !ok {
 		return nil, notFound(obj.GetName())
@@ -277,7 +277,6 @@ func (s *Server) UpdateManagedCluster(ctx context.Context, req *aigriddraftv1.Up
 	}
 	reconcileMetadata(c, before)
 	s.bumpResourceVersion(c)
-	s.reconcileModels(scenarioNow) // Placements watch cluster labels and taints
 	s.logger.Debug("cluster updated", "name", c.GetName(), "paths", paths, "resourceVersion", c.GetResourceVersion())
 	return &aigriddraftv1.UpdateManagedClusterResponse{Object: withDerivedState(c)}, nil
 }

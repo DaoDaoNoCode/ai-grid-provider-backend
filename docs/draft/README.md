@@ -1,8 +1,8 @@
 # The console's draft API and its fake
 
 `ai_grid.draft.v1` is the console's proposal for the APIs this backend does not implement
-yet: managed cluster reads and edits, tenant CRUD, models, subscriptions, the grid overview
-and the catalog. This directory holds what came with it from the console: the research that
+yet: managed cluster reads and edits, tenant CRUD, the grid overview and the catalog.
+Models and Subscriptions shipped in `ai_grid.v1` (PR #27) and left the draft. This directory holds what came with it from the console: the research that
 says how the real systems behave, a plan per area for keeping the fake faithful, and the
 reference for the fake itself. The fixtures are fictional: every name, id, host and number in
 them is invented.
@@ -21,7 +21,7 @@ proposal next to the real API:
 | Here | In the console at `ac80c25` |
 |---|---|
 | `proto/ai_grid/draft/v1/` (package `ai_grid.draft.v1`), generated into `gen/ai_grid/draft/v1/` (`aigriddraftv1`) | `mock/proto/ai_grid/v1/` (package `ai_grid.v1`), `bff/gen/ai_grid/v1/` |
-| `internal/fakeinfra/draft/` (with `celfilter/`, `subscription/`, `validation/`) | `bff/internal/fakebackend/`, `bff/internal/subscription/`, `bff/internal/validation/` |
+| `internal/fakeinfra/draft/` (with `celfilter/`, `validation/`) | `bff/internal/fakebackend/`, `bff/internal/subscription/`, `bff/internal/validation/` |
 | `cmd/ai-grid-fake-infra --draft-address` (default `127.0.0.1:9094`) | `bff/cmd/fake-backend` (`127.0.0.1:9090`) |
 | `fixtures/draft/default/`, `fixtures/draft/poc/` | `mock/fixtures/`, `mock/fixtures-poc/` |
 | `internal/fakeinfra/draft/validation/cases.json` | `mock/validation/cases.json` (the console keeps its copy for its frontend tests; the two must stay in sync until the console no longer needs it) |
@@ -33,8 +33,8 @@ already has files at the same paths (`managed_cluster_type.proto`, `metadata_typ
 protobuf-go refuses to link two registrations of one name. Every message, field, number and
 type is otherwise the console's (only the file headers and two comments about the console's drift
 test were rewritten for this repository), so the protojson and the field encoding are unchanged;
-the gRPC method paths (`/ai_grid.draft.v1.Models/ListModels`) and the qualified names in CEL
-filters (`ai_grid.draft.v1.ModelPhase.MODEL_PHASE_READY`) carry the new package. The pages
+the gRPC method paths (for example `/ai_grid.draft.v1.ManagedClusters/ListManagedClusters`)
+and the qualified names in CEL filters carry the new package. The pages
 below were written in the console, where the draft was "`ai_grid.v1`"; read that as
 `ai_grid.draft.v1` wherever it means the draft. Paths starting with `ai-grid-provider-console/`
 are in the console repository, and `research/` is a dated record of what the research found,
@@ -72,6 +72,10 @@ edits) in `ai_grid.v1`:
 3. The console switches that area's calls from the draft client to the real `ai_grid.v1`
    client, and its development setup reaches the area through the real backend on
    `make dev-fake`'s gRPC port, not the draft port.
+
+PR #27 retired Models and Subscriptions this way: their draft protos, fake handlers,
+fixtures (`models.json`, `subscriptions.json`, `presets.json`) and `areas/models.md`
+were deleted; the real servers run against the fake hub.
 
 When nothing is left in the draft, `proto/ai_grid/draft`, `gen/ai_grid/draft`,
 `internal/fakeinfra/draft`, `fixtures/draft` and this directory are deleted, along with the
@@ -119,7 +123,7 @@ documentation, from the POC, or from the backend's own conventions. The sources 
    `ManifestWorkReplicaSet`, Keycloak Organizations, KServe `LLMInferenceService`, MaaS
    `MaaSModelRef`, `MaaSSubscription`, `MaaSAuthPolicy`, Kuadrant policies and the Praxis
    grid CRDs are the objects the console's pages stand for. Wherever the fake models one of
-   them (today clusters, tenants and models), it carries their fields, phases, condition
+   them (today clusters and tenants), it carries their fields, phases, condition
    types and reason strings verbatim. Fields the POC invented (`revision`, `status: Saved`,
    `hasDeployment`) do not exist here.
 3. **"Not implemented yet" is a normal state.** RPCs that are not agreed yet answer
@@ -136,9 +140,8 @@ documentation, from the POC, or from the backend's own conventions. The sources 
 5. **Time passes.** Objects do not appear Ready. They go through the same transitions the
    controllers drive, on a clock the fixtures control (`settings.json` `speed`): a cluster
    joins, imports and gains its add-ons in stages, a lost lease recovers, a cluster detaches
-   and goes away (`scenarios.json`); a model walks KServe's conditions to `Ready` or stops at
-   a failure, and a placed model rolls out site by site. Once the subscriptions area lands (plan 4
-   below), a subscription will wait for its models' rate-limit policies to be accepted.
+   and goes away (`scenarios.json`). Model and subscription lifecycles are no longer in the
+   draft fake; they run on the real `ai_grid.v1` servers against the fake hub.
 6. **No real data, ever.** Fixtures use `example.com`, invented UUIDs and fictional sites.
    Research notes quote field paths, string constants, versions and in-cluster object names
    from the real systems, never the dev hub's routes, cluster ids or people.
@@ -175,8 +178,8 @@ which reads `fixtures/default/access.json`, converted from the same tokens as
 
 `make dev-fake-poc` starts the same on the PoC preset (`fixtures/draft/poc/`): the PoC's four
 sites (`site1` San Francisco, `site2` New York, `site3` Brussels and the unenrolled `site4`
-Sydney), its three models, three organizations and three subscriptions, with no scenario
-events, so nothing changes over time. Organizations that a fixture lists without a version are
+Sydney), its three organizations (Models and Subscriptions are on the real API / fake hub),
+with no scenario events, so nothing changes over time. Organizations that a fixture lists without a version are
 loaded at version "1" (PR 12's loader), so a stale save is refused on every seeded
 organization. `fixtures/poc.md` lists the files. The console's browser tests run on this
 preset.
@@ -193,7 +196,7 @@ console's in-memory sibling of the fake for its Go tests.
 To call the draft by hand:
 
 ```sh
-grpcurl -plaintext -H 'authorization: Bearer dev-token' 127.0.0.1:9094 ai_grid.draft.v1.Models/ListModels
+grpcurl -plaintext -H 'authorization: Bearer dev-token' 127.0.0.1:9094 ai_grid.draft.v1.ManagedClusters/ListManagedClusters
 ```
 
 ## Fixtures (`fixtures/draft/default/`)
@@ -205,13 +208,11 @@ they came from. In short:
 |---|---|---|
 | `managedclusters.json` | `{"clusters": [ai_grid.v1.ManagedCluster...]}` in protojson | Full hub objects: the labels ACM writes, the console's `ai-grid/*` and `location` labels and `ai-grid/*` annotations, and a `status` with every condition. The hub's own `local-cluster` and at least one cluster in each state the ACM console distinguishes (ready, unknown, offline, importing, pending import, import failed, not accepted, detaching). |
 | `tenants.json` | `{"tenants": [ai_grid.v1.Tenant...]}` in protojson, or one error mode | Six fictional Keycloak organizations. In place of `tenants`, `{"unavailable": "<text>"}` makes every tenant RPC that passes the token and permission checks `Unavailable` (Keycloak cannot be reached), `{"realmMissing": true}` makes it `FailedPrecondition` as on the dev hub, where the `ai-grid` realm does not exist, and `{"organizationsDisabled": true}` does the same for a realm without Organizations. |
-| `models.json` | `{"models": [ai_grid.v1.Model...]}` in protojson, plus `bindings` | `LLMInferenceService` models, some placed on clusters, and the cluster sets bound into each model namespace. |
-| `presets.json` | plain JSON | The installed `LLMInferenceServiceConfig` presets that a model's `baseRefs` resolve against. |
 | `scenarios.json` | `{"events": [...]}` | Timed cluster transitions: an import in stages, a lease recovery, a detach. |
 | `access.json` | plain JSON | Who the fake hub treats as a provider admin; `viewer-token` is denied and `expired-token` rejected. |
 | `settings.json` | plain JSON | The per-RPC latency, the scenario clock's `speed`, and the hub capabilities `GetHubCapabilities` reports (the ManifestWorkReplicaSet gate, observability, ACM version). |
 
-The cluster, tenant and model entries are protojson, so they use the field names grpcurl
+The cluster and tenant entries are protojson, so they use the field names grpcurl
 shows and fail to load on any unknown field; a fixture that fails to load stops the fake with
 an error. The file envelopes and the other files are plain JSON and ignore unknown keys, so
 check their spelling: while `defaultAllowed` is true, a misspelled `deniedTokens` makes that
@@ -288,10 +289,10 @@ implements, nightly drift build.
 ## Plan per area
 
 Each area lists what the fake simulates, what the frontend builds against it, and what the
-backend has to agree to. Areas 1 to 3 are implemented in the fake and the BFF;
-`areas/<area>.md` is the reference for what each implements, where it deviates from the real
-systems and what remains, and the UI for them is being ported separately. Areas 4 to 6 are
-plans: their RPCs in the draft are stubs that answer `Unimplemented`.
+backend has to agree to. Areas 1 and 2 (Clusters, Tenants) are implemented in the draft fake;
+area 3 (Models) and Subscriptions from area 4 are retired to `ai_grid.v1`. `areas/<area>.md`
+is the reference for what remains in the draft. CatalogItems and Grid network are still
+stubs (`intentionallyUnimplemented`); Grid overview is implemented.
 
 ### 1. Clusters (ACM ManagedCluster), implemented
 
@@ -324,83 +325,20 @@ Backend ask: the `Tenants` CRUD proto as drafted in `proto/ai_grid/draft/v1/tena
 `id`; the gRPC code table in `research/keycloak.md` section 8.2 (today every failure is
 `Unknown`); a scoped service-account client instead of the master admin.
 
-### 3. Models (LLMInferenceService, Placement, ManifestWorkReplicaSet), implemented
+### 3. Models (LLMInferenceService, Placement, ManifestWorkReplicaSet), retired
 
-Fake: `CreateModel` admits a model with the API server's and the CRD's own validation messages
-and returns it with no conditions; the model then walks KServe's condition set to `Ready` on
-timers, or stops at a failure: an unknown `baseRef` (`ConfigNotFound`), an image or model name
-containing `oom` or `fail` (`MinimumReplicasUnavailable`), a Gateway that does not exist
-(`RefsInvalid`). A placed model gets a Placement whose decision is recomputed from cluster
-labels, taints and the cluster sets bound into its namespace, and a ManifestWorkReplicaSet
-whose per-cluster works are applied all at once or progressively; a cluster labelled
-`ai-grid-mock/fail-apply=true` fails to apply its work. `settings.json` reproduces the dev
-hub's disabled ManifestWorkReplicaSet gate with `FailedPrecondition`. See `areas/models.md`.
-Frontend: model list and detail with per-site status from the works, create wizard with the
-POC's inputs mapped to the real spec, delete blocked while a subscription references the
-model.
-Backend ask: the `Models` service and `Model` message as drafted in
-`proto/ai_grid/draft/v1/model*.proto`, with the phase derived server-side;
-`AiGrid/GetHubCapabilities` so the UI can explain a disabled gate; the ManifestWorkReplicaSet
-feature gate on the hub.
+Shipped in `ai_grid.v1` (PR #27). Draft protos, fake handlers, fixtures and `areas/models.md`
+were deleted per [When an area moves to the real backend](#when-an-area-moves-to-the-real-backend).
+Use the real Models server on `make dev-fake` (against the fake hub). Research remains in
+`research/models-maas.md`. `AiGrid/GetHubCapabilities` stays on the draft for Grid until that
+area ships.
 
-### 4. Catalog and subscriptions (MaaSModelRef, MaaSSubscription, MaaSAuthPolicy)
+### 4. Catalog and subscriptions — Catalog still draft; Subscriptions retired
 
-Fake: a catalog entry starts `Pending/NoPairingFound` and becomes `Ready` once a
-subscription and an auth policy reference it (in any phase; the pairing check ignores
-`status.phase`) and its model is ready, turns `Unhealthy` when its model fails; a
-subscription validates the CRD rules (`tokenRateLimits` or `unlimited`, window regex, limit
-range), has no phase until its first reconcile, is `Degraded`
-(`Ready=False/PartialFailure`) while the `TokenRateLimitPolicy` of any of its models isn't
-accepted, flips to `Active` once they all are, and optionally creates its `<name>-policy` auth
-policy with the same description annotation the hub uses. Whether the console creates the auth
-policy together with the subscription or leaves it to be managed separately is a product
-decision the research does not settle, so the fake should make the pairing a mode switch.
-
-The port implements this area from the research (`research/models-maas.md` 3.4 to 3.6, 8.1
-and 8.2), not from the PoC, whose `Saved` phase does not exist on the hub. What the fake does:
-
-- **Subscription lifecycle.** No phase is stored; it is derived on every read from the
-  scenario clock (`speed` in `settings.json` scales it). The controller never writes a
-  `Pending` phase: `status.phase` has no default, so a new subscription has none until its
-  first reconcile, which maas-api treats as unreconciled. After that it is `Degraded`
-  (`Ready=False`, `PartialFailure`, "1 of 1 TokenRateLimitPolicies not accepted"; the count
-  is the number of model references) only while its generated `TokenRateLimitPolicy` is not
-  `Accepted`, and then `Active`. Nothing checks that the policy is enforced, so an accepted
-  policy reads `Active`. The console shows `Active` as "Ready", as odh-dashboard does. A subscription whose models are all
-  missing is `Failed`, and one with some missing is `Degraded` with "N of M model references
-  are invalid or unavailable" (each missing one `NotFound`, "MaaSModelRef <ns>/<name> not
-  found"). Every reference has a `TokenRateLimitPolicy` status, as `checkTokenRateLimitHealth`
-  reports it: an unlimited one too (its policy carries the shared unlimited limit), and a
-  missing model's is `BackendNotReady`. One timer runs from create; an update does not restart
-  it. An update replaces the subscription: a field sent empty is cleared, and an update that
-  changes nothing keeps the version. A fixture
-  subscription without `createTime` plays the same lifecycle from the fake's start, and one
-  with a past `createTime` reads as settled. The fake never derives `Invalid`, and it models
-  only the `Ready` condition.
-- **Auth policies and registrations.** A managed policy (`<name>-policy`) goes `Pending`, then
-  `Active`; a policy whose models are all missing is `Failed`, and one with some missing is
-  `Degraded` ("N of M model references are missing"). Every model counts as registered through
-  a `MaaSModelRef` of the same name, whose status is returned with a subscription: `Pending`
-  until a subscription and an auth policy both name it, `Ready` when its model is ready and
-  `Unhealthy` when the model has failed (`Ready=False/BackendNotReady` in both, and
-  `RuntimeReady=False/RuntimeHealthFailure` while the model isn't ready).
-- **CRD messages, unverified.** The token rate limit rules (the window pattern
-  `^[1-9]\d{0,3}(s|m|h)$`, so `1d` is refused, and the limit range) use the wording of the
-  Kubernetes schema validator, because the research gives none. The two CEL messages
-  ("tokenRateLimits is required unless unlimited is true" and "tokenRateLimits must not be set
-  when unlimited is true") are the CRD's. **The window and limit messages are unverified
-  against a hub**: check them with a server-side dry run once one is at hand.
-- **Models are undeletable while referenced.** `DeleteModel` is `FailedPrecondition` while a
-  subscription or an auth policy references the model, including the fixtures' unmanaged
-  policies, which are never deleted with a subscription. The message names each referrer, for
-  example "auth policy engineering-policy, subscription engineering". A policy's bare model
-  names, and a reference without a namespace, count as the console's models namespace.
-
-Frontend: subscriptions table keyed on phase, create and edit with per-model quotas,
-tenant linkage through `tokenMetadata.organizationId`, a visible consistency check between a
-subscription's owners and the auth policies that cover its models.
-Backend ask: the `Catalog` and `Subscriptions` services in `research/models-maas.md`
-section 8.1, and a decision on the subscription and auth policy pairing.
+**Subscriptions** shipped in `ai_grid.v1` (PR #27) and left the draft with Models (same
+retirement workflow). **CatalogItems** remains a draft stub (`intentionallyUnimplemented`).
+The catalog pairing design and the historical subscription lifecycle are in
+`research/models-maas.md` (3.4–3.6, 8.1–8.2); implement CatalogItems against that when agreed.
 
 ### 5. Grid overview and monitoring (Thanos)
 

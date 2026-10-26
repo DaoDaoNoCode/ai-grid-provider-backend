@@ -26,12 +26,12 @@ func TestEmptyFilterMatchesEverything(t *testing.T) {
 }
 
 func TestNowIsTheCallersTime(t *testing.T) {
-	f, err := Compile(`now == timestamp("2026-10-15T12:00:00Z")`, &aigriddraftv1.Model{})
+	f, err := Compile(`now == timestamp("2026-10-15T12:00:00Z")`, &aigriddraftv1.Tenant{})
 	if err != nil {
 		t.Fatal(err)
 	}
 	for at, want := range map[time.Time]bool{time.Date(2026, 10, 15, 12, 0, 0, 0, time.UTC): true, time.Date(2026, 10, 15, 12, 0, 1, 0, time.UTC): false} {
-		if ok, err := f.Match(context.Background(), &aigriddraftv1.Model{}, "ns/m", at); ok != want || err != nil {
+		if ok, err := f.Match(context.Background(), &aigriddraftv1.Tenant{}, "t-1", at); ok != want || err != nil {
 			t.Errorf("at %v = %v, %v", at, ok, err)
 		}
 	}

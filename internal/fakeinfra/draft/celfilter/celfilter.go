@@ -1,6 +1,6 @@
 // Package celfilter evaluates the `filter` of a List request the way the
 // draft proto says the backend does (ListTenantsRequest.filter,
-// ListModelsRequest.filter): a CEL expression over `this`, the object as its
+// ListTenantsRequest.filter): a CEL expression over `this`, the object as its
 // proto message, and `now`, the server's current time, as OSAC's
 // fulfillment-service declares them (docs/draft/research/backend-conventions.md
 // section 4, "Request/response shapes"), evaluated in memory over the whole

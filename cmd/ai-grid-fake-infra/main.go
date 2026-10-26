@@ -116,8 +116,7 @@ func run(logger *slog.Logger, cfg config) error {
 		logger.Info("draft fixtures loaded", slog.String("dir", cfg.draftFixtures),
 			slog.Int("clusters", len(draftFx.Clusters)), slog.Int("tenants", len(draftFx.Tenants)),
 			slog.Bool("tenantsUnavailable", draftFx.TenantsUnavailable != ""), slog.Duration("latency", draftFx.Latency.Duration()),
-			slog.Int("scenarios", len(draftFx.Scenarios)), slog.Float64("speed", draftFx.Speed),
-			slog.Int("models", len(draftFx.Models)), slog.Int("subscriptions", len(draftFx.Subscriptions)))
+			slog.Int("scenarios", len(draftFx.Scenarios)), slog.Float64("speed", draftFx.Speed))
 	}
 
 	hubHost, _, err := net.SplitHostPort(cfg.hubAddress)
