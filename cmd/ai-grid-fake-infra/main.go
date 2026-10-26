@@ -41,7 +41,7 @@ func main() {
 	draftAddress := flag.String("draft-address", "127.0.0.1:9094", "gRPC listen address of the fake ai_grid.draft.v1 services; empty disables them")
 	draftFixtures := flag.String("draft-fixtures", "fixtures/draft/default", "fixtures directory of the draft fake (fixtures/draft/default or fixtures/draft/poc)")
 	kubeconfigOut := flag.String("kubeconfig-out", "bin/fake-kubeconfig", "where to write the kubeconfig for the backend's --kubeconfig")
-	hubCAOut := flag.String("hub-ca-out", "bin/fake-hub-ca.crt", "where to write the fake hub's CA certificate, for the backend's SEARCH_CA_FILE (the fake Search shares the hub's port); empty writes none")
+	hubCAOut := flag.String("hub-ca-out", "bin/fake-hub-ca.crt", "where to write the fake hub's CA certificate, for the backend's --search-ca-file (the fake Search shares the hub's port); empty writes none")
 	adminRealm := flag.String("keycloak-admin-realm", "master", "realm of the Keycloak admin user (the backend's KEYCLOAK_ADMIN_REALM)")
 	realm := flag.String("keycloak-realm", "ai-grid", "realm with Organizations (the backend's KEYCLOAK_REALM)")
 	username := flag.String("keycloak-admin-username", "admin", "Keycloak admin user name the password grant accepts (KEYCLOAK_ADMIN_USERNAME)")
@@ -173,7 +173,7 @@ func run(logger *slog.Logger, cfg config) error {
 		}
 		defer func() {
 			// Only the file this process wrote, if nobody replaced it since.
-			if err := devserve.RemoveHubCA(cfg.hubCAOut, writtenCA); err != nil {
+			if err := devserve.RemoveWritten(cfg.hubCAOut, writtenCA); err != nil {
 				logger.Warn("remove hub CA", slog.Any("error", err))
 			}
 		}()
@@ -185,7 +185,7 @@ func run(logger *slog.Logger, cfg config) error {
 	}
 	defer func() {
 		// Only the file this process wrote, if nobody replaced it since.
-		if err := devserve.RemoveKubeconfig(cfg.kubeconfigOut, written); err != nil {
+		if err := devserve.RemoveWritten(cfg.kubeconfigOut, written); err != nil {
 			logger.Warn("remove kubeconfig", slog.Any("error", err))
 		}
 	}()

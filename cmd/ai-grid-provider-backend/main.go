@@ -38,6 +38,10 @@ func main() {
 	address := flag.String("listen-address", ":8080", "gRPC listen address")
 	httpAddress := flag.String("http-listen-address", ":8081", "REST gateway and Swagger UI listen address")
 	kubeconfig := flag.String("kubeconfig", "", "path to kubeconfig; empty uses in-cluster service-account credentials")
+	var search searchSettings
+	flag.StringVar(&search.url, "search-api-url", acmsearch.DefaultURL, "ACM Search GraphQL endpoint, https only; \"off\" turns cluster GPUs off (a hub without Search, such as Kind)")
+	flag.StringVar(&search.caFile, "search-ca-file", "", "CA of ACM Search's serving certificate; empty uses the pod's service CA when present, else the system roots")
+	flag.BoolVar(&search.insecureSkipVerify, "search-insecure-skip-verify", false, "skip ACM Search's certificate check; only for a port-forward, so refused unless --search-api-url is a loopback address")
 	flag.Parse()
 
 	listener, err := net.Listen("tcp", *address)
@@ -56,7 +60,7 @@ func main() {
 		fmt.Fprintf(os.Stderr, "create Kubernetes client: %v\n", err)
 		os.Exit(1)
 	}
-	gpuInventory, err := newGPUInventory(restConfig)
+	gpuInventory, err := newGPUInventory(restConfig, search)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "ACM Search client: %v\n", err)
 		os.Exit(1)
@@ -277,6 +281,13 @@ func newRestConfig(kubeconfig string) (*rest.Config, error) {
 // Search API's serving certificate, in every pod.
 const serviceCAFile = "/var/run/secrets/kubernetes.io/serviceaccount/service-ca.crt"
 
+// searchSettings are the ACM Search flags newGPUInventory reads.
+type searchSettings struct {
+	url                string
+	caFile             string
+	insecureSkipVerify bool
+}
+
 // isLoopback reports whether host is localhost or a loopback IP address.
 func isLoopback(host string) bool {
 	if host == "localhost" {
@@ -295,31 +306,30 @@ func isLoopback(host string) bool {
 // certificate leaves Search calls anonymous: clusters then carry no GPUs,
 // and a warning says why.
 //
-//   - SEARCH_API_URL: the GraphQL endpoint (acmsearch.DefaultURL), https only;
-//     "off" turns GPUs off, for a hub without ACM Search such as Kind.
-//   - SEARCH_CA_FILE: the CA of Search's serving certificate; the service CA
+//   - --search-api-url: the GraphQL endpoint (acmsearch.DefaultURL), https
+//     only; "off" turns GPUs off, for a hub without ACM Search such as Kind.
+//   - --search-ca-file: the CA of Search's serving certificate; the service CA
 //     when the file exists, else the system roots.
-//   - SEARCH_INSECURE_SKIP_VERIFY=true: no certificate check, for a local run
-//     against a port-forwarded Search only, so refused unless SEARCH_API_URL
-//     is a loopback address: without the check, whoever answers at any other
-//     address would receive the credential.
-func newGPUInventory(config *rest.Config) (*servers.GPUInventory, error) {
-	url := getEnv("SEARCH_API_URL", acmsearch.DefaultURL)
+//   - --search-insecure-skip-verify: no certificate check, for a local run
+//     against a port-forwarded Search only, so refused unless
+//     --search-api-url is a loopback address: without the check, whoever
+//     answers at any other address would receive the credential.
+func newGPUInventory(config *rest.Config, s searchSettings) (*servers.GPUInventory, error) {
+	url := s.url
 	if url == "off" {
-		slog.Info("cluster GPUs off: SEARCH_API_URL=off")
+		slog.Info("cluster GPUs off: --search-api-url=off")
 		return nil, nil
 	}
 	// The credential goes with every query, so never over plain HTTP.
 	u, err := neturl.Parse(url)
 	if err != nil || u.Scheme != "https" || u.Host == "" {
-		return nil, fmt.Errorf("SEARCH_API_URL %q must be an https URL, or \"off\"", url)
+		return nil, fmt.Errorf("--search-api-url %q must be an https URL, or \"off\"", url)
 	}
-	skipVerify := os.Getenv("SEARCH_INSECURE_SKIP_VERIFY") == "true"
-	if skipVerify && !isLoopback(u.Hostname()) {
-		return nil, fmt.Errorf("SEARCH_INSECURE_SKIP_VERIFY=true is only for a port-forward on this machine; SEARCH_API_URL %q is not a loopback address", url)
+	if s.insecureSkipVerify && !isLoopback(u.Hostname()) {
+		return nil, fmt.Errorf("--search-insecure-skip-verify is only for a port-forward on this machine; --search-api-url %q is not a loopback address", url)
 	}
 	tlsConfig := &tls.Config{MinVersion: tls.VersionTLS12}
-	caFile := os.Getenv("SEARCH_CA_FILE")
+	caFile := s.caFile
 	if caFile == "" {
 		if _, err := os.Stat(serviceCAFile); err == nil {
 			caFile = serviceCAFile
@@ -328,16 +338,16 @@ func newGPUInventory(config *rest.Config) (*servers.GPUInventory, error) {
 	if caFile != "" {
 		pem, err := os.ReadFile(caFile)
 		if err != nil {
-			return nil, fmt.Errorf("read SEARCH_CA_FILE: %w", err)
+			return nil, fmt.Errorf("read --search-ca-file: %w", err)
 		}
 		pool := x509.NewCertPool()
 		if !pool.AppendCertsFromPEM(pem) {
-			return nil, fmt.Errorf("SEARCH_CA_FILE %s holds no PEM certificate", caFile)
+			return nil, fmt.Errorf("--search-ca-file %s holds no PEM certificate", caFile)
 		}
 		tlsConfig.RootCAs = pool
 	}
-	if skipVerify {
-		slog.Warn("ACM Search certificate not verified: SEARCH_INSECURE_SKIP_VERIFY=true is for local development only")
+	if s.insecureSkipVerify {
+		slog.Warn("ACM Search certificate not verified: --search-insecure-skip-verify is for local development only")
 		tlsConfig.InsecureSkipVerify = true // #nosec G402 -- opt-in for a local port-forward
 	}
 	base := http.DefaultTransport.(*http.Transport).Clone()

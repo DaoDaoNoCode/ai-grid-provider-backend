@@ -37,6 +37,8 @@ CONTAINER_ENGINE ?= $(shell command -v podman 2>/dev/null || command -v docker)
 
 # Local API (make run). Uses your kubeconfig against the current oc/kubectl context.
 LISTEN_ADDRESS ?= :8080
+# Extra backend flags for make run, for example the --search-* flags (README).
+RUN_ARGS ?=
 HTTP_LISTEN_ADDRESS ?= :8081
 KUBECONFIG_PATH ?= $(if $(KUBECONFIG),$(KUBECONFIG),$(HOME)/.kube/config)
 # Local Keycloak from `make keycloak-up` (port 8180 avoids clashing with gRPC/REST).
@@ -195,7 +197,7 @@ run: ## Run the API locally (gRPC :8080, REST/Swagger :8081)
 	$(GO) run ./cmd/ai-grid-provider-backend \
 		--listen-address=$(LISTEN_ADDRESS) \
 		--http-listen-address=$(HTTP_LISTEN_ADDRESS) \
-		--kubeconfig=$(KUBECONFIG_PATH)
+		--kubeconfig=$(KUBECONFIG_PATH) $(RUN_ARGS)
 
 # Requires a running API (make run) plus hub kubeconfig + Keycloak for full coverage.
 # SKIP_CLUSTERS=1 / SKIP_TENANTS=1 / SKIP_SUBSCRIPTIONS=1 to exercise a subset.

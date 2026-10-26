@@ -381,7 +381,7 @@ func TestClustersListSucceedsWithoutSearch(t *testing.T) {
 		t.Fatalf("items = %v", list.GetItems())
 	}
 
-	// No inventory at all (SEARCH_API_URL=off) is the same.
+	// No inventory at all (--search-api-url=off) is the same.
 	plain := mustClustersServer(t, client)
 	got, err := plain.Get(context.Background(), &aigridv1.ClustersGetRequest{Id: "site-a"})
 	if err != nil || got.GetObject().GetStatus().GetGpus() != nil {

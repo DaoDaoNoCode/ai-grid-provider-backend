@@ -44,7 +44,7 @@ rules:
       - ai-grid-policies.ai-grid-models-status
       - ai-grid-policies.ai-grid-catalog-status
     verbs: ["get"]
-  # Clusters List/Get read each cluster's GPUs from ACM Search (SEARCH_API_URL).
+  # Clusters List/Get read each cluster's GPUs from ACM Search (--search-api-url).
   # Search shows a caller the resources of every managed cluster when it may
   # get this virtual resource (stolostron/search-v2-api pkg/rbac/userData.go,
   # userHasAllAccess). That is broad: this credential may query everything

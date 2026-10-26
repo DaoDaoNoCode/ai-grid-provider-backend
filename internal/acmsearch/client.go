@@ -55,6 +55,33 @@ type Client struct {
 // token to wherever the answer pointed.
 var ErrRedirect = errors.New("search answered with a redirect, which is not followed")
 
+// ErrTooLarge is what a query returns when the answer is larger than
+// maxResponseBytes.
+var ErrTooLarge = errors.New("search answer is too large")
+
+// ErrDecode is what a query returns when the answer isn't the GraphQL JSON
+// the client expects.
+var ErrDecode = errors.New("search answer could not be decoded")
+
+// StatusError is what a query returns when Search answers with an HTTP status
+// other than 200 OK.
+type StatusError struct {
+	// Code is the HTTP status code, for example http.StatusUnauthorized.
+	Code int
+	// Status is the status line, and Body the start of the answer.
+	Status, Body string
+}
+
+func (e *StatusError) Error() string { return fmt.Sprintf("search answered %s: %s", e.Status, e.Body) }
+
+// GraphQLError is what a query returns when Search answers 200 OK with
+// GraphQL errors.
+type GraphQLError struct {
+	Messages []string
+}
+
+func (e *GraphQLError) Error() string { return "search: " + strings.Join(e.Messages, "; ") }
+
 // New returns a Client for the GraphQL endpoint url. It uses a copy of
 // httpClient that refuses redirects (ErrRedirect).
 func New(url string, httpClient *http.Client) *Client {
@@ -160,21 +187,21 @@ func (c *Client) GPUNodes(ctx context.Context, labelKeys ...string) ([]Node, err
 		return nil, fmt.Errorf("read search answer: %w", err)
 	}
 	if len(raw) > maxResponseBytes {
-		return nil, fmt.Errorf("search answer is larger than %d bytes", maxResponseBytes)
+		return nil, fmt.Errorf("%w: larger than %d bytes", ErrTooLarge, maxResponseBytes)
 	}
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("search answered %s: %s", resp.Status, snippet(raw))
+		return nil, &StatusError{Code: resp.StatusCode, Status: resp.Status, Body: snippet(raw)}
 	}
 	var out graphQLResponse
 	if err := json.Unmarshal(raw, &out); err != nil {
-		return nil, fmt.Errorf("decode search answer: %w", err)
+		return nil, fmt.Errorf("%w: %w", ErrDecode, err)
 	}
 	if len(out.Errors) > 0 {
 		msgs := make([]string, 0, len(out.Errors))
 		for _, e := range out.Errors {
 			msgs = append(msgs, e.Message)
 		}
-		return nil, errors.New("search: " + strings.Join(msgs, "; "))
+		return nil, &GraphQLError{Messages: msgs}
 	}
 	keep := make(map[string]bool, len(labelKeys))
 	for _, k := range labelKeys {
@@ -186,8 +213,8 @@ func (c *Client) GPUNodes(ctx context.Context, labelKeys ...string) ([]Node, err
 			node := Node{
 				Cluster: string(item.Cluster),
 				Name:    string(item.Name),
-				Labels:  ParsePairs(string(item.Label), keep),
-				Ready:   ParsePairs(string(item.Condition), map[string]bool{"Ready": true})["Ready"] == "True",
+				Labels:  parsePairs(string(item.Label), keep),
+				Ready:   parsePairs(string(item.Condition), map[string]bool{"Ready": true})["Ready"] == "True",
 			}
 			if node.Cluster == "" || node.Name == "" {
 				continue
@@ -204,10 +231,10 @@ func (c *Client) GPUNodes(ctx context.Context, labelKeys ...string) ([]Node, err
 	return nodes, nil
 }
 
-// ParsePairs reads the keys in keep from Search's "k=v; k=v" encoding of a
+// parsePairs reads the keys in keep from Search's "k=v; k=v" encoding of a
 // map, and skips the others. A pair without "=" is a key with an empty
 // value, as a label like node-role.kubernetes.io/worker= is written.
-func ParsePairs(s string, keep map[string]bool) map[string]string {
+func parsePairs(s string, keep map[string]bool) map[string]string {
 	out := map[string]string{}
 	for len(s) > 0 {
 		part, rest, _ := strings.Cut(s, "; ")

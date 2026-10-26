@@ -30,15 +30,19 @@ type SearchNode struct {
 	Ready bool `json:"ready"`
 }
 
+// searchFilter is one filter of a Search query: a property and the values
+// any of which it may have (search-v2-api's SearchFilter).
+type searchFilter struct {
+	Property string   `json:"property"`
+	Values   []string `json:"values"`
+}
+
 type searchQuery struct {
 	Query     string `json:"query"`
 	Variables struct {
 		Input []struct {
-			Filters []struct {
-				Property string   `json:"property"`
-				Values   []string `json:"values"`
-			} `json:"filters"`
-			Limit *int `json:"limit"`
+			Filters []searchFilter `json:"filters"`
+			Limit   *int           `json:"limit"`
 		} `json:"input"`
 	} `json:"variables"`
 }
@@ -108,10 +112,7 @@ func (h *Hub) searchNodes() []SearchNode {
 // searchMatches applies the filters the backend sends; each filter matches
 // when any of its values does. A label value is "key=value"
 // (pkg/resolver/searchHelper.go).
-func searchMatches(node SearchNode, filters []struct {
-	Property string   `json:"property"`
-	Values   []string `json:"values"`
-}) (bool, error) {
+func searchMatches(node SearchNode, filters []searchFilter) (bool, error) {
 	for _, f := range filters {
 		matched := false
 		for _, v := range f.Values {

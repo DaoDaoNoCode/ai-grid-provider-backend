@@ -100,12 +100,12 @@ KEYCLOAK_REALM="$KC_REALM" \
 KEYCLOAK_ADMIN_USERNAME="$KC_ADMIN_USERNAME" \
 KEYCLOAK_ADMIN_PASSWORD="$KC_ADMIN_PASSWORD" \
 AI_GRID_GIT_URL="$AI_GRID_GIT_URL" \
-SEARCH_API_URL="https://$DEV_HOST:$DEV_HUB_PORT/searchapi/graphql" \
-SEARCH_CA_FILE="$DEV_HUB_CA" \
 "$BACKEND_BIN" \
   --listen-address "$DEV_HOST:$DEV_GRPC_PORT" \
   --http-listen-address "$DEV_HOST:$DEV_HTTP_PORT" \
-  --kubeconfig "$DEV_KUBECONFIG" &
+  --kubeconfig "$DEV_KUBECONFIG" \
+  --search-api-url "https://$DEV_HOST:$DEV_HUB_PORT/searchapi/graphql" \
+  --search-ca-file "$DEV_HUB_CA" &
 backend_pid=$!
 
 cat <<EOF

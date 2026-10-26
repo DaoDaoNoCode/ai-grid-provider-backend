@@ -486,7 +486,7 @@ server's status codes and `metav1.Status` messages, optimistic concurrency on
 labels; Keycloak with 26.8's status codes and verbatim error messages. The
 backend gets `KEYCLOAK_URL=http://127.0.0.1:9093` with the fake's admin
 credentials, a kubeconfig carrying the fake ServiceAccount token, and
-`SEARCH_API_URL` / `SEARCH_CA_FILE` for the fake Search, which answers each
+`--search-api-url` / `--search-ca-file` for the fake Search, which answers each
 cluster's GPU nodes from `searchnodes.json`. The data
 is fictional; see [fixtures/README.md](fixtures/README.md) for what each
 preset contains and where it comes from.
@@ -748,9 +748,9 @@ startup). Settings:
 
 | Variable | Default | Meaning |
 | --- | --- | --- |
-| `SEARCH_API_URL` | `https://search-search-api.open-cluster-management.svc:4010/searchapi/graphql` | Search's GraphQL endpoint, https only; `off` turns GPUs off (the Kind deployment does). Redirects are never followed, so the credential can't be sent elsewhere |
-| `SEARCH_CA_FILE` | the pod's service CA (`/var/run/secrets/kubernetes.io/serviceaccount/service-ca.crt`), else the system roots | CA of Search's serving certificate |
-| `SEARCH_INSECURE_SKIP_VERIFY` | unset | `true` skips the certificate check; only for a local run against a port-forwarded Search, so the backend refuses to start with it unless `SEARCH_API_URL` is a loopback address (`127.0.0.1`, `::1` or `localhost`) |
+| `--search-api-url` | `https://search-search-api.open-cluster-management.svc:4010/searchapi/graphql` | Search's GraphQL endpoint, https only; `off` turns GPUs off (the Kind deployment does). Redirects are never followed, so the credential can't be sent elsewhere |
+| `--search-ca-file` | the pod's service CA (`/var/run/secrets/kubernetes.io/serviceaccount/service-ca.crt`), else the system roots | CA of Search's serving certificate |
+| `--search-insecure-skip-verify` | off | Skips the certificate check; only for a local run against a port-forwarded Search, so the backend refuses to start with it unless `--search-api-url` is a loopback address (`127.0.0.1`, `::1` or `localhost`) |
 
 The ClusterRole grants `get` on `searches/allManagedData`
 (`search.open-cluster-management.io`), which Search reads as "may see every
@@ -764,7 +764,7 @@ Locally against a hub (`make run`), port-forward Search and point the backend at
 
 ```sh
 oc -n open-cluster-management port-forward svc/search-search-api 4010:4010 &
-SEARCH_API_URL=https://127.0.0.1:4010/searchapi/graphql SEARCH_INSECURE_SKIP_VERIFY=true make run
+make run RUN_ARGS='--search-api-url=https://127.0.0.1:4010/searchapi/graphql --search-insecure-skip-verify'
 ```
 
 If Keycloak or Postgres pods are rejected by SCC, re-run with

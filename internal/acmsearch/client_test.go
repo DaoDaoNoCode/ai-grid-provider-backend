@@ -99,11 +99,17 @@ func TestGPUNodesErrors(t *testing.T) {
 		name   string
 		status int
 		body   string
-		want   string
+		check  func(error) bool
 	}{
-		{"unauthorized", http.StatusUnauthorized, `{"message":"Invalid token"}`, "401"},
-		{"GraphQL error", http.StatusOK, `{"errors":[{"message":"incorrect label format"}]}`, "incorrect label format"},
-		{"not JSON", http.StatusOK, `<html>`, "decode search answer"},
+		{"unauthorized", http.StatusUnauthorized, `{"message":"Invalid token"}`, func(err error) bool {
+			var se *StatusError
+			return errors.As(err, &se) && se.Code == http.StatusUnauthorized
+		}},
+		{"GraphQL error", http.StatusOK, `{"errors":[{"message":"incorrect label format"}]}`, func(err error) bool {
+			var ge *GraphQLError
+			return errors.As(err, &ge) && len(ge.Messages) == 1 && ge.Messages[0] == "incorrect label format"
+		}},
+		{"not JSON", http.StatusOK, `<html>`, func(err error) bool { return errors.Is(err, ErrDecode) }},
 	} {
 		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 			w.WriteHeader(tc.status)
@@ -111,15 +117,15 @@ func TestGPUNodesErrors(t *testing.T) {
 		}))
 		_, err := New(srv.URL, srv.Client()).GPUNodes(context.Background())
 		srv.Close()
-		if err == nil || !strings.Contains(err.Error(), tc.want) {
-			t.Errorf("%s: error = %v, want it to mention %q", tc.name, err, tc.want)
+		if !tc.check(err) {
+			t.Errorf("%s: error = %v (%T)", tc.name, err, err)
 		}
 	}
 }
 
 func TestParsePairs(t *testing.T) {
 	t.Parallel()
-	got := ParsePairs("a=1; b=; c=x=y; ; d; skipped=1", map[string]bool{"a": true, "b": true, "c": true, "d": true, "missing": true})
+	got := parsePairs("a=1; b=; c=x=y; ; d; skipped=1", map[string]bool{"a": true, "b": true, "c": true, "d": true, "missing": true})
 	want := map[string]string{"a": "1", "b": "", "c": "x=y", "d": ""}
 	if len(got) != len(want) {
 		t.Fatalf("got %v", got)
@@ -194,8 +200,8 @@ func TestGPUNodesRefusesAnOversizedAnswer(t *testing.T) {
 	}))
 	defer srv.Close()
 	_, err := New(srv.URL, srv.Client()).GPUNodes(context.Background())
-	if err == nil || !strings.Contains(err.Error(), "larger than") {
-		t.Fatalf("error = %v, want the size limit", err)
+	if !errors.Is(err, ErrTooLarge) {
+		t.Fatalf("error = %v, want ErrTooLarge", err)
 	}
 }
 
