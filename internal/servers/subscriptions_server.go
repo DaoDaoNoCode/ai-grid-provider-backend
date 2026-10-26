@@ -293,14 +293,37 @@ func (s *SubscriptionsServer) Update(ctx context.Context, req *aigridv1.Subscrip
 // MaaSSubscription. Policy-first ordering keeps Delete retryable: a failure
 // after the subscription is gone would otherwise leave a leaked policy that a
 // NotFound retry never reaches. Unmanaged same-named policies are left alone.
-// Nonzero resource_version is a K8s Delete precondition on the subscription
-// (Aborted on conflict). A missing subscription still attempts managed-policy
-// cleanup so a prior partial delete can finish, then returns NotFound.
+//
+// When resource_version is nonzero, the live subscription is compared first so
+// a stale delete changes nothing (Aborted before policy removal). The same
+// version is then passed as a K8s Delete precondition. A missing subscription
+// still attempts managed-policy cleanup so a prior partial delete can finish,
+// then returns NotFound.
 func (s *SubscriptionsServer) Delete(ctx context.Context, req *aigridv1.SubscriptionsDeleteRequest) (*aigridv1.SubscriptionsDeleteResponse, error) {
 	id := req.GetId()
 	if err := validateSubscriptionID(id); err != nil {
 		return nil, err
 	}
+
+	current, getErr := s.client.Resource(maasSubscriptionsResource).Namespace(s.namespace).Get(ctx, id, metav1.GetOptions{})
+	if getErr != nil {
+		if apierrors.IsNotFound(getErr) {
+			if err := s.deleteManagedAuthPolicy(ctx, id); err != nil {
+				return nil, err
+			}
+			return nil, mapSubscriptionAPIError("delete", id, getErr)
+		}
+		return nil, mapSubscriptionAPIError("get", id, getErr)
+	}
+	if rv := req.GetResourceVersion(); rv != 0 {
+		// Compare only when the hub reported a resourceVersion; empty means
+		// fall through to the Delete precondition (fake clients often omit it).
+		if currentRV := current.GetResourceVersion(); currentRV != "" &&
+			strconv.FormatInt(int64(rv), 10) != currentRV {
+			return nil, staleSubscriptionError("delete", id)
+		}
+	}
+
 	if err := s.deleteManagedAuthPolicy(ctx, id); err != nil {
 		return nil, err
 	}

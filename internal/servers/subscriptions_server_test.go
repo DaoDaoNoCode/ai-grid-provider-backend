@@ -199,6 +199,35 @@ func TestSubscriptionsDeleteResourceVersionPrecondition(t *testing.T) {
 	}
 }
 
+func TestSubscriptionsDeleteStaleResourceVersionLeavesPolicy(t *testing.T) {
+	t.Parallel()
+	client := newSubscriptionClient()
+	srv := mustSubscriptionsServer(t, client)
+	ctx := context.Background()
+	if _, err := srv.Create(ctx, &aigridv1.SubscriptionsCreateRequest{Object: sampleSubscription("stale-del")}); err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	live, err := client.Resource(testSubscriptionsGVR).Namespace("models-as-a-service").Get(ctx, "stale-del", metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("get created subscription: %v", err)
+	}
+	live.SetResourceVersion("3")
+	if _, err := client.Resource(testSubscriptionsGVR).Namespace("models-as-a-service").Update(ctx, live, metav1.UpdateOptions{}); err != nil {
+		t.Fatalf("seed resourceVersion: %v", err)
+	}
+	_, err = srv.Delete(ctx, &aigridv1.SubscriptionsDeleteRequest{
+		Id:              "stale-del",
+		ResourceVersion: 2,
+	})
+	assertConnectCode(t, err, connect.CodeAborted)
+	if _, getErr := client.Resource(testSubscriptionsGVR).Namespace("models-as-a-service").Get(ctx, "stale-del", metav1.GetOptions{}); getErr != nil {
+		t.Fatalf("subscription should remain after stale delete: %v", getErr)
+	}
+	if _, getErr := client.Resource(testAuthPoliciesGVR).Namespace("models-as-a-service").Get(ctx, "stale-del-policy", metav1.GetOptions{}); getErr != nil {
+		t.Fatalf("managed policy should remain after stale delete: %v", getErr)
+	}
+}
+
 func TestSubscriptionsDeleteFailsWhenManagedPolicyCleanupFails(t *testing.T) {
 	t.Parallel()
 	client := newSubscriptionClient()
