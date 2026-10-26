@@ -317,46 +317,7 @@ func (h *Hub) maasDelete(resource string) http.HandlerFunc {
 
 // writeMAASUpdate is the update path for a namespaced MaaS CR. Must be called under h.mu.
 func (h *Hub) writeMAASUpdate(w http.ResponseWriter, resource string, cur, next *unstructured.Unstructured, namespace, name string) {
-	if next.GetName() != name {
-		writeStatus(w, apierrors.NewBadRequest(fmt.Sprintf("the name of the object (%s) does not match the name on the URL (%s)", next.GetName(), name)))
-		return
-	}
-	if next.GetNamespace() != "" && next.GetNamespace() != namespace {
-		writeStatus(w, apierrors.NewBadRequest(fmt.Sprintf("the namespace of the object (%s) does not match the namespace on the URL (%s)", next.GetNamespace(), namespace)))
-		return
-	}
-	if next.GetResourceVersion() == "" {
-		writeStatus(w, apierrors.NewInvalid(maasResources[resource], name, field.ErrorList{
-			field.Invalid(field.NewPath("metadata", "resourceVersion"), uint64(0), "must be specified for an update"),
-		}))
-		return
-	}
-	if next.GetResourceVersion() != cur.GetResourceVersion() {
-		writeStatus(w, apierrors.NewConflict(
-			schema.GroupResource{Group: maasAPIGroup, Resource: resource}, name, errors.New(msgObjectModified)))
-		return
-	}
-	next.SetUID(cur.GetUID())
-	next.SetCreationTimestamp(cur.GetCreationTimestamp())
-	next.SetNamespace(namespace)
-	next.SetAPIVersion(maasAPIVersion)
-	next.SetKind(maasResources[resource].Kind)
-	if status, found, _ := unstructured.NestedFieldCopy(cur.Object, "status"); found {
-		_ = unstructured.SetNestedField(next.Object, status, "status")
-	} else {
-		unstructured.RemoveNestedField(next.Object, "status")
-	}
-	nextMeta := objectMetaFromUnstructured(next)
-	curMeta := objectMetaFromUnstructured(cur)
-	errs := apivalidation.ValidateObjectMetaUpdate(&nextMeta, &curMeta, field.NewPath("metadata"))
-	errs = append(errs, apivalidation.ValidateObjectMeta(&nextMeta, true, apivalidation.NameIsDNSSubdomain, field.NewPath("metadata"))...)
-	if len(errs) > 0 {
-		writeStatus(w, apierrors.NewInvalid(maasResources[resource], name, errs))
-		return
-	}
-	stored := h.commitMAAS(resource, cur, next)
-	h.logger.Debug("maas object updated", "resource", resource, "namespace", namespace, "name", name, "resourceVersion", stored.GetResourceVersion())
-	writeJSON(w, http.StatusOK, stored.DeepCopy().Object)
+	h.writeNamespacedUpdate(w, resource, maasResources[resource], maasAPIVersion, cur, next, namespace, name, true)
 }
 
 // commitMAAS stores next. Must be called under h.mu.
@@ -387,29 +348,7 @@ func (h *Hub) commitMAAS(resource string, cur, next *unstructured.Unstructured) 
 
 func decodeMAASObject(body []byte, resource, namespace, name string) (*unstructured.Unstructured, *apierrors.StatusError) {
 	gk := maasResources[resource]
-	var typeMeta metav1.TypeMeta
-	if err := json.Unmarshal(body, &typeMeta); err != nil {
-		return nil, apierrors.NewBadRequest(err.Error())
-	}
-	switch {
-	case typeMeta.Kind == "":
-		return nil, apierrors.NewBadRequest(fmt.Sprintf("Object 'Kind' is missing in '%s'", body))
-	case typeMeta.APIVersion != maasAPIVersion:
-		return nil, apierrors.NewBadRequest(fmt.Sprintf("the API version in the data (%s) does not match the expected API version (%s)", typeMeta.APIVersion, maasAPIVersion))
-	case typeMeta.Kind != gk.Kind:
-		return nil, apierrors.NewBadRequest(fmt.Sprintf("the kind in the data (%s) does not match the expected kind (%s)", typeMeta.Kind, gk.Kind))
-	}
-	obj := &unstructured.Unstructured{}
-	if err := obj.UnmarshalJSON(body); err != nil {
-		return nil, apierrors.NewBadRequest(err.Error())
-	}
-	if name != "" && obj.GetName() == "" {
-		obj.SetName(name)
-	}
-	if obj.GetNamespace() == "" {
-		obj.SetNamespace(namespace)
-	}
-	return obj, nil
+	return decodeTypedObject(body, maasAPIVersion, gk.Kind, namespace, name)
 }
 
 func seedMAASFixtures(h *Hub, fx *Fixtures) error {

@@ -39,7 +39,7 @@
 | 14 | — | Subscription Delete resource_version / If-Match | done | Delete resource_version → K8s precondition; Conflict→Aborted |
 | 15 | — | Agree models namespace | done | Default `ai-grid-models`; `AI_GRID_MODELS_NAMESPACE` override kept |
 | 16 | — | resourceVersionToVersion int32 overflow→0 unlocks | later | Deferred: fail-closed or wider type; shared helper + console string-version ADR |
-| 17 | — | Fakeinfra duplicated resource-handler (P3) | pending | |
+| 17 | — | Fakeinfra duplicated resource-handler (P3) | done | Shared writeNamespacedUpdate + decodeTypedObject |
 | 18 | — | Retire draft Models/Subscriptions surfaces | pending | |
 
 ## How we use this
@@ -209,14 +209,14 @@
   - Revisit after merge-blocking P1/P2 items land.
 - **Implementation notes:**
 
-### 17. Fakeinfra duplicated resource-handler (P3) — Status: `pending`
+### 17. Fakeinfra duplicated resource-handler (P3) — Status: `done`
 
 - **Source:** Theia P3
 - **Description:** Share decode→lock→validate→commit path in hub fake instead of duplicating resource-handler logic.
 - **Pros:** Less drift between fakes.
 - **Cons:** Refactor-only; defer OK.
-- **Decision:**
-- **Implementation notes:**
+- **Decision:** Accepted — dedupe Models NS and MaaS update paths.
+- **Implementation notes:** Extracted `writeNamespacedUpdate` + `decodeTypedObject` in `hub/resource_update.go`; `writeNSUpdate`/`writeMAASUpdate` and `decodeNSObject`/`decodeMAASObject` are thin wrappers. Behavior unchanged; `go test ./internal/fakeinfra/...` green.
 
 ### 18. Retire draft Models/Subscriptions surfaces — Status: `pending`
 
