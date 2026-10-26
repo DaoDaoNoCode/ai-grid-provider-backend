@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -22,6 +23,7 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
+	k8svalidation "k8s.io/apimachinery/pkg/util/validation"
 	"k8s.io/client-go/dynamic"
 )
 
@@ -982,29 +984,11 @@ func validateModelSpec(spec *aigridv1.ModelSpec) error {
 		}
 	}
 	if placement := spec.GetPlacement(); placement != nil {
-		sel := placement.GetLabelSelector()
-		if sel != nil {
-			for i, e := range sel.GetMatchExpressions() {
-				if e == nil {
-					continue
-				}
-				op := e.GetOperator()
-				switch op {
-				case "In", "NotIn", "Exists", "DoesNotExist":
-				default:
-					return connect.Errorf(connect.CodeInvalidArgument, "spec.placement.label_selector.match_expressions[%d].operator %q is invalid", i, op)
-				}
-			}
+		if err := validateRequirements("spec.placement.label_selector.match_expressions", placement.GetLabelSelector().GetMatchExpressions()); err != nil {
+			return err
 		}
-		for i, e := range placement.GetClaimExpressions() {
-			if e == nil {
-				continue
-			}
-			switch e.GetOperator() {
-			case "In", "NotIn", "Exists", "DoesNotExist":
-			default:
-				return connect.Errorf(connect.CodeInvalidArgument, "spec.placement.claim_expressions[%d].operator %q is invalid", i, e.GetOperator())
-			}
+		if err := validateRequirements("spec.placement.claim_expressions", placement.GetClaimExpressions()); err != nil {
+			return err
 		}
 		if err := validateTolerations(placement.GetTolerations()); err != nil {
 			return err
@@ -1019,6 +1003,44 @@ func validateModelSpec(spec *aigridv1.ModelSpec) error {
 	return nil
 }
 
+// validateRequirements applies metav1.LabelSelectorRequirement's rules
+// (k8s.io/apimachinery pkg/apis/meta/v1/validation
+// ValidateLabelSelectorRequirement; the claim selector uses the same type,
+// open-cluster-management-io/api cluster/v1beta1/types_placement.go
+// ClusterClaimSelector): the key is a qualified name, In and NotIn need at
+// least one value, Exists and DoesNotExist take none.
+func validateRequirements(path string, reqs []*aigridv1.ModelLabelSelectorRequirement) error {
+	for i, e := range reqs {
+		if e == nil {
+			continue
+		}
+		if errs := k8svalidation.IsQualifiedName(e.GetKey()); len(errs) > 0 {
+			return connect.Errorf(connect.CodeInvalidArgument, "%s[%d].key %q is invalid: %s", path, i, e.GetKey(), strings.Join(errs, "; "))
+		}
+		switch e.GetOperator() {
+		case "In", "NotIn":
+			if len(e.GetValues()) == 0 {
+				return connect.Errorf(connect.CodeInvalidArgument, "%s[%d]: operator %s needs at least one value", path, i, e.GetOperator())
+			}
+		case "Exists", "DoesNotExist":
+			if len(e.GetValues()) > 0 {
+				return connect.Errorf(connect.CodeInvalidArgument, "%s[%d]: operator %s takes no values", path, i, e.GetOperator())
+			}
+		default:
+			return connect.Errorf(connect.CodeInvalidArgument, "%s[%d].operator %q is invalid", path, i, e.GetOperator())
+		}
+	}
+	return nil
+}
+
+// tolerationKeyRE and maxTolerationKeyLength are the Placement CRD's
+// validation of spec.tolerations[].key (open-cluster-management-io/api
+// cluster/v1beta1/types_placement.go Toleration.Key: kubebuilder Pattern and
+// MaxLength=316): an optional DNS-subdomain prefix and a slash, then a name.
+var tolerationKeyRE = regexp.MustCompile(`^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])$`)
+
+const maxTolerationKeyLength = 316
+
 // validateTolerations applies the Placement Toleration rules
 // (open-cluster-management-io/api cluster/v1beta1/types_placement.go): the
 // operator is Equal (the CRD default when empty) or Exists, an empty key needs
@@ -1028,6 +1050,9 @@ func validateTolerations(tolerations []*aigridv1.ModelToleration) error {
 	for i, t := range tolerations {
 		if t == nil {
 			continue
+		}
+		if k := t.GetKey(); k != "" && (len(k) > maxTolerationKeyLength || !tolerationKeyRE.MatchString(k)) {
+			return connect.Errorf(connect.CodeInvalidArgument, "spec.placement.tolerations[%d].key %q is not a valid taint key", i, k)
 		}
 		switch t.GetOperator() {
 		case "", "Equal", "Exists":

@@ -3,6 +3,7 @@ package servers
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 
 	connect "connectrpc.com/connect/v2"
@@ -11,6 +12,7 @@ import (
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/client-go/dynamic/fake"
 )
 
 // externalPlacement is a Placement written outside the API (GitOps, oc
@@ -171,6 +173,14 @@ func TestModelsPlacementValidation(t *testing.T) {
 		{"empty key without Exists", &aigridv1.ModelPlacement{Tolerations: []*aigridv1.ModelToleration{{Effect: "NoSelect"}}}},
 		{"Exists with value", &aigridv1.ModelPlacement{Tolerations: []*aigridv1.ModelToleration{{Key: "k", Operator: "Exists", Value: "v"}}}},
 		{"toleration effect", &aigridv1.ModelPlacement{Tolerations: []*aigridv1.ModelToleration{{Key: "k", Effect: "NoSchedule"}}}},
+		{"claim without key", &aigridv1.ModelPlacement{ClaimExpressions: []*aigridv1.ModelLabelSelectorRequirement{{Operator: "Exists"}}}},
+		{"claim key not a label key", &aigridv1.ModelPlacement{ClaimExpressions: []*aigridv1.ModelLabelSelectorRequirement{{Key: "bad key", Operator: "Exists"}}}},
+		{"claim In without values", &aigridv1.ModelPlacement{ClaimExpressions: []*aigridv1.ModelLabelSelectorRequirement{{Key: "k", Operator: "In"}}}},
+		{"claim Exists with values", &aigridv1.ModelPlacement{ClaimExpressions: []*aigridv1.ModelLabelSelectorRequirement{{Key: "k", Operator: "Exists", Values: []string{"v"}}}}},
+		{"label NotIn without values", &aigridv1.ModelPlacement{LabelSelector: &aigridv1.ModelLabelSelector{
+			MatchExpressions: []*aigridv1.ModelLabelSelectorRequirement{{Key: "location", Operator: "NotIn"}}}}},
+		{"toleration key syntax", &aigridv1.ModelPlacement{Tolerations: []*aigridv1.ModelToleration{{Key: "Bad.Prefix/key", Operator: "Exists"}}}},
+		{"toleration key too long", &aigridv1.ModelPlacement{Tolerations: []*aigridv1.ModelToleration{{Key: strings.Repeat("a", 317), Operator: "Exists"}}}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -192,6 +202,56 @@ func TestModelsPlacementValidation(t *testing.T) {
 	}
 	if _, err := srv.Create(context.Background(), &aigridv1.ModelsCreateRequest{Object: ok}); err != nil {
 		t.Fatalf("Create() valid placement error = %v", err)
+	}
+}
+
+// writes returns the write actions the fake client saw.
+func writes(client *fake.FakeDynamicClient) []string {
+	var out []string
+	for _, a := range client.Actions() {
+		switch a.GetVerb() {
+		case "create", "update", "patch", "delete":
+			out = append(out, a.GetVerb()+" "+a.GetResource().Resource)
+		}
+	}
+	return out
+}
+
+// TestModelsInvalidPlacementWritesNothing: Create and Update reject an
+// invalid placement before any write to the hub.
+func TestModelsInvalidPlacementWritesNothing(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	invalid := &aigridv1.ModelPlacement{ClaimExpressions: []*aigridv1.ModelLabelSelectorRequirement{{Key: "k", Operator: "In"}}}
+
+	client := newModelsClient()
+	srv := mustModelsServer(t, client)
+	obj := sampleModel("no-write")
+	obj.Spec.Placement = invalid
+	_, err := srv.Create(ctx, &aigridv1.ModelsCreateRequest{Object: obj})
+	assertConnectCode(t, err, connect.CodeInvalidArgument)
+	if w := writes(client); len(w) != 0 {
+		t.Fatalf("Create wrote %v before rejecting", w)
+	}
+
+	llm := llmInferenceServiceFromModel(sampleModel("no-write"), "ai-grid-models")
+	llm.SetResourceVersion("1")
+	client = newModelsClient(llm, externalPlacement("model-no-write"))
+	srv = mustModelsServer(t, client)
+	got, err := srv.Get(ctx, &aigridv1.ModelsGetRequest{Id: "no-write"})
+	if err != nil {
+		t.Fatalf("Get() error = %v", err)
+	}
+	object := got.GetObject()
+	object.Spec.Placement.Tolerations = []*aigridv1.ModelToleration{{Key: "bad key", Operator: "Exists"}}
+	client.ClearActions()
+	_, err = srv.Update(ctx, &aigridv1.ModelsUpdateRequest{
+		Object:     object,
+		UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.placement", "spec.replicas", "metadata.labels"}},
+	})
+	assertConnectCode(t, err, connect.CodeInvalidArgument)
+	if w := writes(client); len(w) != 0 {
+		t.Fatalf("Update wrote %v before rejecting", w)
 	}
 }
 

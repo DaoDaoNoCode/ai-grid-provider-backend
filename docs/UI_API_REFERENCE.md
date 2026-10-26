@@ -552,6 +552,12 @@ Without `placement`, the model is hub-only. Gateway defaults to
 | `tolerations[]` | `spec.tolerations` | `{key, operator, value, effect, toleration_seconds}`; operator `Equal` (default) or `Exists`; effect `NoSelect`, `PreferNoSelect`, `NoSelectIfNew` or empty |
 | `number_of_clusters` | `spec.numberOfClusters` | Unset: all matching |
 
+Create and Update answer `InvalidArgument`, before writing anything, when a
+label or claim requirement has a key that is not a qualified label key,
+`In`/`NotIn` without values or `Exists`/`DoesNotExist` with values, or a
+toleration has an invalid key (the Placement CRD's pattern, at most 316
+characters), operator, value or effect.
+
 A Placement written outside the API reads back with all of these, so send
 the placement you loaded when you PATCH `spec.placement`: the update replaces
 the whole placement, and a field you leave out is removed.
