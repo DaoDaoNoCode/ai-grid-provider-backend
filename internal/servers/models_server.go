@@ -301,7 +301,7 @@ func (s *ModelsServer) Update(ctx context.Context, req *aigridv1.ModelsUpdateReq
 	if len(patchMeta) > 0 {
 		patchBody["metadata"] = patchMeta
 	}
-	if paths.llmSpec {
+	if paths.anyLLM() {
 		patchBody["spec"] = modelSpecToLLMMap(merged.GetSpec(), id)
 	}
 	if version != 0 {
@@ -329,7 +329,7 @@ func (s *ModelsServer) Update(ctx context.Context, req *aigridv1.ModelsUpdateReq
 		updated = current
 	}
 
-	if paths.placement || paths.rollout || paths.llmSpec {
+	if paths.placement || paths.rollout || paths.anyLLM() {
 		if err := s.syncPlacementSideEffects(ctx, merged, updated); err != nil {
 			return nil, err
 		}
@@ -550,7 +550,24 @@ func (s *ModelsServer) ensureNotReferenced(ctx context.Context, id string) error
 }
 
 type modelUpdatePaths struct {
-	labels, annotations, llmSpec, placement, rollout bool
+	labels, annotations bool
+	replicas            bool
+	main                bool // whole spec.main
+	mainImage           bool
+	mainEnv             bool
+	mainRequests        bool
+	mainLimits          bool
+	model               bool
+	baseRefs            bool
+	runtime             bool
+	router              bool
+	scaling             bool
+	placement, rollout  bool
+}
+
+func (p modelUpdatePaths) anyLLM() bool {
+	return p.replicas || p.main || p.mainImage || p.mainEnv || p.mainRequests || p.mainLimits ||
+		p.model || p.baseRefs || p.runtime || p.router || p.scaling
 }
 
 func parseModelUpdateMask(mask *fieldmaskpb.FieldMask) (modelUpdatePaths, error) {
@@ -565,13 +582,30 @@ func parseModelUpdateMask(mask *fieldmaskpb.FieldMask) (modelUpdatePaths, error)
 			paths.labels = true
 		case p == "metadata.annotations" || strings.HasPrefix(p, "metadata.annotations."):
 			paths.annotations = true
-		case p == "spec.replicas",
-			p == "spec.main", p == "spec.main.image", p == "spec.main.env", strings.HasPrefix(p, "spec.main."),
-			p == "spec.model", strings.HasPrefix(p, "spec.model."),
-			p == "spec.base_refs", p == "spec.runtime",
-			p == "spec.router", strings.HasPrefix(p, "spec.router."),
-			p == "spec.scaling", strings.HasPrefix(p, "spec.scaling."):
-			paths.llmSpec = true
+		case p == "spec.replicas":
+			paths.replicas = true
+		case p == "spec.main":
+			paths.main = true
+		case p == "spec.main.image":
+			paths.mainImage = true
+		case p == "spec.main.env" || strings.HasPrefix(p, "spec.main.env."):
+			paths.mainEnv = true
+		case p == "spec.main.requests" || strings.HasPrefix(p, "spec.main.requests."):
+			paths.mainRequests = true
+		case p == "spec.main.limits" || strings.HasPrefix(p, "spec.main.limits."):
+			paths.mainLimits = true
+		case strings.HasPrefix(p, "spec.main."):
+			return modelUpdatePaths{}, connect.Errorf(connect.CodeInvalidArgument, "update_mask path %q is not supported", path)
+		case p == "spec.model" || strings.HasPrefix(p, "spec.model."):
+			paths.model = true
+		case p == "spec.base_refs":
+			paths.baseRefs = true
+		case p == "spec.runtime":
+			paths.runtime = true
+		case p == "spec.router" || strings.HasPrefix(p, "spec.router."):
+			paths.router = true
+		case p == "spec.scaling" || strings.HasPrefix(p, "spec.scaling."):
+			paths.scaling = true
 		case p == "spec.placement" || strings.HasPrefix(p, "spec.placement."):
 			paths.placement = true
 		case p == "spec.rollout" || strings.HasPrefix(p, "spec.rollout."):
@@ -598,58 +632,75 @@ func mergeModelUpdate(current, incoming *aigridv1.Model, paths modelUpdatePaths)
 		} else {
 			meta = proto.Clone(meta).(*aigridv1.Metadata)
 		}
-		if paths.labels && incoming.GetMetadata() != nil {
-			meta.Labels = incoming.GetMetadata().GetLabels()
+		if paths.labels {
+			if incoming.GetMetadata() != nil {
+				meta.Labels = incoming.GetMetadata().GetLabels()
+			} else {
+				meta.Labels = nil
+			}
 		}
-		if paths.annotations && incoming.GetMetadata() != nil {
-			meta.Annotations = incoming.GetMetadata().GetAnnotations()
+		if paths.annotations {
+			if incoming.GetMetadata() != nil {
+				meta.Annotations = incoming.GetMetadata().GetAnnotations()
+			} else {
+				meta.Annotations = nil
+			}
 		}
 		out.Metadata = meta
 	}
-	if incoming.GetSpec() == nil {
+	if !paths.anyLLM() && !paths.placement && !paths.rollout {
 		return out
 	}
 	in := incoming.GetSpec()
-	if paths.llmSpec {
-		if in.GetMain() != nil {
-			main := out.Spec.GetMain()
-			if main == nil {
-				main = &aigridv1.ModelContainer{}
-			} else {
-				main = proto.Clone(main).(*aigridv1.ModelContainer)
-			}
-			main.Image = in.GetMain().GetImage()
-			if in.GetMain().Env != nil {
-				main.Env = in.GetMain().GetEnv()
-			}
-			if len(in.GetMain().GetRequests()) > 0 {
-				main.Requests = in.GetMain().GetRequests()
-			}
-			if len(in.GetMain().GetLimits()) > 0 {
-				main.Limits = in.GetMain().GetLimits()
-			}
-			out.Spec.Main = main
+	if in == nil {
+		in = &aigridv1.ModelSpec{}
+	}
+	if paths.main {
+		out.Spec.Main = in.GetMain()
+	} else if paths.mainImage || paths.mainEnv || paths.mainRequests || paths.mainLimits {
+		main := out.Spec.GetMain()
+		if main == nil {
+			main = &aigridv1.ModelContainer{}
+		} else {
+			main = proto.Clone(main).(*aigridv1.ModelContainer)
 		}
-		if in.GetModel() != nil {
-			out.Spec.Model = in.GetModel()
+		inMain := in.GetMain()
+		if inMain == nil {
+			inMain = &aigridv1.ModelContainer{}
 		}
-		if in.BaseRefs != nil {
-			out.Spec.BaseRefs = in.GetBaseRefs()
+		if paths.mainImage {
+			main.Image = inMain.GetImage()
 		}
-		if in.GetRuntime() != "" {
-			out.Spec.Runtime = in.GetRuntime()
+		if paths.mainEnv {
+			main.Env = inMain.GetEnv()
 		}
-		if in.GetRouter() != nil {
-			out.Spec.Router = in.GetRouter()
+		if paths.mainRequests {
+			main.Requests = inMain.GetRequests()
 		}
-		if in.GetScaling() != nil {
-			out.Spec.Scaling = in.GetScaling()
-			out.Spec.Replicas = nil
+		if paths.mainLimits {
+			main.Limits = inMain.GetLimits()
 		}
-		if in.Replicas != nil {
-			out.Spec.Replicas = in.Replicas
-			out.Spec.Scaling = nil
-		}
+		out.Spec.Main = main
+	}
+	if paths.model {
+		out.Spec.Model = in.GetModel()
+	}
+	if paths.baseRefs {
+		out.Spec.BaseRefs = in.GetBaseRefs()
+	}
+	if paths.runtime {
+		out.Spec.Runtime = in.GetRuntime()
+	}
+	if paths.router {
+		out.Spec.Router = in.GetRouter()
+	}
+	if paths.scaling {
+		out.Spec.Scaling = in.GetScaling()
+		out.Spec.Replicas = nil
+	}
+	if paths.replicas {
+		out.Spec.Replicas = in.Replicas
+		out.Spec.Scaling = nil
 	}
 	if paths.placement {
 		out.Spec.Placement = in.GetPlacement()

@@ -26,7 +26,7 @@
 | 1 | — | Kind RBAC incomplete for Models | done | Kind ClusterRole aligned with OpenShift Models RBAC |
 | 2 | — | Subscription Update: merge mask before validate | done | Merge stored+mask paths before validate; reject unsupported paths |
 | 3 | — | List maps Forbidden→Internal | done | Typed K8s→Connect mapper on Models/Subscriptions List + coveringAuthPolicies |
-| 4 | — | Models Update writes unmasked spec.main fields | pending | |
+| 4 | — | Models Update writes unmasked spec.main fields | done | Exact main FieldMask paths; env-only no longer clears image |
 | 5 | — | Metadata maps merge instead of replace | pending | |
 | 6 | — | Create compensation deletes preexisting Placement/MWRS | pending | |
 | 7 | — | replicas↔scaling explicit null | pending | |
@@ -88,14 +88,14 @@
 - **Decision:** Accepted — List/auth-policy join must not collapse Forbidden to Internal.
 - **Implementation notes:** Models List uses `mapModelAPIError`; Subscriptions List and `coveringAuthPolicies` use `mapSubscriptionAPIError` (NotFound still returns empty). Tests assert Forbidden → PermissionDenied for Models List, Subscriptions List, and Get covering policies.
 
-### 4. Models Update writes unmasked spec.main fields — Status: `pending`
+### 4. Models Update writes unmasked spec.main fields — Status: `done`
 
 - **Source:** Theia #4; DaoDao #3
 - **Description:** Apply only exact FieldMask paths on Models Update; possibly bring PR #31.
 - **Pros:** Fixes console BFF empty-container bug; honors FieldMask contract.
 - **Cons:** Careful mask/patch logic; regression tests; cherry-pick conflicts possible.
-- **Decision:**
-- **Implementation notes:**
+- **Decision:** Accepted — apply only FieldMask-selected main fields.
+- **Implementation notes:** Expanded `modelUpdatePaths` with exact LLM/main subfields (`spec.main.image`, `spec.main.env`, …). `mergeModelUpdate` applies only selected fields so an env-only patch keeps the stored image. Regression test `TestModelsUpdateEnvOnlyPreservesImage`.
 
 ### 5. Metadata maps merge instead of replace — Status: `pending`
 

@@ -260,6 +260,43 @@ func TestModelsCreateScalingOnly(t *testing.T) {
 	}
 }
 
+func TestModelsUpdateEnvOnlyPreservesImage(t *testing.T) {
+	t.Parallel()
+	srv := mustModelsServer(t, newModelsClient())
+	ctx := context.Background()
+
+	created, err := srv.Create(ctx, &aigridv1.ModelsCreateRequest{Object: sampleModel("env-only")})
+	if err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	wantImage := created.GetObject().GetSpec().GetMain().GetImage()
+	if wantImage == "" {
+		t.Fatal("expected create to set image")
+	}
+
+	updated, err := srv.Update(ctx, &aigridv1.ModelsUpdateRequest{
+		Object: &aigridv1.Model{
+			Id: "env-only",
+			Spec: &aigridv1.ModelSpec{
+				Main: &aigridv1.ModelContainer{
+					Env: []*aigridv1.ModelEnvVar{{Name: "FOO", Value: "bar"}},
+				},
+			},
+		},
+		UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.main.env"}},
+	})
+	if err != nil {
+		t.Fatalf("Update() error = %v", err)
+	}
+	if got := updated.GetObject().GetSpec().GetMain().GetImage(); got != wantImage {
+		t.Fatalf("image = %q, want %q (env-only mask must not clear image)", got, wantImage)
+	}
+	env := updated.GetObject().GetSpec().GetMain().GetEnv()
+	if len(env) != 1 || env[0].GetName() != "FOO" || env[0].GetValue() != "bar" {
+		t.Fatalf("env = %#v", env)
+	}
+}
+
 func TestModelsUpdateStaleVersion(t *testing.T) {
 	t.Parallel()
 	srv := mustModelsServer(t, newModelsClient())
