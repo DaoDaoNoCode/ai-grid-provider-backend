@@ -84,6 +84,9 @@ func (b *SubscriptionsServerBuilder) Build() (*SubscriptionsServer, error) {
 // List returns MaaSSubscription objects from the configured namespace.
 // Pipeline: map CRs → CEL filter → allowlisted order → offset/limit → enrich page.
 func (s *SubscriptionsServer) List(ctx context.Context, req *aigridv1.SubscriptionsListRequest) (*aigridv1.SubscriptionsListResponse, error) {
+	if err := validateListLimit(req.Limit); err != nil {
+		return nil, err
+	}
 	list, err := s.client.Resource(maasSubscriptionsResource).Namespace(s.namespace).List(ctx, metav1.ListOptions{})
 	if err != nil {
 		if apierrors.IsNotFound(err) {

@@ -4,6 +4,7 @@ import (
 	"strconv"
 	"strings"
 
+	connect "connectrpc.com/connect/v2"
 	aigridv1 "github.com/osac-project/ai-grid-provider-backend/gen/ai_grid/v1"
 	"google.golang.org/protobuf/types/known/timestamppb"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -108,6 +109,13 @@ func replaceStringMapPatch(current, next, preserve map[string]string) map[string
 		}
 	}
 	return out
+}
+
+func validateListLimit(limit *int32) error {
+	if limit != nil && *limit < 0 {
+		return connect.NewError(connect.CodeInvalidArgument, "limit must not be negative")
+	}
+	return nil
 }
 
 func applyListWindow[T any](items []T, offset, limit *int32) (page []T, total int32) {

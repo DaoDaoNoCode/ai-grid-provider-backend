@@ -31,7 +31,7 @@
 | 6 | — | Create compensation deletes preexisting Placement/MWRS | done | Compensate only UID-tracked creates from this call |
 | 7 | — | replicas↔scaling explicit null | done | Update patch emits null for cleared mode; subscription optionals too |
 | 8 | — | Subscription Delete swallows policy cleanup failure | done | Managed AuthPolicy cleanup errors fail Delete |
-| 9 | — | Reject negative Models List limit | pending | |
+| 9 | — | Reject negative Models List limit | done | Models + Subscriptions validate limit < 0 → InvalidArgument |
 | 10 | — | Models Delete K8s ResourceVersion precondition | pending | |
 | 11 | — | Model phase NotAsExpected→FAILED too aggressive | pending | |
 | 12 | — | Fill rollout.works (+ P13 fields) | pending | |
@@ -133,14 +133,14 @@
 - **Decision:** Accepted — fail Delete when managed policy get/delete fails.
 - **Implementation notes:** After subscription delete, managed AuthPolicy get/delete errors map via `mapSubscriptionAPIError` (NotFound still succeeds). Unmanaged same-named policies remain untouched. Test asserts Internal when policy delete fails.
 
-### 9. Reject negative Models List limit — Status: `pending`
+### 9. Reject negative Models List limit — Status: `done`
 
 - **Source:** Theia #9
 - **Description:** Return InvalidArgument when `limit < 0`, with a test; also check Subscriptions List.
 - **Pros:** Matches proto; cheap fix.
 - **Cons:** Should also cover Subscriptions List for consistency.
-- **Decision:**
-- **Implementation notes:**
+- **Decision:** Accepted — honor proto contract on Models and Subscriptions.
+- **Implementation notes:** `validateListLimit` rejects `limit < 0` before paging on Models and Subscriptions List. Tests cover `limit=-1`.
 
 ### 10. Models Delete K8s ResourceVersion precondition — Status: `pending`
 

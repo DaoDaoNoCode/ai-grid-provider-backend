@@ -109,6 +109,9 @@ func (b *ModelsServerBuilder) Build() (*ModelsServer, error) {
 
 // List returns models from the configured namespace.
 func (s *ModelsServer) List(ctx context.Context, req *aigridv1.ModelsListRequest) (*aigridv1.ModelsListResponse, error) {
+	if err := validateListLimit(req.Limit); err != nil {
+		return nil, err
+	}
 	list, err := s.client.Resource(llmInferenceServicesResource).Namespace(s.namespace).List(ctx, metav1.ListOptions{})
 	if err != nil {
 		if apierrors.IsNotFound(err) {
@@ -392,6 +395,7 @@ func (s *ModelsServer) Delete(ctx context.Context, req *aigridv1.ModelsDeleteReq
 	}
 	return &aigridv1.ModelsDeleteResponse{}, nil
 }
+
 
 func (s *ModelsServer) enrichPlacement(ctx context.Context, m *aigridv1.Model) {
 	if m == nil {

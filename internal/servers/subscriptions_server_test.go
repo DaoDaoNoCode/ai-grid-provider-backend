@@ -405,6 +405,14 @@ func TestSubscriptionsUpdateMergeMaskBeforeValidate(t *testing.T) {
 	assertConnectCode(t, err, connect.CodeInvalidArgument)
 }
 
+func TestSubscriptionsListRejectsNegativeLimit(t *testing.T) {
+	t.Parallel()
+	srv := mustSubscriptionsServer(t, newSubscriptionClient())
+	neg := int32(-1)
+	_, err := srv.List(context.Background(), &aigridv1.SubscriptionsListRequest{Limit: &neg})
+	assertConnectCode(t, err, connect.CodeInvalidArgument)
+}
+
 func TestSubscriptionsListForbiddenMapsToPermissionDenied(t *testing.T) {
 	t.Parallel()
 	client := newSubscriptionClient()

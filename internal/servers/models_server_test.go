@@ -39,6 +39,14 @@ func TestModelsServerRequiresClient(t *testing.T) {
 	}
 }
 
+func TestModelsListRejectsNegativeLimit(t *testing.T) {
+	t.Parallel()
+	srv := mustModelsServer(t, newModelsClient())
+	neg := int32(-1)
+	_, err := srv.List(context.Background(), &aigridv1.ModelsListRequest{Limit: &neg})
+	assertConnectCode(t, err, connect.CodeInvalidArgument)
+}
+
 func TestModelsListForbiddenMapsToPermissionDenied(t *testing.T) {
 	t.Parallel()
 	client := newModelsClient()
