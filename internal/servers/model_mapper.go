@@ -45,6 +45,13 @@ var (
 	manifestWorkReplicaSetsResource = schema.GroupVersionResource{
 		Group: "work.open-cluster-management.io", Version: "v1alpha1", Resource: "manifestworkreplicasets",
 	}
+	manifestWorksResource = schema.GroupVersionResource{
+		Group: "work.open-cluster-management.io", Version: "v1", Resource: "manifestworks",
+	}
+
+	// Labels OCM sets on ManifestWorks owned by a ManifestWorkReplicaSet.
+	labelMWRSLegacy    = "work.open-cluster-management.io/manifestworkreplicaset"
+	labelPlacementName = "work.open-cluster-management.io/placementname"
 
 	modelNameRE     = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$`)
 	modelURISchemes = []string{"hf://", "oci://", "s3://", "pvc://", "http://", "https://"}
@@ -452,18 +459,60 @@ func enrichModelFromMWRS(model *aigridv1.Model, mwrs *unstructured.Unstructured)
 		}
 	}
 	model.Status.Rollout = rs
+	deriveModelPhaseFromRollout(model)
+}
+
+// deriveModelPhaseFromRollout sets status.phase from MWRS rollout summary and
+// per-cluster works (call after works are populated when available).
+func deriveModelPhaseFromRollout(model *aigridv1.Model) {
+	if model == nil || model.Status == nil || model.Status.Rollout == nil {
+		return
+	}
+	rs := model.Status.Rollout
 	if rs.RolledOut && rs.Applied {
 		model.Status.Phase = aigridv1.ModelPhase_MODEL_PHASE_READY
-	} else if mwrsHasFailedOrDegradedWork(rs) {
-		// True apply failure / degraded work — not mere NotAsExpected during rollout.
+		return
+	}
+	if mwrsHasFailedOrDegradedWork(rs) {
 		model.Status.Phase = aigridv1.ModelPhase_MODEL_PHASE_FAILED
 		if rs.Reason != "" {
 			model.Status.Reason = rs.Reason
 		}
-	} else if model.Status.Phase == aigridv1.ModelPhase_MODEL_PHASE_UNSPECIFIED || rs.Reason == "NotAsExpected" {
-		// NotAsExpected is common while agents have not reported yet; stay PENDING.
+		return
+	}
+	if model.Status.Phase == aigridv1.ModelPhase_MODEL_PHASE_UNSPECIFIED || rs.Reason == "NotAsExpected" {
 		model.Status.Phase = aigridv1.ModelPhase_MODEL_PHASE_PENDING
 		model.Status.Reason = rs.Reason
+	}
+}
+
+// modelWorkStatusFromManifestWork maps one ManifestWork to ModelWorkStatus.
+func modelWorkStatusFromManifestWork(mw unstructured.Unstructured) *aigridv1.ModelWorkStatus {
+	out := &aigridv1.ModelWorkStatus{Cluster: mw.GetNamespace()}
+	conds, found, err := unstructured.NestedSlice(mw.Object, "status", "conditions")
+	if err != nil || !found {
+		return out
+	}
+	parsed := conditionsFromSlice(conds)
+	out.Applied = conditionStatusName(parsed, "Applied")
+	out.Available = conditionStatusName(parsed, "Available")
+	out.Progressing = conditionStatusName(parsed, "Progressing")
+	out.Degraded = conditionStatusName(parsed, "Degraded")
+	return out
+}
+
+func conditionStatusName(conds []*aigridv1.Condition, typ string) string {
+	c := conditionByType(conds, typ)
+	if c == nil {
+		return ""
+	}
+	switch c.Status {
+	case aigridv1.ConditionStatus_CONDITION_STATUS_TRUE:
+		return "True"
+	case aigridv1.ConditionStatus_CONDITION_STATUS_FALSE:
+		return "False"
+	default:
+		return "Unknown"
 	}
 }
 

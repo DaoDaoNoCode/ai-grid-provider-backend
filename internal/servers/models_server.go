@@ -421,7 +421,35 @@ func (s *ModelsServer) enrichPlacement(ctx context.Context, m *aigridv1.Model) {
 	mwrs, err := s.client.Resource(manifestWorkReplicaSetsResource).Namespace(s.namespace).Get(ctx, pname, metav1.GetOptions{})
 	if err == nil {
 		enrichModelFromMWRS(m, mwrs)
+		s.enrichManifestWorks(ctx, m, pname)
+		deriveModelPhaseFromRollout(m)
 	}
+}
+
+// enrichManifestWorks fills status.rollout.works from ManifestWorks owned by
+// this model's MWRS/Placement (cluster = work namespace).
+func (s *ModelsServer) enrichManifestWorks(ctx context.Context, m *aigridv1.Model, pname string) {
+	if m == nil || m.Status == nil || m.Status.Rollout == nil {
+		return
+	}
+	selector := labelMWRSLegacy + "=" + pname
+	list, err := s.client.Resource(manifestWorksResource).Namespace("").List(ctx, metav1.ListOptions{
+		LabelSelector: selector,
+	})
+	if err != nil || list == nil || len(list.Items) == 0 {
+		// Fall back to placementname label used by some OCM versions.
+		list, err = s.client.Resource(manifestWorksResource).Namespace("").List(ctx, metav1.ListOptions{
+			LabelSelector: labelPlacementName + "=" + pname,
+		})
+		if err != nil || list == nil {
+			return
+		}
+	}
+	works := make([]*aigridv1.ModelWorkStatus, 0, len(list.Items))
+	for i := range list.Items {
+		works = append(works, modelWorkStatusFromManifestWork(list.Items[i]))
+	}
+	m.Status.Rollout.Works = works
 }
 
 // createdObjectRef records an object this Create call successfully made so

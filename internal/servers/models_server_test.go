@@ -30,6 +30,9 @@ var (
 	testMWRSGVR = schema.GroupVersionResource{
 		Group: "work.open-cluster-management.io", Version: "v1alpha1", Resource: "manifestworkreplicasets",
 	}
+	testManifestWorksGVR = schema.GroupVersionResource{
+		Group: "work.open-cluster-management.io", Version: "v1", Resource: "manifestworks",
+	}
 )
 
 func TestModelsServerRequiresClient(t *testing.T) {
@@ -131,6 +134,78 @@ func TestModelsCRUDHubOnly(t *testing.T) {
 	}
 	if _, err := client.Resource(testModelRefsGVR).Namespace("ai-grid-internal-models").Get(ctx, "tiny-llm", metav1.GetOptions{}); err == nil {
 		t.Fatal("MaaSModelRef still present after Delete")
+	}
+}
+
+func TestModelsGetEnrichesRolloutWorks(t *testing.T) {
+	t.Parallel()
+	placement := &unstructured.Unstructured{Object: map[string]interface{}{
+		"apiVersion": "cluster.open-cluster-management.io/v1beta1",
+		"kind":       "Placement",
+		"metadata": map[string]interface{}{
+			"name": "model-works-llm", "namespace": "ai-grid-internal-models",
+		},
+		"spec": map[string]interface{}{},
+	}}
+	mwrs := &unstructured.Unstructured{Object: map[string]interface{}{
+		"apiVersion": "work.open-cluster-management.io/v1alpha1",
+		"kind":       "ManifestWorkReplicaSet",
+		"metadata": map[string]interface{}{
+			"name": "model-works-llm", "namespace": "ai-grid-internal-models",
+		},
+		"status": map[string]interface{}{
+			"conditions": []interface{}{
+				map[string]interface{}{"type": "PlacementRolledOut", "status": "True"},
+				map[string]interface{}{"type": "ManifestworkApplied", "status": "False", "reason": "NotAsExpected"},
+			},
+		},
+	}}
+	work := &unstructured.Unstructured{Object: map[string]interface{}{
+		"apiVersion": "work.open-cluster-management.io/v1",
+		"kind":       "ManifestWork",
+		"metadata": map[string]interface{}{
+			"name":      "model-works-llmxxxxx",
+			"namespace": "site-paris",
+			"labels": map[string]interface{}{
+				"work.open-cluster-management.io/manifestworkreplicaset": "model-works-llm",
+			},
+		},
+		"status": map[string]interface{}{
+			"conditions": []interface{}{
+				map[string]interface{}{"type": "Applied", "status": "True"},
+				map[string]interface{}{"type": "Available", "status": "True"},
+				map[string]interface{}{"type": "Progressing", "status": "False"},
+				map[string]interface{}{"type": "Degraded", "status": "False"},
+			},
+		},
+	}}
+	llm := &unstructured.Unstructured{Object: map[string]interface{}{
+		"apiVersion": "serving.kserve.io/v1alpha2",
+		"kind":       "LLMInferenceService",
+		"metadata": map[string]interface{}{
+			"name": "works-llm", "namespace": "ai-grid-internal-models", "resourceVersion": "1",
+			"labels": map[string]interface{}{"ai-grid/model": "works-llm"},
+		},
+		"spec": map[string]interface{}{
+			"model":    map[string]interface{}{"uri": "hf://x", "name": "x"},
+			"replicas": int64(1),
+		},
+	}}
+	client := newModelsClient(llm, placement, mwrs, work)
+	srv := mustModelsServer(t, client)
+	got, err := srv.Get(context.Background(), &aigridv1.ModelsGetRequest{Id: "works-llm"})
+	if err != nil {
+		t.Fatalf("Get() error = %v", err)
+	}
+	works := got.GetObject().GetStatus().GetRollout().GetWorks()
+	if len(works) != 1 || works[0].GetCluster() != "site-paris" {
+		t.Fatalf("works = %#v", works)
+	}
+	if works[0].GetApplied() != "True" || works[0].GetDegraded() != "False" {
+		t.Fatalf("work conditions = %#v", works[0])
+	}
+	if got.GetObject().GetStatus().GetPhase() != aigridv1.ModelPhase_MODEL_PHASE_PENDING {
+		t.Fatalf("phase = %v, want PENDING for NotAsExpected without degraded work", got.GetObject().GetStatus().GetPhase())
 	}
 }
 
@@ -613,6 +688,7 @@ func newModelsClient(objects ...runtime.Object) *fake.FakeDynamicClient {
 			testPlacementGVR:         "PlacementList",
 			testPlacementDecisionGVR: "PlacementDecisionList",
 			testMWRSGVR:              "ManifestWorkReplicaSetList",
+			testManifestWorksGVR:     "ManifestWorkList",
 			testModelRefsGVR:         "MaaSModelRefList",
 			testSubscriptionsGVR:     "MaaSSubscriptionList",
 			testAuthPoliciesGVR:      "MaaSAuthPolicyList",

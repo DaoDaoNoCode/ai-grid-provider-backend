@@ -34,7 +34,7 @@
 | 9 | — | Reject negative Models List limit | done | Models + Subscriptions validate limit < 0 → InvalidArgument |
 | 10 | — | Models Delete K8s ResourceVersion precondition | done | Preconditioned LLM delete before Placement/MWRS cleanup |
 | 11 | — | Model phase NotAsExpected→FAILED too aggressive | done | NotAsExpected → PENDING; FAILED when a work is Degraded |
-| 12 | — | Fill rollout.works (+ P13 fields) | pending | |
+| 12 | — | Fill rollout.works (+ P13 fields) | done | works[] from ManifestWorks + RBAC; fuller P13 fields still optional follow-up |
 | 13 | — | Locations (P7/P8) | pending | |
 | 14 | — | Subscription Delete resource_version / If-Match | pending | |
 | 15 | — | Agree models namespace | pending | |
@@ -160,14 +160,14 @@
 - **Decision:** Accepted — align with draft ModelPhase rule.
 - **Implementation notes:** `enrichModelFromMWRS` maps NotAsExpected to PENDING. FAILED only when `mwrsHasFailedOrDegradedWork` sees a work with Degraded=True (populated once works[] is filled). Tests cover NotAsExpected→PENDING and degraded helper.
 
-### 12. Fill rollout.works (+ P13 fields) — Status: `pending`
+### 12. Fill rollout.works (+ P13 fields) — Status: `done`
 
 - **Source:** DaoDao #9
 - **Description:** Populate per-cluster work status in `rollout.works` (and related P13 fields); requires ManifestWorks RBAC.
 - **Pros:** Needed for console Models page.
 - **Cons:** Larger scope; OK as follow-up.
-- **Decision:**
-- **Implementation notes:**
+- **Decision:** Accepted — usable works[] for console; remaining P13 field expansions optional.
+- **Implementation notes:** `enrichManifestWorks` lists ManifestWorks by MWRS/placement labels and fills `ModelWorkStatus` (cluster, applied/available/progressing/degraded). Kind+OpenShift RBAC grants get/list/watch on `manifestworks`. Phase re-derived after works so Degraded→FAILED. Remaining draft P13 extras (per-work conditions/feedback/PARTIALLY_AVAILABLE) not added to v1 proto in this pass.
 
 ### 13. Locations (P7/P8) — Status: `pending`
 
