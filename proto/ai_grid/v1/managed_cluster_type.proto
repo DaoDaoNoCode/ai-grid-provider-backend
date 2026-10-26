@@ -81,7 +81,11 @@ message ManagedClusterStatus {
 
 // GPU inventory of one cluster.
 message ClusterGPUs {
-  // Physical GPUs on the cluster's GPU nodes: the sum of each node's `count`.
+  // GPU devices on the cluster's GPU nodes, as GPU Feature Discovery counts
+  // them: the sum of each node's `count`. That is physical GPUs, except on a
+  // node with MIG strategy "single", where GFD's count is the MIG devices
+  // (GFD replaces the physical count there and reports none; under "mixed"
+  // it stays the physical count).
   int32 total = 1;
   // Nodes with at least one GPU.
   int32 node_count = 2;
@@ -101,9 +105,11 @@ message GPUConfiguration {
   // `nvidia.com/gpu.product` as GPU Feature Discovery writes it, for example
   // "NVIDIA-L4" or "NVIDIA-H200"; MIG and time-slicing suffixes kept.
   string product = 2;
-  // `nvidia.com/gpu.memory`, MiB per GPU.
+  // `nvidia.com/gpu.memory`, MiB per GPU (per MIG device under MIG
+  // strategy "single").
   int64 memory_mib = 3;
-  // `nvidia.com/gpu.count`.
+  // `nvidia.com/gpu.count`: physical GPUs, or MIG devices under MIG
+  // strategy "single" (see ClusterGPUs.total).
   int32 gpus_per_node = 4;
   // Nodes with this configuration.
   int32 node_count = 5;
@@ -133,7 +139,8 @@ message GPUNode {
   string vendor = 2;
   // `nvidia.com/gpu.product`, for example "NVIDIA-L4".
   string product = 3;
-  // `nvidia.com/gpu.count`: physical GPUs (MIG "single": MIG devices).
+  // `nvidia.com/gpu.count`: physical GPUs, or MIG devices under MIG
+  // strategy "single" (see ClusterGPUs.total).
   int32 count = 4;
   // `nvidia.com/gpu.memory`, MiB per GPU.
   int64 memory_mib = 5;

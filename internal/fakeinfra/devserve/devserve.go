@@ -51,7 +51,7 @@ func SelfSignedCert(host string) (tls.Certificate, []byte, error) {
 	now := time.Now()
 	tmpl := &x509.Certificate{
 		SerialNumber:          serial,
-		Subject:               pkix.Name{CommonName: "ai-grid-fake-hub"},
+		Subject:               pkix.Name{CommonName: FakeHubCACommonName},
 		NotBefore:             now.Add(-time.Hour),
 		NotAfter:              now.Add(365 * 24 * time.Hour),
 		IsCA:                  true,
@@ -182,6 +182,72 @@ const (
 	FakeContext = "ai-grid-fake-hub"
 	FakeUser    = "ai-grid-fake-hub-backend"
 )
+
+// FakeHubCACommonName is the subject of the fake hub's self-signed
+// certificate, by which WriteHubCA recognizes a CA file it may replace.
+const FakeHubCACommonName = "ai-grid-fake-hub"
+
+// WriteHubCA writes the fake hub's CA certificate (caPEM) to path, for the
+// backend's SEARCH_CA_FILE, and returns the bytes it wrote. Like
+// WriteKubeconfig it never clobbers what isn't its own: it refuses a symbolic
+// link, and an existing file unless that holds a certificate for
+// FakeHubCACommonName (one a previous run left behind). It writes a temporary
+// file in the same directory and renames it, so it never writes through a
+// link; the mode is 0600.
+func WriteHubCA(path string, caPEM []byte) ([]byte, error) {
+	if path == "" {
+		return nil, errors.New("hub CA path is empty")
+	}
+	if info, err := os.Lstat(path); err == nil {
+		if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
+			return nil, fmt.Errorf("%s exists and is not a regular file; refusing to replace it, choose another path", path)
+		}
+		raw, err := os.ReadFile(path)
+		if err != nil {
+			return nil, fmt.Errorf("check existing hub CA %s: %w", path, err)
+		}
+		if !isFakeHubCA(raw) {
+			return nil, fmt.Errorf("%s exists and is not a CA ai-grid-fake-infra wrote (subject %s); refusing to replace it, choose another path", path, FakeHubCACommonName)
+		}
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return nil, fmt.Errorf("check existing hub CA %s: %w", path, err)
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return nil, fmt.Errorf("create hub CA directory: %w", err)
+	}
+	tmp, err := os.CreateTemp(filepath.Dir(path), "."+filepath.Base(path)+".*.tmp")
+	if err != nil {
+		return nil, fmt.Errorf("write hub CA: %w", err)
+	}
+	_, werr := tmp.Write(caPEM)
+	cerr := tmp.Close()
+	if werr == nil && cerr == nil {
+		werr = os.Rename(tmp.Name(), path)
+	}
+	if werr != nil || cerr != nil {
+		_ = os.Remove(tmp.Name())
+		return nil, fmt.Errorf("write hub CA: %w", errors.Join(werr, cerr))
+	}
+	return append([]byte(nil), caPEM...), nil
+}
+
+// RemoveHubCA removes path only while it still holds exactly the bytes
+// WriteHubCA returned (written); a file replaced since is left alone. A
+// missing file is not an error.
+func RemoveHubCA(path string, written []byte) error {
+	return RemoveKubeconfig(path, written)
+}
+
+// isFakeHubCA reports whether raw is one PEM certificate whose subject is
+// FakeHubCACommonName.
+func isFakeHubCA(raw []byte) bool {
+	block, rest := pem.Decode(raw)
+	if block == nil || block.Type != "CERTIFICATE" || len(bytes.TrimSpace(rest)) != 0 {
+		return false
+	}
+	cert, err := x509.ParseCertificate(block.Bytes)
+	return err == nil && cert.Subject.CommonName == FakeHubCACommonName
+}
 
 // IsFakeKubeconfig reports whether path holds a kubeconfig WriteKubeconfig
 // wrote: exactly one cluster, user and context, with the fake-infra names,

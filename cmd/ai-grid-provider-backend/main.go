@@ -10,7 +10,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
-	"net/url"
+	neturl "net/url"
 	"os"
 	"os/signal"
 	"strings"
@@ -237,7 +237,7 @@ func newGitWriter() (gitops.Writer, error) {
 	if cfg.URL == "" {
 		return nil, errors.New("AI_GRID_GIT_URL is required")
 	}
-	if u, err := url.Parse(cfg.URL); err != nil || u.User != nil {
+	if u, err := neturl.Parse(cfg.URL); err != nil || u.User != nil {
 		return nil, errors.New("AI_GRID_GIT_URL must be a URL without credentials; put the token in AI_GRID_GIT_TOKEN_FILE")
 	}
 	if tokenFile := os.Getenv("AI_GRID_GIT_TOKEN_FILE"); tokenFile != "" {
@@ -278,12 +278,16 @@ func newRestConfig(kubeconfig string) (*rest.Config, error) {
 const serviceCAFile = "/var/run/secrets/kubernetes.io/serviceaccount/service-ca.crt"
 
 // newGPUInventory builds the ACM Search client the Clusters API reads GPUs
-// from. It calls Search with the backend's own credential, the token the
-// Kubernetes client uses (the ServiceAccount's in a pod, the kubeconfig's
-// out of it), re-read from its file when it rotates.
+// from. It calls Search with the backend's own credential, the one the
+// Kubernetes client uses (the ServiceAccount's token in a pod, re-read from
+// its file when it rotates; out of one, the kubeconfig's token, token file,
+// exec plugin or auth provider, through client-go's own wrappers). Search
+// authenticates a bearer token, so a kubeconfig with only a client
+// certificate leaves Search calls anonymous: clusters then carry no GPUs,
+// and a warning says why.
 //
-//   - SEARCH_API_URL: the GraphQL endpoint (acmsearch.DefaultURL); "off"
-//     turns GPUs off, for a hub without ACM Search such as Kind.
+//   - SEARCH_API_URL: the GraphQL endpoint (acmsearch.DefaultURL), https only;
+//     "off" turns GPUs off, for a hub without ACM Search such as Kind.
 //   - SEARCH_CA_FILE: the CA of Search's serving certificate; the service CA
 //     when the file exists, else the system roots.
 //   - SEARCH_INSECURE_SKIP_VERIFY=true: no certificate check, for a local run
@@ -293,6 +297,10 @@ func newGPUInventory(config *rest.Config) (*servers.GPUInventory, error) {
 	if url == "off" {
 		slog.Info("cluster GPUs off: SEARCH_API_URL=off")
 		return nil, nil
+	}
+	// The credential goes with every query, so never over plain HTTP.
+	if u, err := neturl.Parse(url); err != nil || u.Scheme != "https" || u.Host == "" {
+		return nil, fmt.Errorf("SEARCH_API_URL %q must be an https URL, or \"off\"", url)
 	}
 	tlsConfig := &tls.Config{MinVersion: tls.VersionTLS12}
 	caFile := os.Getenv("SEARCH_CA_FILE")
@@ -318,7 +326,18 @@ func newGPUInventory(config *rest.Config) (*servers.GPUInventory, error) {
 	}
 	base := http.DefaultTransport.(*http.Transport).Clone()
 	base.TLSClientConfig = tlsConfig
-	rt, err := transport.NewBearerAuthWithRefreshRoundTripper(config.BearerToken, config.BearerTokenFile, base)
+	// The Kubernetes client's credential wrappers around Search's own TLS:
+	// its bearer token or token file, exec plugin or auth provider, and any
+	// impersonation, but not its client certificate, which is for the API
+	// server's TLS.
+	authConfig, err := config.TransportConfig()
+	if err != nil {
+		return nil, fmt.Errorf("search credential: %w", err)
+	}
+	if !authConfig.HasTokenAuth() && !authConfig.HasBasicAuth() && authConfig.WrapTransport == nil {
+		slog.Warn("no bearer credential for ACM Search: its queries are anonymous, so clusters carry no GPUs; use a kubeconfig with a token, or the in-cluster ServiceAccount")
+	}
+	rt, err := transport.HTTPWrappersForConfig(authConfig, base)
 	if err != nil {
 		return nil, fmt.Errorf("search credential: %w", err)
 	}

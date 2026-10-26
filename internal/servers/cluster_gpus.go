@@ -31,16 +31,19 @@ const gpuQueryTimeout = 10 * time.Second
 
 // GPUInventory caches each cluster's GPUs from a GPUNodeSource. A failed
 // query is cached for the same time as an answer, so an unavailable Search
-// is asked (and logged) once per TTL, not on every call.
+// is asked (and logged) once per TTL, not on every call. One query runs at a
+// time, outside the lock: callers that find the cache stale wait for it, each
+// only as long as its own context allows.
 type GPUInventory struct {
 	source GPUNodeSource
 	ttl    time.Duration
 	logger *slog.Logger
 	now    func() time.Time
 
-	mu      sync.Mutex
-	fetched time.Time
-	byName  map[string]*aigridv1.ClusterGPUs
+	mu       sync.Mutex
+	fetched  time.Time
+	byName   map[string]*aigridv1.ClusterGPUs
+	inflight chan struct{} // closed when the running query has stored its answer; nil when none runs
 }
 
 // NewGPUInventory returns an inventory over source. A zero ttl is
@@ -56,25 +59,55 @@ func NewGPUInventory(source GPUNodeSource, ttl time.Duration, logger *slog.Logge
 }
 
 // Clusters returns each cluster's GPUs by cluster name, from the cache while
-// it is fresh. When Search fails it returns an empty map: clusters then carry
-// no `gpus`, and the call that asked still succeeds.
+// it is fresh. When it isn't, it starts a query (or joins the one running)
+// and waits for it, at most until ctx ends: then it returns an empty map
+// and the query carries on for later callers. When Search fails it returns
+// an empty map too: clusters then carry no `gpus`, and the call that asked
+// still succeeds. The map is shared; callers must not change it.
 func (inv *GPUInventory) Clusters(ctx context.Context) map[string]*aigridv1.ClusterGPUs {
 	inv.mu.Lock()
-	defer inv.mu.Unlock()
 	if inv.byName != nil && inv.now().Sub(inv.fetched) < inv.ttl {
-		return inv.byName
+		byName := inv.byName
+		inv.mu.Unlock()
+		return byName
 	}
-	queryCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), gpuQueryTimeout)
+	done := inv.inflight
+	if done == nil {
+		done = make(chan struct{})
+		inv.inflight = done
+		go inv.refresh(done)
+	}
+	inv.mu.Unlock()
+
+	select {
+	case <-done:
+		inv.mu.Lock()
+		defer inv.mu.Unlock()
+		return inv.byName
+	case <-ctx.Done():
+		return map[string]*aigridv1.ClusterGPUs{}
+	}
+}
+
+// refresh queries the source once, bounded by gpuQueryTimeout rather than by
+// any caller's context (it answers every caller waiting on it), stores the
+// answer, or an empty one on failure, and closes done.
+func (inv *GPUInventory) refresh(done chan struct{}) {
+	ctx, cancel := context.WithTimeout(context.Background(), gpuQueryTimeout)
 	defer cancel()
-	nodes, err := inv.source.GPUNodes(queryCtx)
-	inv.fetched = inv.now()
+	nodes, err := inv.source.GPUNodes(ctx)
+	byName := map[string]*aigridv1.ClusterGPUs{}
 	if err != nil {
 		inv.logger.Warn("read cluster GPUs from ACM Search", "error", err)
-		inv.byName = map[string]*aigridv1.ClusterGPUs{}
-		return inv.byName
+	} else {
+		byName = clusterGPUsFromNodes(nodes)
 	}
-	inv.byName = clusterGPUsFromNodes(nodes)
-	return inv.byName
+	inv.mu.Lock()
+	inv.byName = byName
+	inv.fetched = inv.now()
+	inv.inflight = nil
+	inv.mu.Unlock()
+	close(done)
 }
 
 // gpuSharingKey identifies a GPU configuration: nodes with the same vendor,
@@ -142,7 +175,7 @@ func clusterGPUsFromNodes(nodes []acmsearch.Node) map[string]*aigridv1.ClusterGP
 
 // NVIDIA GPU Feature Discovery's node labels
 // (github.com/NVIDIA/k8s-device-plugin, docs/gpu-feature-discovery and
-// internal/lm), as seen on the dev hub's spokes through Search.
+// internal/lm), as an ACM hub's Search indexes them.
 const (
 	labelGPUProduct      = "nvidia.com/gpu.product"
 	labelGPUCount        = "nvidia.com/gpu.count"

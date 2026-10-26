@@ -288,7 +288,11 @@ func (x *ManagedClusterStatus) GetGpus() *ClusterGPUs {
 // GPU inventory of one cluster.
 type ClusterGPUs struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// Physical GPUs on the cluster's GPU nodes: the sum of each node's `count`.
+	// GPU devices on the cluster's GPU nodes, as GPU Feature Discovery counts
+	// them: the sum of each node's `count`. That is physical GPUs, except on a
+	// node with MIG strategy "single", where GFD's count is the MIG devices
+	// (GFD replaces the physical count there and reports none; under "mixed"
+	// it stays the physical count).
 	Total int32 `protobuf:"varint,1,opt,name=total,proto3" json:"total,omitempty"`
 	// Nodes with at least one GPU.
 	NodeCount int32 `protobuf:"varint,2,opt,name=node_count,json=nodeCount,proto3" json:"node_count,omitempty"`
@@ -369,9 +373,11 @@ type GPUConfiguration struct {
 	// `nvidia.com/gpu.product` as GPU Feature Discovery writes it, for example
 	// "NVIDIA-L4" or "NVIDIA-H200"; MIG and time-slicing suffixes kept.
 	Product string `protobuf:"bytes,2,opt,name=product,proto3" json:"product,omitempty"`
-	// `nvidia.com/gpu.memory`, MiB per GPU.
+	// `nvidia.com/gpu.memory`, MiB per GPU (per MIG device under MIG
+	// strategy "single").
 	MemoryMib int64 `protobuf:"varint,3,opt,name=memory_mib,json=memoryMib,proto3" json:"memory_mib,omitempty"`
-	// `nvidia.com/gpu.count`.
+	// `nvidia.com/gpu.count`: physical GPUs, or MIG devices under MIG
+	// strategy "single" (see ClusterGPUs.total).
 	GpusPerNode int32 `protobuf:"varint,4,opt,name=gpus_per_node,json=gpusPerNode,proto3" json:"gpus_per_node,omitempty"`
 	// Nodes with this configuration.
 	NodeCount int32 `protobuf:"varint,5,opt,name=node_count,json=nodeCount,proto3" json:"node_count,omitempty"`
@@ -537,7 +543,8 @@ type GPUNode struct {
 	Vendor string `protobuf:"bytes,2,opt,name=vendor,proto3" json:"vendor,omitempty"`
 	// `nvidia.com/gpu.product`, for example "NVIDIA-L4".
 	Product string `protobuf:"bytes,3,opt,name=product,proto3" json:"product,omitempty"`
-	// `nvidia.com/gpu.count`: physical GPUs (MIG "single": MIG devices).
+	// `nvidia.com/gpu.count`: physical GPUs, or MIG devices under MIG
+	// strategy "single" (see ClusterGPUs.total).
 	Count int32 `protobuf:"varint,4,opt,name=count,proto3" json:"count,omitempty"`
 	// `nvidia.com/gpu.memory`, MiB per GPU.
 	MemoryMib int64 `protobuf:"varint,5,opt,name=memory_mib,json=memoryMib,proto3" json:"memory_mib,omitempty"`

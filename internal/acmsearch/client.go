@@ -45,12 +45,21 @@ type Client struct {
 	http *http.Client
 }
 
-// New returns a Client for the GraphQL endpoint url.
+// ErrRedirect is what a query returns when Search answers with a redirect.
+// The client never follows one: the credential is added by the transport to
+// every request it sends, so following a redirect would hand the backend's
+// token to wherever the answer pointed.
+var ErrRedirect = errors.New("search answered with a redirect, which is not followed")
+
+// New returns a Client for the GraphQL endpoint url. It uses a copy of
+// httpClient that refuses redirects (ErrRedirect).
 func New(url string, httpClient *http.Client) *Client {
 	if httpClient == nil {
 		httpClient = http.DefaultClient
 	}
-	return &Client{url: url, http: httpClient}
+	c := *httpClient
+	c.CheckRedirect = func(*http.Request, []*http.Request) error { return ErrRedirect }
+	return &Client{url: url, http: &c}
 }
 
 // gpuNodesQuery asks for every Node with GPU Feature Discovery's

@@ -166,11 +166,17 @@ func run(logger *slog.Logger, cfg config) error {
 	// The CA file first: the kubeconfig appearing is what hack/dev-fake.sh
 	// waits for, so the CA must exist by then.
 	if cfg.hubCAOut != "" {
-		if err := os.WriteFile(cfg.hubCAOut, caPEM, 0o600); err != nil {
+		writtenCA, err := devserve.WriteHubCA(cfg.hubCAOut, caPEM)
+		if err != nil {
 			closeListeners()
-			return fmt.Errorf("write %s: %w", cfg.hubCAOut, err)
+			return err
 		}
-		defer func() { _ = os.Remove(cfg.hubCAOut) }()
+		defer func() {
+			// Only the file this process wrote, if nobody replaced it since.
+			if err := devserve.RemoveHubCA(cfg.hubCAOut, writtenCA); err != nil {
+				logger.Warn("remove hub CA", slog.Any("error", err))
+			}
+		}()
 	}
 	written, err := devserve.WriteKubeconfig(cfg.kubeconfigOut, hubURL, caPEM, fakeHub.ServiceAccountToken())
 	if err != nil {

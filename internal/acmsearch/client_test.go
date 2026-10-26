@@ -3,11 +3,14 @@ package acmsearch
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 )
 
 func TestGPUNodesQueryAndAnswer(t *testing.T) {
@@ -23,9 +26,9 @@ func TestGPUNodesQueryAndAnswer(t *testing.T) {
 		}
 		// The shape an ACM hub's search-v2 answered for a GPU node, trimmed.
 		_, _ = w.Write([]byte(`{"data":{"searchResult":[{"items":[
-			{"cluster":"site-b","name":"ip-10-0-25-128","kind":"Node","condition":"DiskPressure=False; MemoryPressure=False; PIDPressure=False; Ready=True",
+			{"cluster":"site-b","name":"gpu-node-b","kind":"Node","condition":"DiskPressure=False; MemoryPressure=False; PIDPressure=False; Ready=True",
 			 "label":"node-role.kubernetes.io/gpu=; nvidia.com/gpu.count=1; nvidia.com/gpu.product=NVIDIA-L4"},
-			{"cluster":"site-a","name":"ip-10-0-21-83","kind":"Node","condition":"Ready=False","label":"nvidia.com/gpu.present=true"},
+			{"cluster":"site-a","name":"gpu-node-a","kind":"Node","condition":"Ready=False","label":"nvidia.com/gpu.present=true"},
 			{"cluster":"","name":"no-cluster","label":""}
 		]}]}}`))
 	}))
@@ -94,5 +97,97 @@ func TestParsePairs(t *testing.T) {
 		if got[k] != v {
 			t.Fatalf("%s = %q, want %q (all: %v)", k, got[k], v, got)
 		}
+	}
+}
+
+// tokenTransport adds a bearer token to every request, as the backend's
+// credential transport does (main.newGPUInventory).
+type tokenTransport struct{ base http.RoundTripper }
+
+func (t tokenTransport) RoundTrip(r *http.Request) (*http.Response, error) {
+	r = r.Clone(r.Context())
+	r.Header.Set("Authorization", "Bearer secret-token")
+	return t.base.RoundTrip(r)
+}
+
+// A redirect from Search is never followed, so the token never reaches the
+// place it points to.
+func TestGPUNodesRefusesRedirects(t *testing.T) {
+	t.Parallel()
+	var reached atomic.Bool
+	elsewhere := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		reached.Store(true)
+		if r.Header.Get("Authorization") != "" {
+			t.Error("the token reached the redirect target")
+		}
+		_, _ = w.Write([]byte(`{"data":{"searchResult":[{"items":[]}]}}`))
+	}))
+	defer elsewhere.Close()
+	for _, code := range []int{http.StatusFound, http.StatusTemporaryRedirect, http.StatusPermanentRedirect} {
+		search := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			http.Redirect(w, r, elsewhere.URL+"/steal", code)
+		}))
+		client := New(search.URL, &http.Client{Transport: tokenTransport{base: http.DefaultTransport}})
+		_, err := client.GPUNodes(context.Background())
+		search.Close()
+		if !errors.Is(err, ErrRedirect) {
+			t.Errorf("%d: error = %v, want ErrRedirect", code, err)
+		}
+	}
+	if reached.Load() {
+		t.Fatal("a redirect was followed")
+	}
+}
+
+// New doesn't change the http.Client it is given.
+func TestNewKeepsTheCallersClient(t *testing.T) {
+	t.Parallel()
+	hc := &http.Client{}
+	_ = New("https://search.invalid", hc)
+	if hc.CheckRedirect != nil {
+		t.Fatal("New changed the caller's http.Client")
+	}
+}
+
+// An answer larger than maxResponseBytes is refused rather than decoded.
+func TestGPUNodesRefusesAnOversizedAnswer(t *testing.T) {
+	t.Parallel()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"data":{"searchResult":[{"items":[{"name":"`))
+		chunk := []byte(strings.Repeat("x", 1<<20))
+		for written := 0; written <= maxResponseBytes; written += len(chunk) {
+			if _, err := w.Write(chunk); err != nil {
+				return
+			}
+		}
+	}))
+	defer srv.Close()
+	_, err := New(srv.URL, srv.Client()).GPUNodes(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "larger than") {
+		t.Fatalf("error = %v, want the size limit", err)
+	}
+}
+
+// A query ends when its context does, even while Search hasn't answered.
+func TestGPUNodesStopsWhenTheContextEnds(t *testing.T) {
+	t.Parallel()
+	release := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		select {
+		case <-release:
+		case <-r.Context().Done():
+		}
+	}))
+	defer srv.Close()
+	defer close(release)
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	start := time.Now()
+	_, err := New(srv.URL, srv.Client()).GPUNodes(ctx)
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("error = %v, want the deadline", err)
+	}
+	if time.Since(start) > 5*time.Second {
+		t.Fatal("the query outlived its context")
 	}
 }

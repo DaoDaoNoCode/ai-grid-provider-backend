@@ -263,7 +263,9 @@ func (s *ClustersServer) Update(ctx context.Context, req *aigridv1.ClustersUpdat
 		}
 	}
 	if len(patchBody) == 0 {
-		return &aigridv1.ClustersUpdateResponse{Object: managedClusterFromUnstructured(*current)}, nil
+		// Nothing to write: the cluster as stored, with the same status fields
+		// every other answer carries.
+		return &aigridv1.ClustersUpdateResponse{Object: withGPUs(s.withProvisioning(managedClusterFromUnstructured(*current), s.provisioning(ctx)), s.clusterGPUs(ctx))}, nil
 	}
 	// metadata.version is the hub resourceVersion: sent back in the merge
 	// patch, the API server rejects the write with a Conflict when it is stale.

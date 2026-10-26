@@ -77,3 +77,66 @@ func TestKubeconfigLifecycle(t *testing.T) {
 		t.Fatalf("RemoveKubeconfig(missing) error = %v", err)
 	}
 }
+
+// WriteHubCA never clobbers a file that isn't its own, never writes through
+// a link, and RemoveHubCA removes only the bytes it wrote.
+func TestWriteHubCA(t *testing.T) {
+	_, caPEM, err := SelfSignedCert("127.0.0.1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+
+	// Someone else's file stays, unchanged.
+	other := filepath.Join(dir, "other.crt")
+	if err := os.WriteFile(other, []byte("not ours"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := WriteHubCA(other, caPEM); err == nil {
+		t.Fatal("WriteHubCA replaced a file it didn't write")
+	}
+	if raw, _ := os.ReadFile(other); string(raw) != "not ours" {
+		t.Fatalf("other file now %q", raw)
+	}
+
+	// A link is refused, so its target isn't written either.
+	link := filepath.Join(dir, "link.crt")
+	if err := os.Symlink(other, link); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := WriteHubCA(link, caPEM); err == nil {
+		t.Fatal("WriteHubCA wrote through a symbolic link")
+	}
+
+	// A fresh path, then a second run over the CA the first left behind.
+	path := filepath.Join(dir, "bin", "fake-hub-ca.crt")
+	written, err := WriteHubCA(path, caPEM)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, nextPEM, err := SelfSignedCert("127.0.0.1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	nextWritten, err := WriteHubCA(path, nextPEM)
+	if err != nil {
+		t.Fatalf("replacing our own CA: %v", err)
+	}
+	if info, err := os.Stat(path); err != nil || info.Mode().Perm() != 0o600 {
+		t.Fatalf("mode %v, err %v", info, err)
+	}
+
+	// The first run's cleanup leaves the second run's file alone.
+	if err := RemoveHubCA(path, written); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(path); err != nil {
+		t.Fatal("removed a CA another run wrote")
+	}
+	if err := RemoveHubCA(path, nextWritten); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatalf("CA still there: %v", err)
+	}
+}

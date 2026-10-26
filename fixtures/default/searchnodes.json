@@ -1,5 +1,5 @@
 {
-  "_comment": "Nodes the fake ACM Search indexes (fixtures/README.md, searchnodes.json). Hand-written, not converted: the console has no node fixtures. Labels are NVIDIA GPU Feature Discovery's, as the dev hub's spokes carry them; each cluster's GPUs add up to its status.capacity[\"nvidia.com/gpu\"] in managedclusters.json. site-lisbon-1 reports GPU capacity but has no nodes here: Search hasn't indexed it.",
+  "_comment": "Nodes the fake ACM Search indexes (fixtures/README.md, searchnodes.json). Hand-written, not converted: the console has no node fixtures. Labels are NVIDIA GPU Feature Discovery's, as an ACM hub's spokes carry them; each cluster's GPUs add up to its status.capacity[\"nvidia.com/gpu\"] in managedclusters.json. site-lisbon-1 reports GPU capacity but has no nodes here: Search hasn't indexed it.",
   "items": [
     {
       "cluster": "site-paris-1",

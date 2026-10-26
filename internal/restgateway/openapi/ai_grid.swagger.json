@@ -1085,7 +1085,7 @@
         "total": {
           "type": "integer",
           "format": "int32",
-          "description": "Physical GPUs on the cluster's GPU nodes: the sum of each node's `count`."
+          "description": "GPU devices on the cluster's GPU nodes, as GPU Feature Discovery counts\nthem: the sum of each node's `count`. That is physical GPUs, except on a\nnode with MIG strategy \"single\", where GFD's count is the MIG devices\n(GFD replaces the physical count there and reports none; under \"mixed\"\nit stays the physical count)."
         },
         "node_count": {
           "type": "integer",
@@ -1217,12 +1217,12 @@
         "memory_mib": {
           "type": "string",
           "format": "int64",
-          "description": "`nvidia.com/gpu.memory`, MiB per GPU."
+          "description": "`nvidia.com/gpu.memory`, MiB per GPU (per MIG device under MIG\nstrategy \"single\")."
         },
         "gpus_per_node": {
           "type": "integer",
           "format": "int32",
-          "description": "`nvidia.com/gpu.count`."
+          "description": "`nvidia.com/gpu.count`: physical GPUs, or MIG devices under MIG\nstrategy \"single\" (see ClusterGPUs.total)."
         },
         "node_count": {
           "type": "integer",
@@ -1254,7 +1254,7 @@
         "count": {
           "type": "integer",
           "format": "int32",
-          "description": "`nvidia.com/gpu.count`: physical GPUs (MIG \"single\": MIG devices)."
+          "description": "`nvidia.com/gpu.count`: physical GPUs, or MIG devices under MIG\nstrategy \"single\" (see ClusterGPUs.total)."
         },
         "memory_mib": {
           "type": "string",
