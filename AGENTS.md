@@ -255,7 +255,8 @@ every Monday.
 ## Security and tenancy
 
 - Treat tenant identity and authorization as server-side concerns; never trust caller-supplied ownership fields without validation.
-- API request authn/authz is out of scope for this MVP; gRPC/REST endpoints are open. Keycloak is used only as the Tenants Organizations Admin API backend. `KEYCLOAK_REALM` is the shared platform realm name, not a per-tenant id.
+- API request authn/authz is out of scope for this MVP; gRPC/REST endpoints are open. Keycloak is used only as the Tenants Organizations Admin API backend.
+- Because the endpoints are open, never make them reachable except through a proxy that authenticates and authorizes the caller. On a hub the backend runs inside the provider console's pod, bound to loopback (`--listen-address=127.0.0.1:9090`, `--http-listen-address=127.0.0.1:8081`), reachable only through the console's kube-auth-proxy and its BFF, which allows provider admins only; the console's kind test and ai-grid-env-setup's `verify/07-console.sh` check that. Every caller acts with the backend's ServiceAccount, which may label every ManagedCluster and read ACM Search's index of every managed cluster. The OpenShift Routes in `deploy/openshift` serve the API with no authentication: for development only. A CLI, GitOps tool or other UI that calls the backend directly needs authentication in the backend first. `KEYCLOAK_REALM` is the shared platform realm name, not a per-tenant id.
 - Use least-privilege Kubernetes RBAC and Keycloak roles. Any new API operation that touches Kubernetes or Keycloak must include a review of required permissions.
 - Do not expose internal credentials or administrative APIs through generated REST routes.
 - Validate authentication and authorization behavior for every new externally reachable method once auth is in scope.
