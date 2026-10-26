@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"errors"
 	"flag"
 	"fmt"
@@ -21,6 +23,7 @@ import (
 	grpchealth "connectrpc.com/grpchealth/v2"
 	grpcreflect "connectrpc.com/grpcreflect/v2"
 	"github.com/osac-project/ai-grid-provider-backend/gen/ai_grid/v1/aigridv1connect"
+	"github.com/osac-project/ai-grid-provider-backend/internal/acmsearch"
 	"github.com/osac-project/ai-grid-provider-backend/internal/gitops"
 	"github.com/osac-project/ai-grid-provider-backend/internal/keycloak"
 	"github.com/osac-project/ai-grid-provider-backend/internal/restgateway"
@@ -28,6 +31,7 @@ import (
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
+	"k8s.io/client-go/transport"
 )
 
 func main() {
@@ -42,9 +46,19 @@ func main() {
 		os.Exit(1)
 	}
 
-	kubeClient, err := newDynamicClient(*kubeconfig)
+	restConfig, err := newRestConfig(*kubeconfig)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "load Kubernetes client: %v\n", err)
+		fmt.Fprintf(os.Stderr, "load Kubernetes config: %v\n", err)
+		os.Exit(1)
+	}
+	kubeClient, err := dynamic.NewForConfig(restConfig)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "create Kubernetes client: %v\n", err)
+		os.Exit(1)
+	}
+	gpuInventory, err := newGPUInventory(restConfig)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "ACM Search client: %v\n", err)
 		os.Exit(1)
 	}
 
@@ -56,6 +70,7 @@ func main() {
 	clustersServer, err := servers.NewClustersServer().
 		SetDynamicClient(kubeClient).
 		SetReadyPolicy(getEnv("AI_GRID_READY_POLICY", servers.DefaultReadyPolicy)).
+		SetGPUInventory(gpuInventory).
 		Build()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "build Clusters server: %v\n", err)
@@ -243,25 +258,71 @@ func newGitWriter() (gitops.Writer, error) {
 	}, time.Second), nil
 }
 
-func newDynamicClient(kubeconfig string) (dynamic.Interface, error) {
-	var (
-		config *rest.Config
-		err    error
-	)
+func newRestConfig(kubeconfig string) (*rest.Config, error) {
 	if kubeconfig == "" {
-		config, err = rest.InClusterConfig()
+		config, err := rest.InClusterConfig()
 		if err != nil {
 			return nil, fmt.Errorf("load in-cluster Kubernetes config: %w", err)
 		}
-	} else {
-		config, err = clientcmd.BuildConfigFromFlags("", kubeconfig)
-		if err != nil {
-			return nil, fmt.Errorf("load kubeconfig: %w", err)
+		return config, nil
+	}
+	config, err := clientcmd.BuildConfigFromFlags("", kubeconfig)
+	if err != nil {
+		return nil, fmt.Errorf("load kubeconfig: %w", err)
+	}
+	return config, nil
+}
+
+// serviceCAFile is where OpenShift puts the service CA, which signs the
+// Search API's serving certificate, in every pod.
+const serviceCAFile = "/var/run/secrets/kubernetes.io/serviceaccount/service-ca.crt"
+
+// newGPUInventory builds the ACM Search client the Clusters API reads GPUs
+// from. It calls Search with the backend's own credential, the token the
+// Kubernetes client uses (the ServiceAccount's in a pod, the kubeconfig's
+// out of it), re-read from its file when it rotates.
+//
+//   - SEARCH_API_URL: the GraphQL endpoint (acmsearch.DefaultURL); "off"
+//     turns GPUs off, for a hub without ACM Search such as Kind.
+//   - SEARCH_CA_FILE: the CA of Search's serving certificate; the service CA
+//     when the file exists, else the system roots.
+//   - SEARCH_INSECURE_SKIP_VERIFY=true: no certificate check, for a local run
+//     against a port-forwarded Search only.
+func newGPUInventory(config *rest.Config) (*servers.GPUInventory, error) {
+	url := getEnv("SEARCH_API_URL", acmsearch.DefaultURL)
+	if url == "off" {
+		slog.Info("cluster GPUs off: SEARCH_API_URL=off")
+		return nil, nil
+	}
+	tlsConfig := &tls.Config{MinVersion: tls.VersionTLS12}
+	caFile := os.Getenv("SEARCH_CA_FILE")
+	if caFile == "" {
+		if _, err := os.Stat(serviceCAFile); err == nil {
+			caFile = serviceCAFile
 		}
 	}
-	client, err := dynamic.NewForConfig(config)
-	if err != nil {
-		return nil, fmt.Errorf("create Kubernetes client: %w", err)
+	if caFile != "" {
+		pem, err := os.ReadFile(caFile)
+		if err != nil {
+			return nil, fmt.Errorf("read SEARCH_CA_FILE: %w", err)
+		}
+		pool := x509.NewCertPool()
+		if !pool.AppendCertsFromPEM(pem) {
+			return nil, fmt.Errorf("SEARCH_CA_FILE %s holds no PEM certificate", caFile)
+		}
+		tlsConfig.RootCAs = pool
 	}
-	return client, nil
+	if os.Getenv("SEARCH_INSECURE_SKIP_VERIFY") == "true" {
+		slog.Warn("ACM Search certificate not verified: SEARCH_INSECURE_SKIP_VERIFY=true is for local development only")
+		tlsConfig.InsecureSkipVerify = true // #nosec G402 -- opt-in for a local port-forward
+	}
+	base := http.DefaultTransport.(*http.Transport).Clone()
+	base.TLSClientConfig = tlsConfig
+	rt, err := transport.NewBearerAuthWithRefreshRoundTripper(config.BearerToken, config.BearerTokenFile, base)
+	if err != nil {
+		return nil, fmt.Errorf("search credential: %w", err)
+	}
+	client := acmsearch.New(url, &http.Client{Transport: rt, Timeout: 15 * time.Second})
+	slog.Info("cluster GPUs from ACM Search", "url", url)
+	return servers.NewGPUInventory(client, servers.DefaultGPUInventoryTTL, slog.Default()), nil
 }

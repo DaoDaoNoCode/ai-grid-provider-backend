@@ -57,6 +57,8 @@ type Hub struct {
 	start       time.Time
 	clock       func() time.Time
 	logger      *slog.Logger
+	// nodes are what the fake Search indexes (search.go).
+	nodes []SearchNode
 }
 
 // Option configures a Hub.
@@ -122,6 +124,15 @@ func New(fx *Fixtures, opts ...Option) (*Hub, error) {
 		}
 		h.clusters[c.Name] = c
 	}
+	for _, n := range fx.SearchNodes {
+		if n.Cluster == "" || n.Name == "" {
+			return nil, fmt.Errorf("%s: every node needs a cluster and a name, got %q/%q", SearchNodesFile, n.Cluster, n.Name)
+		}
+		if _, ok := h.clusters[n.Cluster]; !ok {
+			return nil, fmt.Errorf("%s: node %q names cluster %q, which no fixture ManagedCluster has", SearchNodesFile, n.Name, n.Cluster)
+		}
+		h.nodes = append(h.nodes, n)
+	}
 	scenarios, err := parseScenarios(fx.Scenarios, h.clusters)
 	if err != nil {
 		return nil, err
@@ -154,6 +165,7 @@ func (h *Hub) Handler() http.Handler {
 	mux.HandleFunc("GET "+policiesPath+"/{namespace}/policies/{name}", h.getPolicy)
 	h.registerMAAS(mux)
 	h.registerModels(mux)
+	mux.HandleFunc("POST "+SearchPath, h.search)
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		if _, ok := h.authenticate(w, r); !ok {
 			return

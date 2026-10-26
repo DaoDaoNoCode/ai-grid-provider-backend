@@ -15,6 +15,7 @@ import (
 	connect "connectrpc.com/connect/v2"
 	aigridv1 "github.com/osac-project/ai-grid-provider-backend/gen/ai_grid/v1"
 	"github.com/osac-project/ai-grid-provider-backend/gen/ai_grid/v1/aigridv1connect"
+	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -44,6 +45,7 @@ type ClustersServerBuilder struct {
 	logger      *slog.Logger
 	client      dynamic.Interface
 	readyPolicy string
+	gpus        *GPUInventory
 }
 
 // ClustersServer implements ai_grid.v1.Clusters against hub ManagedCluster CRs.
@@ -53,6 +55,7 @@ type ClustersServer struct {
 	client               dynamic.Interface
 	readyPolicyNamespace string
 	readyPolicyName      string
+	gpus                 *GPUInventory
 }
 
 var _ aigridv1connect.ClustersHandler = (*ClustersServer)(nil)
@@ -94,6 +97,13 @@ func splitReadyPolicy(readyPolicy string) (namespace, name string, err error) {
 	return namespace, name, nil
 }
 
+// SetGPUInventory sets where each cluster's GPUs come from (ACM Search).
+// Optional; without it clusters carry no `status.gpus`.
+func (b *ClustersServerBuilder) SetGPUInventory(inventory *GPUInventory) *ClustersServerBuilder {
+	b.gpus = inventory
+	return b
+}
+
 // Build creates the ClustersServer.
 func (b *ClustersServerBuilder) Build() (*ClustersServer, error) {
 	if b.client == nil {
@@ -107,7 +117,7 @@ func (b *ClustersServerBuilder) Build() (*ClustersServer, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &ClustersServer{logger: logger, client: b.client, readyPolicyNamespace: namespace, readyPolicyName: name}, nil
+	return &ClustersServer{logger: logger, client: b.client, readyPolicyNamespace: namespace, readyPolicyName: name, gpus: b.gpus}, nil
 }
 
 // List returns ManagedCluster objects from the Kubernetes API.
@@ -121,9 +131,10 @@ func (s *ClustersServer) List(ctx context.Context, req *aigridv1.ClustersListReq
 	}
 
 	provisioning := s.provisioning(ctx)
+	gpus := s.clusterGPUs(ctx)
 	items := make([]*aigridv1.ManagedCluster, 0, len(list.Items))
 	for _, item := range list.Items {
-		items = append(items, s.withProvisioning(managedClusterFromUnstructured(item), provisioning))
+		items = append(items, withGPUs(s.withProvisioning(managedClusterFromUnstructured(item), provisioning), gpus))
 	}
 	page, total := applyListWindow(items, req.Offset, req.Limit)
 	return &aigridv1.ClustersListResponse{
@@ -143,7 +154,7 @@ func (s *ClustersServer) Get(ctx context.Context, req *aigridv1.ClustersGetReque
 	if err != nil {
 		return nil, mapManagedClusterAPIError("get", id, err)
 	}
-	return &aigridv1.ClustersGetResponse{Object: s.withProvisioning(managedClusterFromUnstructured(*obj), s.provisioning(ctx))}, nil
+	return &aigridv1.ClustersGetResponse{Object: withGPUs(s.withProvisioning(managedClusterFromUnstructured(*obj), s.provisioning(ctx)), s.clusterGPUs(ctx))}, nil
 }
 
 // Create creates a hub-side ManagedCluster CR.
@@ -276,7 +287,7 @@ func (s *ClustersServer) Update(ctx context.Context, req *aigridv1.ClustersUpdat
 	if err != nil {
 		return nil, mapManagedClusterAPIError("update", id, err)
 	}
-	return &aigridv1.ClustersUpdateResponse{Object: s.withProvisioning(managedClusterFromUnstructured(*updated), s.provisioning(ctx))}, nil
+	return &aigridv1.ClustersUpdateResponse{Object: withGPUs(s.withProvisioning(managedClusterFromUnstructured(*updated), s.provisioning(ctx)), s.clusterGPUs(ctx))}, nil
 }
 
 // Delete deletes a ManagedCluster by id.
@@ -312,6 +323,27 @@ func readProvisioning(ctx context.Context, client dynamic.Interface, logger *slo
 		return map[string]string{}
 	}
 	return provisioningFromPolicy(*policy)
+}
+
+// clusterGPUs is each cluster's GPUs by name; empty without an inventory or
+// when Search can't answer.
+func (s *ClustersServer) clusterGPUs(ctx context.Context) map[string]*aigridv1.ClusterGPUs {
+	if s.gpus == nil {
+		return nil
+	}
+	return s.gpus.Clusters(ctx)
+}
+
+// withGPUs sets the cluster's status.gpus from the inventory, a copy so that
+// no response shares the cached message.
+func withGPUs(cluster *aigridv1.ManagedCluster, gpus map[string]*aigridv1.ClusterGPUs) *aigridv1.ManagedCluster {
+	if g := gpus[cluster.GetId()]; g != nil {
+		if cluster.Status == nil {
+			cluster.Status = &aigridv1.ManagedClusterStatus{}
+		}
+		cluster.Status.Gpus = proto.Clone(g).(*aigridv1.ClusterGPUs)
+	}
+	return cluster
 }
 
 func (s *ClustersServer) withProvisioning(cluster *aigridv1.ManagedCluster, provisioning map[string]string) *aigridv1.ManagedCluster {

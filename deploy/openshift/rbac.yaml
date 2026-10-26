@@ -44,6 +44,16 @@ rules:
       - ai-grid-policies.ai-grid-models-status
       - ai-grid-policies.ai-grid-catalog-status
     verbs: ["get"]
+  # Clusters List/Get read each cluster's GPUs from ACM Search (SEARCH_API_URL).
+  # Search shows a caller the resources of every managed cluster when it may
+  # get this virtual resource (stolostron/search-v2-api pkg/rbac/userData.go,
+  # userHasAllAccess; the "global search" user configuration); without it the
+  # ServiceAccount would see only clusters whose namespaces it can read. It
+  # grants no other read: Search answers only what the backend asks, the
+  # GPU nodes.
+  - apiGroups: ["search.open-cluster-management.io"]
+    resources: ["searches/allManagedData"]
+    verbs: ["get"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding

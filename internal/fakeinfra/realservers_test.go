@@ -21,6 +21,7 @@ import (
 
 	connect "connectrpc.com/connect/v2"
 	aigridv1 "github.com/osac-project/ai-grid-provider-backend/gen/ai_grid/v1"
+	"github.com/osac-project/ai-grid-provider-backend/internal/acmsearch"
 	"github.com/osac-project/ai-grid-provider-backend/internal/fakeinfra/devserve"
 	"github.com/osac-project/ai-grid-provider-backend/internal/fakeinfra/hub"
 	fakekeycloak "github.com/osac-project/ai-grid-provider-backend/internal/fakeinfra/keycloak"
@@ -524,3 +525,73 @@ func TestRealCatalogStatusOnFakeHub(t *testing.T) {
 		t.Fatalf("subscription phase = %q, want Active", phase)
 	}
 }
+
+// The backend's own ACM Search client against the fake Search: List and Get
+// carry each cluster's GPUs from fixtures/default/searchnodes.json, and a
+// token Search rejects leaves them out without failing the call.
+func TestRealClustersServerGPUsFromFakeSearch(t *testing.T) {
+	h, srv := startHub(t)
+	cfg := &rest.Config{Host: srv.URL, BearerToken: h.ServiceAccountToken(), QPS: 1000, Burst: 1000}
+	client, err := dynamic.NewForConfig(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	withToken := func(token string) *http.Client {
+		return &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+			r = r.Clone(r.Context())
+			r.Header.Set("Authorization", "Bearer "+token)
+			return http.DefaultTransport.RoundTrip(r)
+		})}
+	}
+	server := func(token string) *servers.ClustersServer {
+		inv := servers.NewGPUInventory(acmsearch.New(srv.URL+hub.SearchPath, withToken(token)), 0, slog.New(slog.DiscardHandler))
+		s, err := servers.NewClustersServer().SetLogger(slog.New(slog.DiscardHandler)).SetDynamicClient(client).SetGPUInventory(inv).Build()
+		if err != nil {
+			t.Fatal(err)
+		}
+		return s
+	}
+	ctx := context.Background()
+
+	s := server(h.ServiceAccountToken())
+	got, err := s.Get(ctx, &aigridv1.ClustersGetRequest{Id: "site-paris-1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	gpus := got.GetObject().GetStatus().GetGpus()
+	capacity := got.GetObject().GetStatus().GetCapacity()["nvidia.com/gpu"]
+	if gpus.GetTotal() != 16 || capacity != "16" || len(gpus.GetConfigurations()) != 1 ||
+		gpus.GetConfigurations()[0].GetProduct() != "NVIDIA-H200" || gpus.GetConfigurations()[0].GetNodeCount() != 2 {
+		t.Fatalf("site-paris-1 gpus = %v (capacity %q)", gpus, capacity)
+	}
+	list, err := s.List(ctx, &aigridv1.ClustersListRequest{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	strategies := map[string]string{}
+	for _, c := range list.GetItems() {
+		if g := c.GetStatus().GetGpus(); g != nil {
+			strategies[c.GetId()] = g.GetConfigurations()[0].GetSharing().GetStrategy()
+		}
+	}
+	want := map[string]string{"site-paris-1": "none", "site-madrid-1": "time-slicing", "site-ashburn-1": "mig", "site-frankfurt-1": "none", "edge-lyon-2": "none"}
+	if !maps.Equal(strategies, want) {
+		t.Fatalf("clusters with GPUs = %v, want %v", strategies, want)
+	}
+
+	// Search rejects the token: the clusters still list, without GPUs.
+	rejected := server("")
+	list, err = rejected.List(ctx, &aigridv1.ClustersListRequest{})
+	if err != nil {
+		t.Fatalf("List() must not fail on Search: %v", err)
+	}
+	for _, c := range list.GetItems() {
+		if c.GetStatus().GetGpus() != nil {
+			t.Fatalf("%s has gpus without Search: %v", c.GetId(), c.GetStatus().GetGpus())
+		}
+	}
+}
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }

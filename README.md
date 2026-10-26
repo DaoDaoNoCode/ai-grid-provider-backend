@@ -469,8 +469,9 @@ terminal; Ctrl-C stops both.
 make dev-fake
 ├── bin/ai-grid-fake-infra --fixtures fixtures/default --draft-fixtures fixtures/draft/default
 │   ├── fake hub API   127.0.0.1:9091  ManagedClusters + SelfSubjectAccessReview
-│   │                                  (TLS for the backend, plain HTTP for the console BFF)
-│   │                                  + the status Policies (fixtures/default/policies.json)
+│   │                                  (TLS for the backend, plain HTTP for the console BFF),
+│   │                                  the status Policies (fixtures/default/policies.json)
+│   │                                  and a fake ACM Search at /searchapi/graphql (GPU nodes)
 │   ├── fake Keycloak  127.0.0.1:9093  token endpoint + Organizations Admin API
 │   └── draft fake     127.0.0.1:9094  gRPC ai_grid.draft.v1, the console's draft API (own state)
 ├── bin/dev-catalog.git                bare Git repository Models and Subscriptions commit to
@@ -484,7 +485,9 @@ server's status codes and `metav1.Status` messages, optimistic concurrency on
 `resourceVersion`, finalizers and the ACM controllers' conditions, taints and
 labels; Keycloak with 26.8's status codes and verbatim error messages. The
 backend gets `KEYCLOAK_URL=http://127.0.0.1:9093` with the fake's admin
-credentials and a kubeconfig carrying the fake ServiceAccount token. The data
+credentials, a kubeconfig carrying the fake ServiceAccount token, and
+`SEARCH_API_URL` / `SEARCH_CA_FILE` for the fake Search, which answers each
+cluster's GPU nodes from `searchnodes.json`. The data
 is fictional; see [fixtures/README.md](fixtures/README.md) for what each
 preset contains and where it comes from.
 
@@ -728,6 +731,32 @@ from the hub Policy named by `AI_GRID_READY_POLICY` (`namespace/name`, default
 `deploy/openshift/rbac.yaml` grants `get` on Policies with that name only, in
 any namespace; change its `resourceNames` if you change the variable. Without
 that permission, or without the Policy, `provisioning` is empty.
+
+Clusters `List`, `Get` and `Update` also report each cluster's `status.gpus`
+(the GPU product, memory, count, architecture, driver and sharing of every GPU
+node) from ACM Search, which indexes the managed clusters' nodes with NVIDIA
+GPU Feature Discovery's labels; the hub's own ManagedClusterInfo keeps none of
+them. The backend asks Search once a minute at most and calls it with its own
+ServiceAccount token. Settings:
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `SEARCH_API_URL` | `https://search-search-api.open-cluster-management.svc:4010/searchapi/graphql` | Search's GraphQL endpoint; `off` turns GPUs off (the Kind deployment does) |
+| `SEARCH_CA_FILE` | the pod's service CA (`/var/run/secrets/kubernetes.io/serviceaccount/service-ca.crt`), else the system roots | CA of Search's serving certificate |
+| `SEARCH_INSECURE_SKIP_VERIFY` | unset | `true` skips the certificate check; only for a local run against a port-forwarded Search |
+
+The ClusterRole grants `get` on `searches/allManagedData`
+(`search.open-cluster-management.io`), which Search reads as "may see every
+managed cluster's resources". When Search is missing, slow or refuses the
+token, clusters carry no `gpus` and the call still succeeds; the backend logs a
+warning once per minute.
+
+Locally against a hub (`make run`), port-forward Search and point the backend at it:
+
+```sh
+oc -n open-cluster-management port-forward svc/search-search-api 4010:4010 &
+SEARCH_API_URL=https://127.0.0.1:4010/searchapi/graphql SEARCH_INSECURE_SKIP_VERIFY=true make run
+```
 
 If Keycloak or Postgres pods are rejected by SCC, re-run with
 `GRANT_ANYUID=1` (or grant `anyuid` to the `default` SA in `ai-grid`).

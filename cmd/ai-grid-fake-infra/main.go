@@ -41,6 +41,7 @@ func main() {
 	draftAddress := flag.String("draft-address", "127.0.0.1:9094", "gRPC listen address of the fake ai_grid.draft.v1 services; empty disables them")
 	draftFixtures := flag.String("draft-fixtures", "fixtures/draft/default", "fixtures directory of the draft fake (fixtures/draft/default or fixtures/draft/poc)")
 	kubeconfigOut := flag.String("kubeconfig-out", "bin/fake-kubeconfig", "where to write the kubeconfig for the backend's --kubeconfig")
+	hubCAOut := flag.String("hub-ca-out", "bin/fake-hub-ca.crt", "where to write the fake hub's CA certificate, for the backend's SEARCH_CA_FILE (the fake Search shares the hub's port); empty writes none")
 	adminRealm := flag.String("keycloak-admin-realm", "master", "realm of the Keycloak admin user (the backend's KEYCLOAK_ADMIN_REALM)")
 	realm := flag.String("keycloak-realm", "ai-grid", "realm with Organizations (the backend's KEYCLOAK_REALM)")
 	username := flag.String("keycloak-admin-username", "admin", "Keycloak admin user name the password grant accepts (KEYCLOAK_ADMIN_USERNAME)")
@@ -56,7 +57,7 @@ func main() {
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: level}))
 
 	if err := run(logger, config{
-		fixtures: *fixtures, hubAddress: *hubAddress, keycloakAddress: *keycloakAddress, kubeconfigOut: *kubeconfigOut,
+		fixtures: *fixtures, hubAddress: *hubAddress, keycloakAddress: *keycloakAddress, kubeconfigOut: *kubeconfigOut, hubCAOut: *hubCAOut,
 		draftAddress: *draftAddress, draftFixtures: *draftFixtures,
 		keycloak: keycloak.Config{AdminRealm: *adminRealm, Realm: *realm, Username: *username, Password: *password},
 	}); err != nil {
@@ -79,6 +80,7 @@ type config struct {
 	hubAddress      string
 	keycloakAddress string
 	kubeconfigOut   string
+	hubCAOut        string
 	draftAddress    string
 	draftFixtures   string
 	keycloak        keycloak.Config
@@ -161,6 +163,15 @@ func run(logger *slog.Logger, cfg config) error {
 		}
 	}
 	hubURL := "https://" + hubListener.Addr().String()
+	// The CA file first: the kubeconfig appearing is what hack/dev-fake.sh
+	// waits for, so the CA must exist by then.
+	if cfg.hubCAOut != "" {
+		if err := os.WriteFile(cfg.hubCAOut, caPEM, 0o600); err != nil {
+			closeListeners()
+			return fmt.Errorf("write %s: %w", cfg.hubCAOut, err)
+		}
+		defer func() { _ = os.Remove(cfg.hubCAOut) }()
+	}
 	written, err := devserve.WriteKubeconfig(cfg.kubeconfigOut, hubURL, caPEM, fakeHub.ServiceAccountToken())
 	if err != nil {
 		closeListeners()
@@ -216,6 +227,7 @@ func run(logger *slog.Logger, cfg config) error {
 		slog.String("draftGRPC", addrOf(draftListener)),
 		slog.String("draftFixtures", cfg.draftFixtures),
 		slog.String("kubeconfig", cfg.kubeconfigOut),
+		slog.String("search", hubURL+hub.SearchPath),
 		slog.String("keycloakAdminRealm", cfg.keycloak.AdminRealm),
 		slog.String("keycloakRealm", cfg.keycloak.Realm),
 	)

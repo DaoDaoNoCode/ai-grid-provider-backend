@@ -72,6 +72,85 @@ message ManagedClusterStatus {
   // `platform.open-cluster-management.io` and
   // `product.open-cluster-management.io`.
   repeated ManagedClusterClaim cluster_claims = 9;
+  // The cluster's GPUs, from ACM Search's index of its nodes and the labels
+  // NVIDIA GPU Feature Discovery puts on them. Unset when Search isn't
+  // available or hasn't indexed the cluster; `capacity["nvidia.com/gpu"]`
+  // still counts its schedulable GPUs then.
+  ClusterGPUs gpus = 10;
+}
+
+// GPU inventory of one cluster.
+message ClusterGPUs {
+  // Physical GPUs on the cluster's GPU nodes: the sum of each node's `count`.
+  int32 total = 1;
+  // Nodes with at least one GPU.
+  int32 node_count = 2;
+  // The distinct node configurations (vendor, product, memory, GPUs per node,
+  // sharing), each with how many nodes have it, most nodes first, then by
+  // product. One entry is the usual case, for example NVIDIA-L4 with 1 GPU per
+  // node on 2 nodes.
+  repeated GPUConfiguration configurations = 3;
+  // Every GPU node, by name.
+  repeated GPUNode nodes = 4;
+}
+
+// Nodes that share one GPU configuration.
+message GPUConfiguration {
+  // "NVIDIA" for the nvidia.com labels.
+  string vendor = 1;
+  // `nvidia.com/gpu.product` as GPU Feature Discovery writes it, for example
+  // "NVIDIA-L4" or "NVIDIA-H200"; MIG and time-slicing suffixes kept.
+  string product = 2;
+  // `nvidia.com/gpu.memory`, MiB per GPU.
+  int64 memory_mib = 3;
+  // `nvidia.com/gpu.count`.
+  int32 gpus_per_node = 4;
+  // Nodes with this configuration.
+  int32 node_count = 5;
+  // How these nodes share or slice their GPUs.
+  GPUSharing sharing = 6;
+}
+
+// How a node's GPUs are shared or sliced.
+message GPUSharing {
+  // `nvidia.com/gpu.sharing-strategy`: "none", "time-slicing" or "mps";
+  // "mig" when `nvidia.com/mig.strategy` is set. Empty when GPU Feature
+  // Discovery reports none.
+  string strategy = 1;
+  // `nvidia.com/gpu.replicas`: schedulable units per GPU; 1 without sharing.
+  int32 replicas = 2;
+  // `nvidia.com/mig.capable`.
+  bool mig_capable = 3;
+  // `nvidia.com/mig.strategy`: "single" or "mixed"; empty without MIG.
+  string mig_strategy = 4;
+}
+
+// One node with GPUs.
+message GPUNode {
+  // The node's name.
+  string name = 1;
+  // "NVIDIA" for the nvidia.com labels.
+  string vendor = 2;
+  // `nvidia.com/gpu.product`, for example "NVIDIA-L4".
+  string product = 3;
+  // `nvidia.com/gpu.count`: physical GPUs (MIG "single": MIG devices).
+  int32 count = 4;
+  // `nvidia.com/gpu.memory`, MiB per GPU.
+  int64 memory_mib = 5;
+  // `nvidia.com/gpu.family`, the architecture, for example "ada-lovelace".
+  string family = 6;
+  // `nvidia.com/gpu.compute.major` "." `minor`, for example "8.9".
+  string compute_capability = 7;
+  // `nvidia.com/cuda.driver-version.full`, for example "580.105.08".
+  string driver_version = 8;
+  // `nvidia.com/cuda.runtime-version.full`, for example "13.0".
+  string cuda_runtime_version = 9;
+  // How the node shares or slices its GPUs.
+  GPUSharing sharing = 10;
+  // `nvidia.com/gpu.machine`, the instance type, for example "g6.xlarge".
+  string instance_type = 11;
+  // The node's Ready condition is True.
+  bool ready = 12;
 }
 
 // One `status.conditions[]` entry of a ManagedCluster.

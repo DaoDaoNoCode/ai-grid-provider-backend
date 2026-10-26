@@ -109,6 +109,9 @@ spec:
           image: localhost/ai-grid-provider-backend:dev
           imagePullPolicy: IfNotPresent
           env:
+            # Kind runs no ACM Search, so clusters carry no GPUs (status.gpus).
+            - name: SEARCH_API_URL
+              value: "off"
             - name: KEYCLOAK_URL
               value: http://keycloak.ai-grid.svc:8080
             - name: KEYCLOAK_ADMIN_REALM

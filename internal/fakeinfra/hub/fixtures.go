@@ -25,6 +25,7 @@ const (
 	MaaSModelRefsFile        = "maasmodelrefs.json"
 	LLMInferenceServicesFile = "llminferenceservices.json"
 	PoliciesFile             = "policies.json"
+	SearchNodesFile          = "searchnodes.json"
 )
 
 // Defaults for the backend's ServiceAccount when access.json names none: the
@@ -61,6 +62,8 @@ type Fixtures struct {
 	// from and their per-cluster copies (optional). The ai-grid-ready Policy
 	// is computed from the clusters instead (policy.go).
 	Policies []unstructured.Unstructured
+	// SearchNodes are the nodes the fake ACM Search indexes (search.go).
+	SearchNodes []SearchNode
 }
 
 // Access decides who the fake hub accepts. It is the console fake's
@@ -185,6 +188,14 @@ func LoadFixtures(dir string) (*Fixtures, error) {
 	} else {
 		fx.Policies = items
 	}
+	var nodes struct {
+		Comment string       `json:"_comment,omitempty"`
+		Items   []SearchNode `json:"items"`
+	}
+	if _, err := readStrict(filepath.Join(dir, SearchNodesFile), &nodes); err != nil {
+		return nil, err
+	}
+	fx.SearchNodes = nodes.Items
 	return fx, nil
 }
 
