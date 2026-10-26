@@ -357,20 +357,46 @@ func (s *ModelsServer) Update(ctx context.Context, req *aigridv1.ModelsUpdateReq
 	return &aigridv1.ModelsUpdateResponse{Object: m}, nil
 }
 
-// Delete removes the model and related Placement / MWRS / MaaSModelRef.
-// When resource_version is nonzero, it is passed as a K8s Delete precondition
-// on the LLMInferenceService so a stale delete fails atomically (Aborted)
-// before Placement/MWRS cleanup.
+// Delete removes Placement / MWRS first, then the LLMInferenceService and
+// MaaSModelRef. Side effects are deleted before the service so a surviving
+// MWRS cannot keep ManifestWorks on the spokes after a successful Delete.
+// Failures deleting MWRS/Placement/ModelRef are returned (NotFound ignored)
+// so a retry can finish cleanup. When the service is already gone, Delete
+// still removes leftover Placement/MWRS/ModelRef, then returns NotFound.
+//
+// When resource_version is nonzero, the live service is compared first so a
+// stale delete changes nothing; the same version is a K8s Delete precondition
+// on the LLMInferenceService.
 func (s *ModelsServer) Delete(ctx context.Context, req *aigridv1.ModelsDeleteRequest) (*aigridv1.ModelsDeleteResponse, error) {
 	id := req.GetId()
 	if err := validateModelID(id); err != nil {
 		return nil, err
 	}
-	if _, err := s.client.Resource(llmInferenceServicesResource).Namespace(s.namespace).Get(ctx, id, metav1.GetOptions{}); err != nil {
+	current, err := s.client.Resource(llmInferenceServicesResource).Namespace(s.namespace).Get(ctx, id, metav1.GetOptions{})
+	if err != nil {
+		if apierrors.IsNotFound(err) {
+			if cleanErr := s.deleteModelSideEffects(ctx, id); cleanErr != nil {
+				return nil, cleanErr
+			}
+			return nil, mapModelAPIError("get", id, err)
+		}
 		return nil, mapModelAPIError("get", id, err)
 	}
 
 	if err := s.ensureNotReferenced(ctx, id); err != nil {
+		return nil, err
+	}
+
+	if rv := req.GetResourceVersion(); rv != 0 {
+		// Compare only when the hub reported a resourceVersion; empty means
+		// fall through to the Delete precondition (fake clients often omit it).
+		if currentRV := current.GetResourceVersion(); currentRV != "" &&
+			strconv.FormatInt(int64(rv), 10) != currentRV {
+			return nil, staleModelError("delete", id)
+		}
+	}
+
+	if err := s.deleteModelSideEffects(ctx, id); err != nil {
 		return nil, err
 	}
 
@@ -382,18 +408,23 @@ func (s *ModelsServer) Delete(ctx context.Context, req *aigridv1.ModelsDeleteReq
 	if err := s.client.Resource(llmInferenceServicesResource).Namespace(s.namespace).Delete(ctx, id, delOpts); err != nil {
 		return nil, mapModelAPIError("delete", id, err)
 	}
+	return &aigridv1.ModelsDeleteResponse{}, nil
+}
 
+// deleteModelSideEffects removes Placement, MWRS, and MaaSModelRef for id.
+// NotFound is ignored; other errors are returned so Delete stays retryable.
+func (s *ModelsServer) deleteModelSideEffects(ctx context.Context, id string) error {
 	pname := placementNameForModel(id)
 	if err := s.client.Resource(manifestWorkReplicaSetsResource).Namespace(s.namespace).Delete(ctx, pname, metav1.DeleteOptions{}); err != nil && !apierrors.IsNotFound(err) {
-		s.logger.Warn("delete ManifestWorkReplicaSet after model delete", "id", id, "error", err)
+		return mapModelAPIError("delete ManifestWorkReplicaSet", id, err)
 	}
 	if err := s.client.Resource(placementsResource).Namespace(s.namespace).Delete(ctx, pname, metav1.DeleteOptions{}); err != nil && !apierrors.IsNotFound(err) {
-		s.logger.Warn("delete Placement after model delete", "id", id, "error", err)
+		return mapModelAPIError("delete Placement", id, err)
 	}
 	if err := s.client.Resource(maasModelRefsResource).Namespace(s.namespace).Delete(ctx, id, metav1.DeleteOptions{}); err != nil && !apierrors.IsNotFound(err) {
-		s.logger.Warn("delete MaaSModelRef after model delete", "id", id, "error", err)
+		return mapModelAPIError("delete MaaSModelRef", id, err)
 	}
-	return &aigridv1.ModelsDeleteResponse{}, nil
+	return nil
 }
 
 func (s *ModelsServer) enrichPlacement(ctx context.Context, m *aigridv1.Model) {

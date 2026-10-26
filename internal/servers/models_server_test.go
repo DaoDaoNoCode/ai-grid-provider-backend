@@ -335,6 +335,40 @@ func TestModelsDeleteResourceVersionPrecondition(t *testing.T) {
 	}
 }
 
+func TestModelsDeleteStaleResourceVersionLeavesSideEffects(t *testing.T) {
+	t.Parallel()
+	client := newModelsClient()
+	srv := mustModelsServer(t, client)
+	ctx := context.Background()
+	obj := sampleModel("stale-side")
+	obj.Spec.Placement = &aigridv1.ModelPlacement{
+		LabelSelector: &aigridv1.ModelLabelSelector{
+			MatchExpressions: []*aigridv1.ModelLabelSelectorRequirement{
+				{Key: "location", Operator: "In", Values: []string{"site-paris"}},
+			},
+		},
+	}
+	if _, err := srv.Create(ctx, &aigridv1.ModelsCreateRequest{Object: obj}); err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	live, err := client.Resource(testLLMGVR).Namespace("ai-grid-models").Get(ctx, "stale-side", metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("get created model: %v", err)
+	}
+	live.SetResourceVersion("5")
+	if _, err := client.Resource(testLLMGVR).Namespace("ai-grid-models").Update(ctx, live, metav1.UpdateOptions{}); err != nil {
+		t.Fatalf("seed resourceVersion: %v", err)
+	}
+	_, err = srv.Delete(ctx, &aigridv1.ModelsDeleteRequest{Id: "stale-side", ResourceVersion: 4})
+	assertConnectCode(t, err, connect.CodeAborted)
+	if _, getErr := client.Resource(testMWRSGVR).Namespace("ai-grid-models").Get(ctx, "model-stale-side", metav1.GetOptions{}); getErr != nil {
+		t.Fatalf("MWRS should remain after stale delete: %v", getErr)
+	}
+	if _, getErr := client.Resource(testLLMGVR).Namespace("ai-grid-models").Get(ctx, "stale-side", metav1.GetOptions{}); getErr != nil {
+		t.Fatalf("LLMInferenceService should remain after stale delete: %v", getErr)
+	}
+}
+
 func TestModelsDeleteGuardedBySubscription(t *testing.T) {
 	t.Parallel()
 	// Point subscription at our model namespace/name.
