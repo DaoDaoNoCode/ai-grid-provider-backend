@@ -24,6 +24,13 @@ const (
 	MaaSAuthPoliciesFile     = "maasauthpolicies.json"
 	MaaSModelRefsFile        = "maasmodelrefs.json"
 	LLMInferenceServicesFile = "llminferenceservices.json"
+	// The ACM objects of placed models, as the hub's controllers last wrote
+	// them (the fake runs no placement scheduler, MWRS controller or work
+	// agent).
+	PlacementsFile              = "placements.json"
+	PlacementDecisionsFile      = "placementdecisions.json"
+	ManifestWorkReplicaSetsFile = "manifestworkreplicasets.json"
+	ManifestWorksFile           = "manifestworks.json"
 )
 
 // Defaults for the backend's ServiceAccount when access.json names none: the
@@ -55,6 +62,12 @@ type Fixtures struct {
 	MaaSModelRefs     []unstructured.Unstructured
 	// LLMInferenceService CRs for Models (optional; missing means empty List).
 	LLMInferenceServices []unstructured.Unstructured
+	// Placements, PlacementDecisions, ManifestWorkReplicaSets and the
+	// ManifestWorks they generated, for placed models (optional).
+	Placements              []unstructured.Unstructured
+	PlacementDecisions      []unstructured.Unstructured
+	ManifestWorkReplicaSets []unstructured.Unstructured
+	ManifestWorks           []unstructured.Unstructured
 }
 
 // Access decides who the fake hub accepts. It is the console fake's
@@ -173,6 +186,21 @@ func LoadFixtures(dir string) (*Fixtures, error) {
 		return nil, err
 	} else {
 		fx.LLMInferenceServices = items
+	}
+	for _, f := range []struct {
+		file, apiVersion, kind string
+		into                   *[]unstructured.Unstructured
+	}{
+		{PlacementsFile, placementAPIVersion, placementKind, &fx.Placements},
+		{PlacementDecisionsFile, placementAPIVersion, placementDecisionKind, &fx.PlacementDecisions},
+		{ManifestWorkReplicaSetsFile, mwrsAPIVersion, mwrsKind, &fx.ManifestWorkReplicaSets},
+		{ManifestWorksFile, manifestWorkAPIVersion, manifestWorkKind, &fx.ManifestWorks},
+	} {
+		items, err := loadUnstructuredList(filepath.Join(dir, f.file), f.apiVersion, f.kind)
+		if err != nil {
+			return nil, err
+		}
+		*f.into = items
 	}
 	return fx, nil
 }

@@ -360,6 +360,7 @@ func seedMAASFixtures(h *Hub, fx *Fixtures) error {
 		placementsResource:         {},
 		placementDecisionsResource: {},
 		mwrsResource:               {},
+		manifestWorksResource:      {},
 	}
 	type seed struct {
 		resource   string
@@ -372,6 +373,10 @@ func seedMAASFixtures(h *Hub, fx *Fixtures) error {
 		{maasAuthPoliciesResource, maasAPIVersion, maasAuthPolicyKind, fx.MaaSAuthPolicies},
 		{maasModelRefsResource, maasAPIVersion, maasModelRefKind, fx.MaaSModelRefs},
 		{llmInferenceResource, llmInferenceAPIVersion, llmInferenceKind, fx.LLMInferenceServices},
+		{placementsResource, placementAPIVersion, placementKind, fx.Placements},
+		{placementDecisionsResource, placementAPIVersion, placementDecisionKind, fx.PlacementDecisions},
+		{mwrsResource, mwrsAPIVersion, mwrsKind, fx.ManifestWorkReplicaSets},
+		{manifestWorksResource, manifestWorkAPIVersion, manifestWorkKind, fx.ManifestWorks},
 	} {
 		for i := range s.items {
 			obj := s.items[i].DeepCopy()

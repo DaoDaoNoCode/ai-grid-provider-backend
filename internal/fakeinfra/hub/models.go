@@ -14,6 +14,7 @@ import (
 	apivalidation "k8s.io/apimachinery/pkg/api/validation"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/validation/field"
@@ -41,6 +42,21 @@ const (
 	mwrsVersion    = "v1alpha1"
 	mwrsResource   = "manifestworkreplicasets"
 	mwrsKind       = "ManifestWorkReplicaSet"
+
+	manifestWorkAPIVersion = "work.open-cluster-management.io/v1"
+	manifestWorkVersion    = "v1"
+	manifestWorksResource  = "manifestworks"
+	manifestWorkKind       = "ManifestWork"
+	// manifestWorksPath lists ManifestWorks across every cluster namespace,
+	// as the backend does to find a model's works.
+	manifestWorksPath = "/apis/" + mwrsAPIGroup + "/" + manifestWorkVersion + "/" + manifestWorksResource
+
+	// LabelMWRSOwner is the label the ManifestWorkReplicaSet controller puts
+	// on the works it generates, "<mwrs namespace>.<mwrs name>" (the legacy
+	// owner label, open-cluster-management-io/api work/v1alpha1
+	// ManifestWorkReplicaSetControllerNameLabelKey; the console's
+	// mock/research/acm.md 4 names it the one MCE 2.17.3 certainly writes).
+	LabelMWRSOwner = "work.open-cluster-management.io/manifestworkreplicaset"
 )
 
 type nsAPI struct {
@@ -64,6 +80,10 @@ var modelResources = map[string]nsAPI{
 		group: mwrsAPIGroup, version: mwrsVersion,
 		apiVersion: mwrsAPIVersion, kind: mwrsKind,
 	},
+	manifestWorksResource: {
+		group: mwrsAPIGroup, version: manifestWorkVersion,
+		apiVersion: manifestWorkAPIVersion, kind: manifestWorkKind,
+	},
 }
 
 func (h *Hub) registerModels(mux *http.ServeMux) {
@@ -78,6 +98,9 @@ func (h *Hub) registerModels(mux *http.ServeMux) {
 		mux.HandleFunc("PATCH "+base+"/{name}", h.nsPatch(res, api))
 		mux.HandleFunc("DELETE "+base+"/{name}", h.nsDelete(res, api))
 	}
+	// A namespaced resource is also listed across all namespaces at its
+	// collection path without /namespaces/{namespace}.
+	mux.HandleFunc("GET "+manifestWorksPath, h.nsList(manifestWorksResource, modelResources[manifestWorksResource]))
 }
 
 func (h *Hub) authorizeNS(w http.ResponseWriter, r *http.Request, api nsAPI, resource, verb, name string) bool {
@@ -88,9 +111,13 @@ func (h *Hub) authorizeNS(w http.ResponseWriter, r *http.Request, api nsAPI, res
 	token := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
 	if !h.allowed(token) {
 		gr := schema.GroupResource{Group: api.group, Resource: resource}
+		scope := fmt.Sprintf("in the namespace %q", r.PathValue("namespace"))
+		if r.PathValue("namespace") == "" {
+			scope = "at the cluster scope"
+		}
 		writeStatus(w, apierrors.NewForbidden(gr, name,
-			verbatim(fmt.Sprintf("User %q cannot %s resource %q in API group %q in the namespace %q",
-				user, verb, resource, api.group, r.PathValue("namespace")))))
+			verbatim(fmt.Sprintf("User %q cannot %s resource %q in API group %q %s",
+				user, verb, resource, api.group, scope))))
 		return false
 	}
 	return true
@@ -120,18 +147,33 @@ func (h *Hub) nsList(resource string, api nsAPI) http.HandlerFunc {
 				schema.GroupResource{Group: api.group, Resource: resource}, "watch"))
 			return
 		}
+		selector := labels.Everything()
+		if s := r.URL.Query().Get("labelSelector"); s != "" {
+			parsed, err := labels.Parse(s)
+			if err != nil {
+				writeStatus(w, apierrors.NewBadRequest(err.Error()))
+				return
+			}
+			selector = parsed
+		}
 		h.mu.Lock()
 		items := make([]map[string]any, 0)
 		for key, obj := range h.maas[resource] {
 			ns, _, ok := strings.Cut(key, "/")
-			if !ok || ns != namespace {
+			if !ok || (namespace != "" && ns != namespace) || !selector.Matches(labels.Set(obj.GetLabels())) {
 				continue
 			}
 			items = append(items, obj.DeepCopy().Object)
 		}
 		rv := h.rv
 		h.mu.Unlock()
+		// The API server lists in storage key order: namespace, then name.
 		sort.Slice(items, func(i, j int) bool {
+			si, _, _ := unstructured.NestedString(items[i], "metadata", "namespace")
+			sj, _, _ := unstructured.NestedString(items[j], "metadata", "namespace")
+			if si != sj {
+				return si < sj
+			}
 			ni, _, _ := unstructured.NestedString(items[i], "metadata", "name")
 			nj, _, _ := unstructured.NestedString(items[j], "metadata", "name")
 			return ni < nj
@@ -297,11 +339,29 @@ func (h *Hub) nsDelete(resource string, api nsAPI) http.HandlerFunc {
 		}
 		uid := cur.GetUID()
 		delete(h.maas[resource], key)
+		if resource == mwrsResource {
+			h.deleteOwnedWorks(namespace, name)
+		}
 		writeJSON(w, http.StatusOK, &metav1.Status{
 			TypeMeta: metav1.TypeMeta{Kind: "Status", APIVersion: "v1"},
 			Status:   metav1.StatusSuccess,
 			Details:  &metav1.StatusDetails{Name: name, Group: api.group, Kind: resource, UID: uid},
 		})
+	}
+}
+
+// deleteOwnedWorks is the ManifestWorkReplicaSet controller's finalizer: it
+// deletes every work the MWRS generated before letting the MWRS go
+// (ocm pkg/work/hub/controllers/manifestworkreplicasetcontroller/manifestworkreplicaset_finalize_reconcile.go,
+// finalizeManifestWorkReplicaSet). The fake does it in the same write, so a
+// model created again under the same id does not find the old works. Must
+// be called under h.mu.
+func (h *Hub) deleteOwnedWorks(namespace, name string) {
+	owner := namespace + "." + name
+	for key, obj := range h.maas[manifestWorksResource] {
+		if obj.GetLabels()[LabelMWRSOwner] == owner {
+			delete(h.maas[manifestWorksResource], key)
+		}
 	}
 }
 
