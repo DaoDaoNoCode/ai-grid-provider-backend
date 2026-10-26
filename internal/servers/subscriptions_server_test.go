@@ -212,6 +212,68 @@ func TestSubscriptionsDeleteFailsWhenManagedPolicyCleanupFails(t *testing.T) {
 	})
 	_, err := srv.Delete(ctx, &aigridv1.SubscriptionsDeleteRequest{Id: "cleanup-fail"})
 	assertConnectCode(t, err, connect.CodeInternal)
+	// Policy is deleted before the subscription so a failed cleanup leaves the
+	// subscription in place for a retry.
+	if _, getErr := client.Resource(testSubscriptionsGVR).Namespace("models-as-a-service").Get(ctx, "cleanup-fail", metav1.GetOptions{}); getErr != nil {
+		t.Fatalf("subscription should remain after policy cleanup failure: %v", getErr)
+	}
+}
+
+func TestSubscriptionsDeletePolicyBeforeSubscription(t *testing.T) {
+	t.Parallel()
+	client := newSubscriptionClient()
+	srv := mustSubscriptionsServer(t, client)
+	ctx := context.Background()
+	if _, err := srv.Create(ctx, &aigridv1.SubscriptionsCreateRequest{Object: sampleSubscription("order-sub")}); err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	var order []string
+	client.PrependReactor("delete", "maasauthpolicies", func(action clienttesting.Action) (bool, runtime.Object, error) {
+		order = append(order, "policy:"+action.(clienttesting.DeleteAction).GetName())
+		return false, nil, nil
+	})
+	client.PrependReactor("delete", "maassubscriptions", func(action clienttesting.Action) (bool, runtime.Object, error) {
+		order = append(order, "subscription:"+action.(clienttesting.DeleteAction).GetName())
+		return false, nil, nil
+	})
+	if _, err := srv.Delete(ctx, &aigridv1.SubscriptionsDeleteRequest{Id: "order-sub"}); err != nil {
+		t.Fatalf("Delete() error = %v", err)
+	}
+	want := []string{"policy:order-sub-policy", "subscription:order-sub"}
+	if len(order) != 2 || order[0] != want[0] || order[1] != want[1] {
+		t.Fatalf("delete order = %v, want %v", order, want)
+	}
+}
+
+func TestSubscriptionsDeleteCleansOrphanedManagedPolicy(t *testing.T) {
+	t.Parallel()
+	// Simulates a prior partial delete: subscription gone, managed policy left.
+	policy := &unstructured.Unstructured{Object: map[string]interface{}{
+		"apiVersion": "maas.opendatahub.io/v1alpha1",
+		"kind":       "MaaSAuthPolicy",
+		"metadata": map[string]interface{}{
+			"name":      "orphan-policy",
+			"namespace": "models-as-a-service",
+			"labels": map[string]interface{}{
+				managedByLabelKey: managedByLabelValue,
+			},
+		},
+		"spec": map[string]interface{}{
+			"modelRefs": []interface{}{
+				map[string]interface{}{"name": "sim", "namespace": "llm"},
+			},
+			"subjects": map[string]interface{}{
+				"groups": []interface{}{map[string]interface{}{"name": "g"}},
+			},
+		},
+	}}
+	client := newSubscriptionClient(policy)
+	srv := mustSubscriptionsServer(t, client)
+	_, err := srv.Delete(context.Background(), &aigridv1.SubscriptionsDeleteRequest{Id: "orphan"})
+	assertConnectCode(t, err, connect.CodeNotFound)
+	if _, getErr := client.Resource(testAuthPoliciesGVR).Namespace("models-as-a-service").Get(context.Background(), "orphan-policy", metav1.GetOptions{}); !apierrors.IsNotFound(getErr) {
+		t.Fatalf("orphaned managed policy should be removed: %v", getErr)
+	}
 }
 
 func TestSubscriptionsDeleteLeavesUnmanagedPolicy(t *testing.T) {

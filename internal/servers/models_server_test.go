@@ -373,6 +373,11 @@ func TestModelsValidation(t *testing.T) {
 	both.Spec.Scaling = &aigridv1.ModelScaling{MaxReplicas: 2, Keda: true, Triggers: []*aigridv1.ModelKedaTrigger{{Type: "cpu"}}}
 	_, err = srv.Create(ctx, &aigridv1.ModelsCreateRequest{Object: both})
 	assertConnectCode(t, err, connect.CodeInvalidArgument)
+
+	emptyImage := sampleModel("empty-image")
+	emptyImage.Spec.Main.Image = ""
+	_, err = srv.Create(ctx, &aigridv1.ModelsCreateRequest{Object: emptyImage})
+	assertConnectCode(t, err, connect.CodeInvalidArgument)
 }
 
 func TestModelsGetNotFound(t *testing.T) {

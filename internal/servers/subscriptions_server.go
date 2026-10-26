@@ -289,15 +289,22 @@ func (s *SubscriptionsServer) Update(ctx context.Context, req *aigridv1.Subscrip
 	return &aigridv1.SubscriptionsUpdateResponse{Object: subscriptionFromUnstructured(*updated)}, nil
 }
 
-// Delete deletes a MaaSSubscription and its managed <id>-policy when present.
-// Managed AuthPolicy cleanup failures are returned so clients do not see success
-// with a leaked policy; unmanaged same-named policies are left alone.
-// Nonzero resource_version is passed as a K8s Delete precondition (Aborted on conflict).
+// Delete deletes a managed <id>-policy first (when present), then the
+// MaaSSubscription. Policy-first ordering keeps Delete retryable: a failure
+// after the subscription is gone would otherwise leave a leaked policy that a
+// NotFound retry never reaches. Unmanaged same-named policies are left alone.
+// Nonzero resource_version is a K8s Delete precondition on the subscription
+// (Aborted on conflict). A missing subscription still attempts managed-policy
+// cleanup so a prior partial delete can finish, then returns NotFound.
 func (s *SubscriptionsServer) Delete(ctx context.Context, req *aigridv1.SubscriptionsDeleteRequest) (*aigridv1.SubscriptionsDeleteResponse, error) {
 	id := req.GetId()
 	if err := validateSubscriptionID(id); err != nil {
 		return nil, err
 	}
+	if err := s.deleteManagedAuthPolicy(ctx, id); err != nil {
+		return nil, err
+	}
+
 	delOpts := metav1.DeleteOptions{}
 	if rv := req.GetResourceVersion(); rv != 0 {
 		rvStr := strconv.FormatInt(int64(rv), 10)
@@ -307,22 +314,27 @@ func (s *SubscriptionsServer) Delete(ctx context.Context, req *aigridv1.Subscrip
 	if err != nil {
 		return nil, mapSubscriptionAPIError("delete", id, err)
 	}
+	return &aigridv1.SubscriptionsDeleteResponse{}, nil
+}
 
+// deleteManagedAuthPolicy removes <id>-policy when it is owned by this backend.
+// Missing or unmanaged policies are no-ops; get/delete failures are returned.
+func (s *SubscriptionsServer) deleteManagedAuthPolicy(ctx context.Context, id string) error {
 	policyName := authPolicyNameForSubscription(id)
 	existing, getErr := s.client.Resource(maasAuthPoliciesResource).Namespace(s.namespace).Get(ctx, policyName, metav1.GetOptions{})
 	if getErr != nil {
 		if apierrors.IsNotFound(getErr) {
-			return &aigridv1.SubscriptionsDeleteResponse{}, nil
+			return nil
 		}
-		return nil, mapSubscriptionAPIError("get auth policy", id, getErr)
+		return mapSubscriptionAPIError("get auth policy", id, getErr)
 	}
 	if !isManagedAuthPolicy(existing) {
-		return &aigridv1.SubscriptionsDeleteResponse{}, nil
+		return nil
 	}
 	if delErr := s.client.Resource(maasAuthPoliciesResource).Namespace(s.namespace).Delete(ctx, policyName, metav1.DeleteOptions{}); delErr != nil && !apierrors.IsNotFound(delErr) {
-		return nil, mapSubscriptionAPIError("delete auth policy", id, delErr)
+		return mapSubscriptionAPIError("delete auth policy", id, delErr)
 	}
-	return &aigridv1.SubscriptionsDeleteResponse{}, nil
+	return nil
 }
 
 func (s *SubscriptionsServer) loadModelRefs(ctx context.Context, sub *aigridv1.Subscription) map[string]*unstructured.Unstructured {

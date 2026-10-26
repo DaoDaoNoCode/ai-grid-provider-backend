@@ -901,7 +901,11 @@ func validateModelSpec(spec *aigridv1.ModelSpec) error {
 		}
 	}
 	if main := spec.GetMain(); main != nil {
-		if img := main.GetImage(); img != "" && strings.ContainsAny(img, " \t") {
+		img := strings.TrimSpace(main.GetImage())
+		if img == "" {
+			return connect.NewError(connect.CodeInvalidArgument, "spec.main.image is required when spec.main is set")
+		}
+		if strings.ContainsAny(img, " \t") {
 			return connect.NewError(connect.CodeInvalidArgument, "spec.main.image must not contain whitespace")
 		}
 	}

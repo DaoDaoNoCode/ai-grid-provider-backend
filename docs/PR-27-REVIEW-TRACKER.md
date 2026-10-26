@@ -26,11 +26,11 @@
 | 1 | — | Kind RBAC incomplete for Models | done | Kind ClusterRole aligned with OpenShift Models RBAC |
 | 2 | — | Subscription Update: merge mask before validate | done | Merge stored+mask paths before validate; reject unsupported paths |
 | 3 | — | List maps Forbidden→Internal | done | Typed K8s→Connect mapper on Models/Subscriptions List + coveringAuthPolicies |
-| 4 | — | Models Update writes unmasked spec.main fields | done | Exact main FieldMask paths; env-only no longer clears image |
+| 4 | — | Models Update writes unmasked spec.main fields | done | Exact main FieldMask paths; env-only no longer clears image; empty main.image rejected |
 | 5 | — | Metadata maps merge instead of replace | done | Replace semantics via null removals; Models preserve owned labels |
 | 6 | — | Create compensation deletes preexisting Placement/MWRS | done | Compensate only UID-tracked creates from this call |
 | 7 | — | replicas↔scaling explicit null | done | Update patch emits null for cleared mode; subscription optionals too |
-| 8 | — | Subscription Delete swallows policy cleanup failure | done | Managed AuthPolicy cleanup errors fail Delete |
+| 8 | — | Subscription Delete swallows policy cleanup failure | done | Policy deleted first; cleanup errors fail Delete; orphan retry cleans managed policy |
 | 9 | — | Reject negative Models List limit | done | Models + Subscriptions validate limit < 0 → InvalidArgument |
 | 10 | — | Models Delete K8s ResourceVersion precondition | done | Preconditioned LLM delete before Placement/MWRS cleanup |
 | 11 | — | Model phase NotAsExpected→FAILED too aggressive | done | NotAsExpected → PENDING; FAILED when a work is Degraded |
@@ -95,7 +95,7 @@
 - **Pros:** Fixes console BFF empty-container bug; honors FieldMask contract.
 - **Cons:** Careful mask/patch logic; regression tests; cherry-pick conflicts possible.
 - **Decision:** Accepted — apply only FieldMask-selected main fields.
-- **Implementation notes:** Expanded `modelUpdatePaths` with exact LLM/main subfields (`spec.main.image`, `spec.main.env`, …). `mergeModelUpdate` applies only selected fields so an env-only patch keeps the stored image. Regression test `TestModelsUpdateEnvOnlyPreservesImage`.
+- **Implementation notes:** Expanded `modelUpdatePaths` with exact LLM/main subfields (`spec.main.image`, `spec.main.env`, …). `mergeModelUpdate` applies only selected fields so an env-only patch keeps the stored image. `validateModelSpec` rejects empty/whitespace-only `spec.main.image` when `spec.main` is set. Regression tests: `TestModelsUpdateEnvOnlyPreservesImage`, empty-image Create → InvalidArgument.
 
 ### 5. Metadata maps merge instead of replace — Status: `done`
 
@@ -131,7 +131,7 @@
 - **Pros:** Security/correctness; UI contract.
 - **Cons:** Retry/ordering change; must not delete unmanaged policies.
 - **Decision:** Accepted — fail Delete when managed policy get/delete fails.
-- **Implementation notes:** After subscription delete, managed AuthPolicy get/delete errors map via `mapSubscriptionAPIError` (NotFound still succeeds). Unmanaged same-named policies remain untouched. Test asserts Internal when policy delete fails.
+- **Implementation notes:** Managed AuthPolicy is deleted **before** the subscription so a cleanup failure leaves the subscription for retry. Get/delete errors map via `mapSubscriptionAPIError`. Unmanaged same-named policies remain untouched. A missing subscription still attempts managed-policy cleanup (orphaned-policy retry), then returns NotFound. Tests cover Internal-on-policy-failure (subscription remains), delete order, and orphaned managed policy cleanup.
 
 ### 9. Reject negative Models List limit — Status: `done`
 
