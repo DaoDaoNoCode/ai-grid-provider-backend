@@ -535,29 +535,49 @@ func (s *ModelsServer) enrichPlacementLocations(ctx context.Context, m *aigridv1
 }
 
 // enrichManifestWorks fills status.rollout.works from ManifestWorks owned by
-// this model's MWRS/Placement (cluster = work namespace).
+// this model's MWRS (cluster = work namespace). Selectors use the MWRS
+// namespace-qualified owner labels so another MWRS with the same placement
+// name in a different namespace cannot contribute works.
 func (s *ModelsServer) enrichManifestWorks(ctx context.Context, m *aigridv1.Model, pname string) {
 	if m == nil || m.Status == nil || m.Status.Rollout == nil {
 		return
 	}
-	selector := labelMWRSLegacy + "=" + pname
-	list, err := s.client.Resource(manifestWorksResource).Namespace("").List(ctx, metav1.ListOptions{
-		LabelSelector: selector,
-	})
-	if err != nil || list == nil || len(list.Items) == 0 {
-		// Fall back to placementname label used by some OCM versions.
-		list, err = s.client.Resource(manifestWorksResource).Namespace("").List(ctx, metav1.ListOptions{
-			LabelSelector: labelPlacementName + "=" + pname,
-		})
-		if err != nil || list == nil {
-			return
+	legacyOwner := s.namespace + "." + pname
+	list := s.listManifestWorksBySelector(ctx, labelMWRSLegacy+"="+legacyOwner)
+	if list == nil || len(list.Items) == 0 {
+		// Fall back to placementname, but drop works that carry a different
+		// MWRS owner label (another MWRS with the same placement name).
+		list = s.listManifestWorksBySelector(ctx, labelPlacementName+"="+pname)
+		if list != nil {
+			filtered := list.Items[:0]
+			for i := range list.Items {
+				labels := list.Items[i].GetLabels()
+				if v, ok := labels[labelMWRSLegacy]; ok && v != legacyOwner {
+					continue
+				}
+				filtered = append(filtered, list.Items[i])
+			}
+			list.Items = filtered
 		}
+	}
+	if list == nil {
+		return
 	}
 	works := make([]*aigridv1.ModelWorkStatus, 0, len(list.Items))
 	for i := range list.Items {
 		works = append(works, modelWorkStatusFromManifestWork(list.Items[i]))
 	}
 	m.Status.Rollout.Works = works
+}
+
+func (s *ModelsServer) listManifestWorksBySelector(ctx context.Context, selector string) *unstructured.UnstructuredList {
+	list, err := s.client.Resource(manifestWorksResource).Namespace("").List(ctx, metav1.ListOptions{
+		LabelSelector: selector,
+	})
+	if err != nil {
+		return nil
+	}
+	return list
 }
 
 // createdObjectRef records an object this Create call successfully made so

@@ -170,7 +170,7 @@ func TestModelsGetEnrichesRolloutWorks(t *testing.T) {
 			"name":      "model-works-llmxxxxx",
 			"namespace": "site-paris",
 			"labels": map[string]interface{}{
-				"work.open-cluster-management.io/manifestworkreplicaset": "model-works-llm",
+				"work.open-cluster-management.io/manifestworkreplicaset": "ai-grid-models.model-works-llm",
 			},
 		},
 		"status": map[string]interface{}{

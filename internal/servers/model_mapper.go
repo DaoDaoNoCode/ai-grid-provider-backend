@@ -50,6 +50,8 @@ var (
 	}
 
 	// Labels OCM sets on ManifestWorks owned by a ManifestWorkReplicaSet.
+	// Value is "<mwrs-namespace>.<mwrs-name>" (MCE 2.17 / OCM MWRS controller).
+	// Slash forms are not valid Kubernetes label values, so we do not select on them.
 	labelMWRSLegacy    = "work.open-cluster-management.io/manifestworkreplicaset"
 	labelPlacementName = "work.open-cluster-management.io/placementname"
 
@@ -517,13 +519,20 @@ func conditionStatusName(conds []*aigridv1.Condition, typ string) string {
 }
 
 // mwrsHasFailedOrDegradedWork reports whether rollout status indicates a real
-// failure (Degraded work), not in-progress NotAsExpected during apply.
+// failure: a Degraded work, or Applied=False (the agent could not apply the
+// work). In-progress NotAsExpected without Applied=False is not a failure.
 func mwrsHasFailedOrDegradedWork(rs *aigridv1.ModelRolloutStatus) bool {
 	if rs == nil {
 		return false
 	}
 	for _, w := range rs.GetWorks() {
-		if w != nil && strings.EqualFold(w.GetDegraded(), "True") {
+		if w == nil {
+			continue
+		}
+		if strings.EqualFold(w.GetDegraded(), "True") {
+			return true
+		}
+		if strings.EqualFold(w.GetApplied(), "False") {
 			return true
 		}
 	}

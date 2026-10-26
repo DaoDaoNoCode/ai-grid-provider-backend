@@ -64,3 +64,23 @@ func TestEnrichModelFromMWRSDegradedWorkIsFailed(t *testing.T) {
 		t.Fatalf("phase = %v, want FAILED", model.Status.GetPhase())
 	}
 }
+
+func TestMwrsHasFailedOrDegradedWorkAppliedFalse(t *testing.T) {
+	t.Parallel()
+	rs := &aigridv1.ModelRolloutStatus{
+		Works: []*aigridv1.ModelWorkStatus{{
+			Cluster: "site-a",
+			Applied: "False",
+		}},
+	}
+	if !mwrsHasFailedOrDegradedWork(rs) {
+		t.Fatal("Applied=False should count as failure")
+	}
+	model := &aigridv1.Model{
+		Status: &aigridv1.ModelStatus{Rollout: rs},
+	}
+	deriveModelPhaseFromRollout(model)
+	if model.Status.GetPhase() != aigridv1.ModelPhase_MODEL_PHASE_FAILED {
+		t.Fatalf("phase = %v, want FAILED via derive path", model.Status.GetPhase())
+	}
+}
