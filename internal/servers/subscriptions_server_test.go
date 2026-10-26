@@ -170,6 +170,35 @@ func TestSubscriptionsCreateRejectsUnmanagedPolicyName(t *testing.T) {
 	assertConnectCode(t, err, connect.CodeFailedPrecondition)
 }
 
+func TestSubscriptionsDeleteResourceVersionPrecondition(t *testing.T) {
+	t.Parallel()
+	client := newSubscriptionClient()
+	srv := mustSubscriptionsServer(t, client)
+	ctx := context.Background()
+	if _, err := srv.Create(ctx, &aigridv1.SubscriptionsCreateRequest{Object: sampleSubscription("rv-sub")}); err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	var sawRV string
+	client.PrependReactor("delete", "maassubscriptions", func(action clienttesting.Action) (bool, runtime.Object, error) {
+		del := action.(clienttesting.DeleteAction)
+		if del.GetName() != "rv-sub" {
+			return false, nil, nil
+		}
+		if pc := del.GetDeleteOptions().Preconditions; pc != nil && pc.ResourceVersion != nil {
+			sawRV = *pc.ResourceVersion
+		}
+		return true, nil, apierrors.NewConflict(
+			schema.GroupResource{Group: "maas.opendatahub.io", Resource: "maassubscriptions"},
+			"rv-sub", fmt.Errorf("resource version mismatch"),
+		)
+	})
+	_, err := srv.Delete(ctx, &aigridv1.SubscriptionsDeleteRequest{Id: "rv-sub", ResourceVersion: 9})
+	assertConnectCode(t, err, connect.CodeAborted)
+	if sawRV != "9" {
+		t.Fatalf("DeleteOptions.ResourceVersion = %q, want 9", sawRV)
+	}
+}
+
 func TestSubscriptionsDeleteFailsWhenManagedPolicyCleanupFails(t *testing.T) {
 	t.Parallel()
 	client := newSubscriptionClient()

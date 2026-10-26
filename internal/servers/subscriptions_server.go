@@ -292,12 +292,18 @@ func (s *SubscriptionsServer) Update(ctx context.Context, req *aigridv1.Subscrip
 // Delete deletes a MaaSSubscription and its managed <id>-policy when present.
 // Managed AuthPolicy cleanup failures are returned so clients do not see success
 // with a leaked policy; unmanaged same-named policies are left alone.
+// Nonzero resource_version is passed as a K8s Delete precondition (Aborted on conflict).
 func (s *SubscriptionsServer) Delete(ctx context.Context, req *aigridv1.SubscriptionsDeleteRequest) (*aigridv1.SubscriptionsDeleteResponse, error) {
 	id := req.GetId()
 	if err := validateSubscriptionID(id); err != nil {
 		return nil, err
 	}
-	err := s.client.Resource(maasSubscriptionsResource).Namespace(s.namespace).Delete(ctx, id, metav1.DeleteOptions{})
+	delOpts := metav1.DeleteOptions{}
+	if rv := req.GetResourceVersion(); rv != 0 {
+		rvStr := strconv.FormatInt(int64(rv), 10)
+		delOpts.Preconditions = &metav1.Preconditions{ResourceVersion: &rvStr}
+	}
+	err := s.client.Resource(maasSubscriptionsResource).Namespace(s.namespace).Delete(ctx, id, delOpts)
 	if err != nil {
 		return nil, mapSubscriptionAPIError("delete", id, err)
 	}

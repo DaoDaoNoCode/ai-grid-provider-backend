@@ -81,6 +81,11 @@ message SubscriptionsUpdateResponse {
 message SubscriptionsDeleteRequest {
   // Subscription id (equals metadata.name).
   string id = 1;
+
+  // Expected version: when set (non-zero), delete fails with Aborted unless
+  // it equals the stored metadata.version. Zero skips the check. Console
+  // If-Match maps here (same pattern as Models Delete).
+  int32 resource_version = 2;
 }
 
 message SubscriptionsDeleteResponse {}

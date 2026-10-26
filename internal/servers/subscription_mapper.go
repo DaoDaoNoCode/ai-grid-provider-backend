@@ -475,10 +475,6 @@ func isManagedAuthPolicy(obj *unstructured.Unstructured) bool {
 	return labels[managedByLabelKey] == managedByLabelValue
 }
 
-func subscriptionSpecPatch(object *aigridv1.Subscription) map[string]interface{} {
-	return map[string]interface{}{"spec": subscriptionSpecMap(object.GetSpec())}
-}
-
 func tokenMetadataFromUnstructured(obj map[string]interface{}) *aigridv1.TokenMetadata {
 	tm, found, err := unstructured.NestedMap(obj, "spec", "tokenMetadata")
 	if err != nil || !found || len(tm) == 0 {

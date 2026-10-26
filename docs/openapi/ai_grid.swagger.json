@@ -641,6 +641,14 @@
             "in": "path",
             "required": true,
             "type": "string"
+          },
+          {
+            "name": "resource_version",
+            "description": "Expected version: when set (non-zero), delete fails with Aborted unless\nit equals the stored metadata.version. Zero skips the check. Console\nIf-Match maps here (same pattern as Models Delete).",
+            "in": "query",
+            "required": false,
+            "type": "integer",
+            "format": "int32"
           }
         ],
         "tags": [

@@ -36,7 +36,7 @@
 | 11 | — | Model phase NotAsExpected→FAILED too aggressive | done | NotAsExpected → PENDING; FAILED when a work is Degraded |
 | 12 | — | Fill rollout.works (+ P13 fields) | done | works[] from ManifestWorks + RBAC; fuller P13 fields still optional follow-up |
 | 13 | — | Locations (P7/P8) | done | ListLocations RPC + placement.locations enrichment |
-| 14 | — | Subscription Delete resource_version / If-Match | pending | |
+| 14 | — | Subscription Delete resource_version / If-Match | done | Delete resource_version → K8s precondition; Conflict→Aborted |
 | 15 | — | Agree models namespace | pending | |
 | 16 | — | resourceVersionToVersion int32 overflow→0 unlocks | later | Deferred: fail-closed or wider type; shared helper + console string-version ADR |
 | 17 | — | Fakeinfra duplicated resource-handler (P3) | pending | |
@@ -178,14 +178,14 @@
 - **Decision:** Accepted — ship P7/P8 on v1.
 - **Implementation notes:** Added `Models.ListLocations` + `ModelPlacementStatus.locations`. ListLocations returns unique sorted `location` labels of clusters with ai-grid/enabled+provisioned and Available. Get/List enrich placement.locations from decided clusters. Client helper `ListModelLocations`; UI docs updated.
 
-### 14. Subscription Delete resource_version / If-Match — Status: `pending`
+### 14. Subscription Delete resource_version / If-Match — Status: `done`
 
 - **Source:** DaoDao #11
 - **Description:** Add resource_version / If-Match on Subscription Delete, consistent with Models/Tenants.
 - **Pros:** Console If-Match; API consistency.
 - **Cons:** Proto + server + OpenAPI; potential client break.
-- **Decision:**
-- **Implementation notes:**
+- **Decision:** Accepted — match Models Delete version pattern.
+- **Implementation notes:** `SubscriptionsDeleteRequest.resource_version`; nonzero sets K8s Delete Preconditions; Conflict→Aborted via mapper. Generated OpenAPI/connect stubs included. Test asserts RV in DeleteOptions.
 
 ### 15. Agree models namespace — Status: `pending`
 

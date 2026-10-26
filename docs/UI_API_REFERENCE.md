@@ -52,7 +52,7 @@ unwraps them via `response_body: "object"`.
 | `GET` | `/api/v1/subscriptions/{id}` | Get subscription + covering auth policies + model registrations |
 | `POST` | `/api/v1/subscriptions` | Create subscription (+ managed AuthPolicy in response) |
 | `PATCH` | `/api/v1/subscriptions/{id}` | Update subscription (syncs managed AuthPolicy) |
-| `DELETE` | `/api/v1/subscriptions/{id}` | Delete subscription (+ managed AuthPolicy) |
+| `DELETE` | `/api/v1/subscriptions/{id}` | Delete subscription (+ managed AuthPolicy); optional If-Match / resource_version |
 
 Also served (not resource APIs): `GET /openapi.json`, `GET /docs/`.
 
