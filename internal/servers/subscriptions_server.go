@@ -253,7 +253,7 @@ func (s *SubscriptionsServer) Update(ctx context.Context, req *aigridv1.Subscrip
 		}
 	}
 
-	patchBody := subscriptionUpdatePatch(candidate, object, paths)
+	patchBody := subscriptionUpdatePatch(currentSub, candidate, object, paths)
 	if len(patchBody) == 0 {
 		return &aigridv1.SubscriptionsUpdateResponse{Object: currentSub}, nil
 	}
@@ -533,25 +533,31 @@ func mergeSubscriptionUpdate(stored, incoming *aigridv1.Subscription, paths subU
 }
 
 // subscriptionUpdatePatch builds a merge-patch body with only the selected fields.
-// Metadata labels/annotations come from the request object (explicit replace of
-// the maps named by the mask). Spec fields come from the merged candidate so
-// partial updates never write zeros for unmasked siblings.
-func subscriptionUpdatePatch(candidate, incoming *aigridv1.Subscription, paths subUpdatePaths) map[string]interface{} {
+// Metadata maps are replaced as a whole (nulls for removed keys). Spec fields
+// come from the merged candidate so partial updates never write zeros for
+// unmasked siblings.
+func subscriptionUpdatePatch(stored, candidate, incoming *aigridv1.Subscription, paths subUpdatePaths) map[string]interface{} {
 	patchBody := map[string]interface{}{}
 	patchMeta := map[string]interface{}{}
 	if paths.labels {
+		var next, current map[string]string
 		if incoming.GetMetadata() != nil {
-			patchMeta["labels"] = stringMapToInterfaceMap(incoming.GetMetadata().GetLabels())
-		} else {
-			patchMeta["labels"] = map[string]interface{}{}
+			next = incoming.GetMetadata().GetLabels()
 		}
+		if stored.GetMetadata() != nil {
+			current = stored.GetMetadata().GetLabels()
+		}
+		patchMeta["labels"] = replaceStringMapPatch(current, next, nil)
 	}
 	if paths.annotations {
+		var next, current map[string]string
 		if incoming.GetMetadata() != nil {
-			patchMeta["annotations"] = stringMapToInterfaceMap(incoming.GetMetadata().GetAnnotations())
-		} else {
-			patchMeta["annotations"] = map[string]interface{}{}
+			next = incoming.GetMetadata().GetAnnotations()
 		}
+		if stored.GetMetadata() != nil {
+			current = stored.GetMetadata().GetAnnotations()
+		}
+		patchMeta["annotations"] = replaceStringMapPatch(current, next, nil)
 	}
 	if len(patchMeta) > 0 {
 		patchBody["metadata"] = patchMeta

@@ -27,7 +27,7 @@
 | 2 | — | Subscription Update: merge mask before validate | done | Merge stored+mask paths before validate; reject unsupported paths |
 | 3 | — | List maps Forbidden→Internal | done | Typed K8s→Connect mapper on Models/Subscriptions List + coveringAuthPolicies |
 | 4 | — | Models Update writes unmasked spec.main fields | done | Exact main FieldMask paths; env-only no longer clears image |
-| 5 | — | Metadata maps merge instead of replace | pending | |
+| 5 | — | Metadata maps merge instead of replace | done | Replace semantics via null removals; Models preserve owned labels |
 | 6 | — | Create compensation deletes preexisting Placement/MWRS | pending | |
 | 7 | — | replicas↔scaling explicit null | pending | |
 | 8 | — | Subscription Delete swallows policy cleanup failure | pending | |
@@ -97,14 +97,14 @@
 - **Decision:** Accepted — apply only FieldMask-selected main fields.
 - **Implementation notes:** Expanded `modelUpdatePaths` with exact LLM/main subfields (`spec.main.image`, `spec.main.env`, …). `mergeModelUpdate` applies only selected fields so an env-only patch keeps the stored image. Regression test `TestModelsUpdateEnvOnlyPreservesImage`.
 
-### 5. Metadata maps merge instead of replace — Status: `pending`
+### 5. Metadata maps merge instead of replace — Status: `done`
 
 - **Source:** Theia #5
 - **Description:** Use whole-map replace (null removals / JSON Patch) for labels and annotations on Models and Subscriptions, instead of merge-only behavior.
 - **Pros:** Empty `{}` clears labels; matches contract.
 - **Cons:** Must preserve backend-owned labels; Merge Patch alone is insufficient.
-- **Decision:**
-- **Implementation notes:**
+- **Decision:** Accepted — whole-map replace with owned-label preservation.
+- **Implementation notes:** Added `replaceStringMapPatch` (nulls for removed keys). Models Update preserves `ai-grid/model` + `app.kubernetes.io/managed-by`. Subscriptions Update uses the same helper for labels/annotations. Tests cover `{}` clearing `remove-me`.
 
 ### 6. Create compensation deletes preexisting Placement/MWRS — Status: `pending`
 

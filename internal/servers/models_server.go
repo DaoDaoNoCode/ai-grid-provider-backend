@@ -276,27 +276,22 @@ func (s *ModelsServer) Update(ctx context.Context, req *aigridv1.ModelsUpdateReq
 
 	patchBody := map[string]interface{}{}
 	patchMeta := map[string]interface{}{}
+	ownedLabels := map[string]string{
+		modelLabelKey: id, managedByLabelKey: managedByLabelValue,
+	}
 	if paths.labels {
+		var next map[string]string
 		if object.GetMetadata() != nil {
-			labels := object.GetMetadata().GetLabels()
-			if labels == nil {
-				labels = map[string]string{}
-			}
-			labels[modelLabelKey] = id
-			labels[managedByLabelKey] = managedByLabelValue
-			patchMeta["labels"] = stringMapToInterfaceMap(labels)
-		} else {
-			patchMeta["labels"] = stringMapToInterfaceMap(map[string]string{
-				modelLabelKey: id, managedByLabelKey: managedByLabelValue,
-			})
+			next = object.GetMetadata().GetLabels()
 		}
+		patchMeta["labels"] = replaceStringMapPatch(current.GetLabels(), next, ownedLabels)
 	}
 	if paths.annotations {
+		var next map[string]string
 		if object.GetMetadata() != nil {
-			patchMeta["annotations"] = stringMapToInterfaceMap(object.GetMetadata().GetAnnotations())
-		} else {
-			patchMeta["annotations"] = map[string]interface{}{}
+			next = object.GetMetadata().GetAnnotations()
 		}
+		patchMeta["annotations"] = replaceStringMapPatch(current.GetAnnotations(), next, nil)
 	}
 	if len(patchMeta) > 0 {
 		patchBody["metadata"] = patchMeta

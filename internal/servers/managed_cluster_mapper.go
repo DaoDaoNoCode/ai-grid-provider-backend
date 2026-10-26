@@ -91,6 +91,25 @@ func stringMapToInterfaceMap(in map[string]string) map[string]interface{} {
 	return out
 }
 
+// replaceStringMapPatch builds a JSON Merge Patch map that replaces current
+// with next as a whole field: keys present only in current become null (delete),
+// keys in next are set, and preserve keys are always written (backend-owned).
+func replaceStringMapPatch(current, next, preserve map[string]string) map[string]interface{} {
+	out := make(map[string]interface{}, len(current)+len(next)+len(preserve))
+	for k, v := range next {
+		out[k] = v
+	}
+	for k, v := range preserve {
+		out[k] = v
+	}
+	for k := range current {
+		if _, ok := out[k]; !ok {
+			out[k] = nil
+		}
+	}
+	return out
+}
+
 func applyListWindow[T any](items []T, offset, limit *int32) (page []T, total int32) {
 	total = int32(len(items))
 	start := 0

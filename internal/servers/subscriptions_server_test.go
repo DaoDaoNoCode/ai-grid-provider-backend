@@ -305,6 +305,34 @@ func TestSubscriptionsUpdateSkipsMissingManagedPolicy(t *testing.T) {
 	}
 }
 
+func TestSubscriptionsUpdateLabelsReplaceClearsRemovedKeys(t *testing.T) {
+	t.Parallel()
+	srv := mustSubscriptionsServer(t, newSubscriptionClient())
+	ctx := context.Background()
+
+	obj := sampleSubscription("sub-label-clear")
+	obj.Metadata.Labels = map[string]string{"remove-me": "yes"}
+	if _, err := srv.Create(ctx, &aigridv1.SubscriptionsCreateRequest{Object: obj}); err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+
+	updated, err := srv.Update(ctx, &aigridv1.SubscriptionsUpdateRequest{
+		Object: &aigridv1.Subscription{
+			Id: "sub-label-clear",
+			Metadata: &aigridv1.Metadata{
+				Labels: map[string]string{},
+			},
+		},
+		UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"metadata.labels"}},
+	})
+	if err != nil {
+		t.Fatalf("Update() error = %v", err)
+	}
+	if _, ok := updated.GetObject().GetMetadata().GetLabels()["remove-me"]; ok {
+		t.Fatalf("remove-me still present: %v", updated.GetObject().GetMetadata().GetLabels())
+	}
+}
+
 func TestSubscriptionsUpdateMergeMaskBeforeValidate(t *testing.T) {
 	t.Parallel()
 

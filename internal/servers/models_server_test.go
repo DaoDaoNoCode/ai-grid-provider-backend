@@ -260,6 +260,38 @@ func TestModelsCreateScalingOnly(t *testing.T) {
 	}
 }
 
+func TestModelsUpdateLabelsReplaceClearsRemovedKeys(t *testing.T) {
+	t.Parallel()
+	srv := mustModelsServer(t, newModelsClient())
+	ctx := context.Background()
+
+	obj := sampleModel("label-clear")
+	obj.Metadata.Labels = map[string]string{"remove-me": "yes", "keep": "1"}
+	if _, err := srv.Create(ctx, &aigridv1.ModelsCreateRequest{Object: obj}); err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+
+	updated, err := srv.Update(ctx, &aigridv1.ModelsUpdateRequest{
+		Object: &aigridv1.Model{
+			Id: "label-clear",
+			Metadata: &aigridv1.Metadata{
+				Labels: map[string]string{},
+			},
+		},
+		UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"metadata.labels"}},
+	})
+	if err != nil {
+		t.Fatalf("Update() error = %v", err)
+	}
+	labels := updated.GetObject().GetMetadata().GetLabels()
+	if _, ok := labels["remove-me"]; ok {
+		t.Fatalf("remove-me still present: %v", labels)
+	}
+	if labels[modelLabelKey] != "label-clear" || labels[managedByLabelKey] != managedByLabelValue {
+		t.Fatalf("owned labels missing: %v", labels)
+	}
+}
+
 func TestModelsUpdateEnvOnlyPreservesImage(t *testing.T) {
 	t.Parallel()
 	srv := mustModelsServer(t, newModelsClient())
