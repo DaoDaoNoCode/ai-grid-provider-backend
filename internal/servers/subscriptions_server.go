@@ -89,7 +89,7 @@ func (s *SubscriptionsServer) List(ctx context.Context, req *aigridv1.Subscripti
 		if apierrors.IsNotFound(err) {
 			return &aigridv1.SubscriptionsListResponse{}, nil
 		}
-		return nil, connect.Errorf(connect.CodeInternal, "list MaaSSubscription resources: %v", err).WithCause(err)
+		return nil, mapSubscriptionAPIError("list", "", err)
 	}
 	items := make([]*aigridv1.Subscription, 0, len(list.Items))
 	for _, item := range list.Items {
@@ -356,7 +356,7 @@ func (s *SubscriptionsServer) coveringAuthPolicies(ctx context.Context, sub *aig
 		if apierrors.IsNotFound(err) {
 			return nil, nil
 		}
-		return nil, connect.Errorf(connect.CodeInternal, "list MaaSAuthPolicy resources: %v", err).WithCause(err)
+		return nil, mapSubscriptionAPIError("list auth policies", subscriptionID(sub), err)
 	}
 	out := make([]*aigridv1.AuthPolicy, 0)
 	for i := range list.Items {

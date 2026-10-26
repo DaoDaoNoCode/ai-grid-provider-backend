@@ -113,7 +113,7 @@ func (s *ModelsServer) List(ctx context.Context, req *aigridv1.ModelsListRequest
 		if apierrors.IsNotFound(err) {
 			return &aigridv1.ModelsListResponse{}, nil
 		}
-		return nil, connect.Errorf(connect.CodeInternal, "list LLMInferenceService resources: %v", err).WithCause(err)
+		return nil, mapModelAPIError("list", "", err)
 	}
 	items := make([]*aigridv1.Model, 0, len(list.Items))
 	for i := range list.Items {

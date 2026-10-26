@@ -362,6 +362,34 @@ func TestSubscriptionsUpdateMergeMaskBeforeValidate(t *testing.T) {
 	assertConnectCode(t, err, connect.CodeInvalidArgument)
 }
 
+func TestSubscriptionsListForbiddenMapsToPermissionDenied(t *testing.T) {
+	t.Parallel()
+	client := newSubscriptionClient()
+	client.PrependReactor("list", "maassubscriptions", func(clienttesting.Action) (bool, runtime.Object, error) {
+		return true, nil, apierrors.NewForbidden(
+			schema.GroupResource{Group: "maas.opendatahub.io", Resource: "maassubscriptions"},
+			"", fmt.Errorf("no access"),
+		)
+	})
+	srv := mustSubscriptionsServer(t, client)
+	_, err := srv.List(context.Background(), &aigridv1.SubscriptionsListRequest{})
+	assertConnectCode(t, err, connect.CodePermissionDenied)
+}
+
+func TestSubscriptionsGetCoveringAuthPoliciesForbidden(t *testing.T) {
+	t.Parallel()
+	client := newSubscriptionClient(subscriptionUnstructured("pol-sub", "models-as-a-service"))
+	client.PrependReactor("list", "maasauthpolicies", func(clienttesting.Action) (bool, runtime.Object, error) {
+		return true, nil, apierrors.NewForbidden(
+			schema.GroupResource{Group: "maas.opendatahub.io", Resource: "maasauthpolicies"},
+			"", fmt.Errorf("no access"),
+		)
+	})
+	srv := mustSubscriptionsServer(t, client)
+	_, err := srv.Get(context.Background(), &aigridv1.SubscriptionsGetRequest{Id: "pol-sub"})
+	assertConnectCode(t, err, connect.CodePermissionDenied)
+}
+
 func TestSubscriptionsListFilterOrderAndPaging(t *testing.T) {
 	t.Parallel()
 

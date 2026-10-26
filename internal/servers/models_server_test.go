@@ -2,16 +2,19 @@ package servers
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	connect "connectrpc.com/connect/v2"
 	aigridv1 "github.com/osac-project/ai-grid-provider-backend/gen/ai_grid/v1"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/dynamic/fake"
+	clienttesting "k8s.io/client-go/testing"
 )
 
 var (
@@ -34,6 +37,20 @@ func TestModelsServerRequiresClient(t *testing.T) {
 	if _, err := NewModelsServer().Build(); err == nil {
 		t.Fatal("Build() without client succeeded")
 	}
+}
+
+func TestModelsListForbiddenMapsToPermissionDenied(t *testing.T) {
+	t.Parallel()
+	client := newModelsClient()
+	client.PrependReactor("list", "llminferenceservices", func(clienttesting.Action) (bool, runtime.Object, error) {
+		return true, nil, apierrors.NewForbidden(
+			schema.GroupResource{Group: "serving.kserve.io", Resource: "llminferenceservices"},
+			"", errors.New("no access"),
+		)
+	})
+	srv := mustModelsServer(t, client)
+	_, err := srv.List(context.Background(), &aigridv1.ModelsListRequest{})
+	assertConnectCode(t, err, connect.CodePermissionDenied)
 }
 
 func TestModelsCRUDHubOnly(t *testing.T) {

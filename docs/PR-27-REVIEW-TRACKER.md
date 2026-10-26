@@ -25,7 +25,7 @@
 | 0 | — | cfchase golangci-lint fixes | done | Landed in `e852ba8` |
 | 1 | — | Kind RBAC incomplete for Models | done | Kind ClusterRole aligned with OpenShift Models RBAC |
 | 2 | — | Subscription Update: merge mask before validate | done | Merge stored+mask paths before validate; reject unsupported paths |
-| 3 | — | List maps Forbidden→Internal | pending | |
+| 3 | — | List maps Forbidden→Internal | done | Typed K8s→Connect mapper on Models/Subscriptions List + coveringAuthPolicies |
 | 4 | — | Models Update writes unmasked spec.main fields | pending | |
 | 5 | — | Metadata maps merge instead of replace | pending | |
 | 6 | — | Create compensation deletes preexisting Placement/MWRS | pending | |
@@ -79,14 +79,14 @@
 - **Decision:** Accepted — validate the merged object per docs/API.md.
 - **Implementation notes:** `subscriptionUpdatePaths` now rejects unsupported paths and tracks exact spec fields (`spec.priority`, `spec.owner`, …). Update clones the stored subscription, applies only selected mask paths, validates that candidate (plus org immutability), and merge-patches only those fields. AuthPolicy sync uses the candidate. Tests cover priority-only success, unmasked owner/model_refs preserved, and unsupported path → InvalidArgument.
 
-### 3. List maps Forbidden→Internal — Status: `pending`
+### 3. List maps Forbidden→Internal — Status: `done`
 
 - **Source:** Theia #3
 - **Description:** Use typed K8s→Connect error mappers on Models/Subscriptions List (and coveringAuthPolicies) so Forbidden is not collapsed to Internal.
 - **Pros:** Matches AGENTS.md; clients can distinguish auth failures vs bugs.
 - **Cons:** Small change but easy to miss a call path.
-- **Decision:**
-- **Implementation notes:**
+- **Decision:** Accepted — List/auth-policy join must not collapse Forbidden to Internal.
+- **Implementation notes:** Models List uses `mapModelAPIError`; Subscriptions List and `coveringAuthPolicies` use `mapSubscriptionAPIError` (NotFound still returns empty). Tests assert Forbidden → PermissionDenied for Models List, Subscriptions List, and Get covering policies.
 
 ### 4. Models Update writes unmasked spec.main fields — Status: `pending`
 
