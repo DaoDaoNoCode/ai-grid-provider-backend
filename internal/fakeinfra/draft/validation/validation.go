@@ -10,7 +10,8 @@
 //
 // Models and Subscriptions validation lived here while those areas were draft;
 // ai_grid.v1 now owns them, so createSubscription/updateSubscription (and
-// organization/model) are FrontendOnly until the console drops its copy.
+// organization/model) are FrontendOnly until the console drops its copy. The
+// Go zod-mirror helpers that backed those validators were removed with them.
 package validation
 
 import "encoding/json"
