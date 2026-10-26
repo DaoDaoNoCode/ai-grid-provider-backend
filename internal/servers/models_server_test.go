@@ -369,6 +369,74 @@ func TestModelsDeleteStaleResourceVersionLeavesSideEffects(t *testing.T) {
 	}
 }
 
+func TestModelsUpdateReplicasOnlyPreservesSidecar(t *testing.T) {
+	t.Parallel()
+	llm := &unstructured.Unstructured{Object: map[string]interface{}{
+		"apiVersion": "serving.kserve.io/v1alpha2",
+		"kind":       "LLMInferenceService",
+		"metadata": map[string]interface{}{
+			"name": "sidecar-llm", "namespace": "ai-grid-models", "resourceVersion": "1",
+			"labels": map[string]interface{}{"ai-grid/model": "sidecar-llm", "app.kubernetes.io/managed-by": "ai-grid-provider-backend"},
+		},
+		"spec": map[string]interface{}{
+			"model":    map[string]interface{}{"uri": "hf://facebook/opt-125m", "name": "facebook/opt-125m"},
+			"replicas": int64(1),
+			"template": map[string]interface{}{
+				"containers": []interface{}{
+					map[string]interface{}{
+						"name":  "main",
+						"image": "quay.io/example/vllm:latest",
+						"args":  []interface{}{"--served-model-name", "opt"},
+					},
+					map[string]interface{}{
+						"name":  "log-sidecar",
+						"image": "quay.io/example/sidecar:1",
+					},
+				},
+			},
+		},
+	}}
+	ref := &unstructured.Unstructured{Object: map[string]interface{}{
+		"apiVersion": "maas.opendatahub.io/v1alpha1",
+		"kind":       "MaaSModelRef",
+		"metadata": map[string]interface{}{
+			"name": "sidecar-llm", "namespace": "ai-grid-models", "resourceVersion": "1",
+		},
+		"spec": map[string]interface{}{
+			"targetRef": map[string]interface{}{"name": "sidecar-llm", "kind": "LLMInferenceService"},
+		},
+	}}
+	client := newModelsClient(llm, ref)
+	srv := mustModelsServer(t, client)
+	replicas := int32(3)
+	_, err := srv.Update(context.Background(), &aigridv1.ModelsUpdateRequest{
+		Object: &aigridv1.Model{
+			Id:   "sidecar-llm",
+			Spec: &aigridv1.ModelSpec{Replicas: &replicas},
+		},
+		UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.replicas"}},
+	})
+	if err != nil {
+		t.Fatalf("Update() error = %v", err)
+	}
+	got, err := client.Resource(testLLMGVR).Namespace("ai-grid-models").Get(context.Background(), "sidecar-llm", metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("get LLM: %v", err)
+	}
+	containers, _, _ := unstructured.NestedSlice(got.Object, "spec", "template", "containers")
+	if len(containers) != 2 {
+		t.Fatalf("containers = %#v, want main+sidecar preserved", containers)
+	}
+	main, _ := containers[0].(map[string]interface{})
+	args, _ := main["args"].([]interface{})
+	if len(args) != 2 {
+		t.Fatalf("main args cleared: %#v", main)
+	}
+	if r, _, _ := unstructured.NestedInt64(got.Object, "spec", "replicas"); r != 3 {
+		t.Fatalf("replicas = %d, want 3", r)
+	}
+}
+
 func TestModelsDeleteGuardedBySubscription(t *testing.T) {
 	t.Parallel()
 	// Point subscription at our model namespace/name.
@@ -548,6 +616,44 @@ func TestModelsUpdateLabelsReplaceClearsRemovedKeys(t *testing.T) {
 	}
 	if labels[modelLabelKey] != "label-clear" || labels[managedByLabelKey] != managedByLabelValue {
 		t.Fatalf("owned labels missing: %v", labels)
+	}
+}
+
+func TestModelsUpdateRejectsNilMainWhenMaskIncludesSpecMain(t *testing.T) {
+	t.Parallel()
+	client := newModelsClient()
+	srv := mustModelsServer(t, client)
+	ctx := context.Background()
+
+	if _, err := srv.Create(ctx, &aigridv1.ModelsCreateRequest{Object: sampleModel("nil-main")}); err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	before, err := client.Resource(testLLMGVR).Namespace("ai-grid-models").Get(ctx, "nil-main", metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("get before: %v", err)
+	}
+	wantContainers, _, _ := unstructured.NestedSlice(before.Object, "spec", "template", "containers")
+
+	_, err = srv.Update(ctx, &aigridv1.ModelsUpdateRequest{
+		Object: &aigridv1.Model{
+			Id:   "nil-main",
+			Spec: &aigridv1.ModelSpec{}, // Main intentionally nil
+		},
+		UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.main"}},
+	})
+	assertConnectCode(t, err, connect.CodeInvalidArgument)
+
+	after, err := client.Resource(testLLMGVR).Namespace("ai-grid-models").Get(ctx, "nil-main", metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("get after: %v", err)
+	}
+	gotContainers, _, _ := unstructured.NestedSlice(after.Object, "spec", "template", "containers")
+	if len(gotContainers) != len(wantContainers) {
+		t.Fatalf("containers wiped after rejected update: before=%#v after=%#v", wantContainers, gotContainers)
+	}
+	main, _ := gotContainers[0].(map[string]interface{})
+	if img, _ := main["image"].(string); img == "" {
+		t.Fatalf("main image cleared after rejected nil-main update: %#v", main)
 	}
 }
 

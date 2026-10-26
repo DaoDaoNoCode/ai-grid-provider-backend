@@ -278,7 +278,10 @@ func (s *ModelsServer) Update(ctx context.Context, req *aigridv1.ModelsUpdateReq
 
 	currentModel := modelFromLLMInferenceService(*current)
 	s.enrichPlacement(ctx, currentModel)
-	merged := mergeModelUpdate(currentModel, object, paths)
+	merged, err := mergeModelUpdate(currentModel, object, paths)
+	if err != nil {
+		return nil, err
+	}
 	if err := validateModelSpec(merged.GetSpec()); err != nil {
 		return nil, err
 	}
@@ -314,7 +317,7 @@ func (s *ModelsServer) Update(ctx context.Context, req *aigridv1.ModelsUpdateReq
 		patchBody["metadata"] = patchMeta
 	}
 	if paths.anyLLM() {
-		patchBody["spec"] = modelSpecUpdatePatch(merged.GetSpec(), id, paths)
+		patchBody["spec"] = modelSpecUpdatePatch(merged.GetSpec(), id, paths, current)
 	}
 	if version != 0 {
 		meta, _ := patchBody["metadata"].(map[string]interface{})
@@ -780,7 +783,7 @@ func parseModelUpdateMask(mask *fieldmaskpb.FieldMask) (modelUpdatePaths, error)
 	return paths, nil
 }
 
-func mergeModelUpdate(current, incoming *aigridv1.Model, paths modelUpdatePaths) *aigridv1.Model {
+func mergeModelUpdate(current, incoming *aigridv1.Model, paths modelUpdatePaths) (*aigridv1.Model, error) {
 	out := proto.Clone(current).(*aigridv1.Model)
 	if out == nil {
 		out = &aigridv1.Model{Id: modelID(current)}
@@ -812,13 +815,18 @@ func mergeModelUpdate(current, incoming *aigridv1.Model, paths modelUpdatePaths)
 		out.Metadata = meta
 	}
 	if !paths.anyLLM() && !paths.placement && !paths.rollout {
-		return out
+		return out, nil
 	}
 	in := incoming.GetSpec()
 	if in == nil {
 		in = &aigridv1.ModelSpec{}
 	}
 	if paths.main {
+		// Whole-main replace with a nil container would merge-patch
+		// {"name":"main"} onto the CR and wipe image/args/env/resources.
+		if in.GetMain() == nil {
+			return nil, connect.NewError(connect.CodeInvalidArgument, "spec.main is required when update_mask includes spec.main")
+		}
 		out.Spec.Main = in.GetMain()
 	} else if paths.mainImage || paths.mainEnv || paths.mainRequests || paths.mainLimits {
 		main := out.Spec.GetMain()
@@ -874,7 +882,7 @@ func mergeModelUpdate(current, incoming *aigridv1.Model, paths modelUpdatePaths)
 	if paths.rollout {
 		out.Spec.Rollout = in.GetRollout()
 	}
-	return out
+	return out, nil
 }
 
 func validateModelID(id string) error {

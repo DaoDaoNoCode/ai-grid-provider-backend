@@ -604,16 +604,211 @@ func modelSpecToLLMMap(spec *aigridv1.ModelSpec, id string) map[string]interface
 	return out
 }
 
-// modelSpecUpdatePatch is like modelSpecToLLMMap but emits explicit nulls for
-// mutually exclusive fields cleared by the FieldMask (JSON Merge Patch omits
-// missing keys and would otherwise leave the old mode on the CR).
-func modelSpecUpdatePatch(spec *aigridv1.ModelSpec, id string, paths modelUpdatePaths) map[string]interface{} {
-	out := modelSpecToLLMMap(spec, id)
-	if paths.scaling && (spec == nil || spec.Replicas == nil) {
-		out["replicas"] = nil
+// modelSpecUpdatePatch builds a merge-patch body with only FieldMask-selected
+// LLM fields. It never rewrites template.containers unless a main path is in
+// the mask, so a replicas-only update keeps sidecars and unmapped main fields
+// (args, probes, env valueFrom) that GitOps or other writers may have set.
+// When a main path is selected, containers are taken from the stored object
+// and only the main container's selected fields are updated in place.
+// Explicit nulls clear mutually exclusive replicas/scaling when the mask
+// selects a mode (or clears one).
+func modelSpecUpdatePatch(spec *aigridv1.ModelSpec, id string, paths modelUpdatePaths, stored *unstructured.Unstructured) map[string]interface{} {
+	out := map[string]interface{}{}
+	if spec == nil {
+		spec = &aigridv1.ModelSpec{}
 	}
-	if paths.replicas && (spec == nil || spec.GetScaling() == nil) {
-		out["scaling"] = nil
+	if paths.model {
+		modelName := id
+		uri := ""
+		if spec.GetModel() != nil {
+			uri = spec.GetModel().GetUri()
+			if n := spec.GetModel().GetName(); n != "" {
+				modelName = n
+			}
+		}
+		out["model"] = map[string]interface{}{"uri": uri, "name": modelName}
+	}
+	if paths.replicas {
+		if spec.Replicas != nil {
+			out["replicas"] = int64(*spec.Replicas)
+		} else {
+			out["replicas"] = nil
+		}
+		if spec.GetScaling() == nil {
+			out["scaling"] = nil
+		}
+	}
+	if paths.scaling {
+		if scaling := modelScalingToMap(spec.GetScaling()); scaling != nil {
+			out["scaling"] = scaling
+		} else {
+			out["scaling"] = nil
+		}
+		if spec.Replicas == nil {
+			out["replicas"] = nil
+		}
+	}
+	if paths.baseRefs {
+		refs := make([]interface{}, 0, len(spec.GetBaseRefs()))
+		for _, name := range spec.GetBaseRefs() {
+			refs = append(refs, map[string]interface{}{"name": name})
+		}
+		out["baseRefs"] = refs
+	}
+	if paths.runtime {
+		out["runtime"] = spec.GetRuntime()
+	}
+	if paths.router {
+		out["router"] = modelRouterToMap(spec.GetRouter())
+	}
+	if paths.main || paths.mainImage || paths.mainEnv || paths.mainRequests || paths.mainLimits {
+		out["template"] = map[string]interface{}{
+			"containers": mergeMainContainerIntoStored(stored, spec.GetMain(), paths),
+		}
+	}
+	return out
+}
+
+// mergeMainContainerIntoStored returns the stored template.containers list
+// with the "main" container updated from the API model. Sidecars and fields
+// this API does not model are preserved. When no stored containers exist, a
+// single main container is created.
+func mergeMainContainerIntoStored(stored *unstructured.Unstructured, main *aigridv1.ModelContainer, paths modelUpdatePaths) []interface{} {
+	var containers []interface{}
+	if stored != nil {
+		if raw, found, err := unstructured.NestedSlice(stored.Object, "spec", "template", "containers"); err == nil && found {
+			containers = append([]interface{}{}, raw...)
+		}
+	}
+	desired := modelContainerToMap(main)
+	if paths.main {
+		// Whole main: replace the main container entry but keep siblings.
+		return upsertNamedContainer(containers, desired)
+	}
+	// Partial main paths: merge only selected keys onto the stored main container.
+	idx := indexNamedContainer(containers, "main")
+	var base map[string]interface{}
+	if idx >= 0 {
+		if m, ok := containers[idx].(map[string]interface{}); ok {
+			base = deepCopyMap(m)
+		}
+	}
+	if base == nil {
+		base = map[string]interface{}{"name": "main"}
+	}
+	if paths.mainImage {
+		if img, ok := desired["image"]; ok {
+			base["image"] = img
+		} else {
+			delete(base, "image")
+		}
+	}
+	if paths.mainEnv {
+		if env, ok := desired["env"]; ok {
+			base["env"] = env
+		} else {
+			delete(base, "env")
+		}
+	}
+	if paths.mainRequests || paths.mainLimits {
+		resources, _ := base["resources"].(map[string]interface{})
+		if resources == nil {
+			resources = map[string]interface{}{}
+		} else {
+			resources = deepCopyMap(resources)
+		}
+		desiredRes, _ := desired["resources"].(map[string]interface{})
+		if paths.mainRequests {
+			if desiredRes != nil {
+				if req, ok := desiredRes["requests"]; ok {
+					resources["requests"] = req
+				} else {
+					delete(resources, "requests")
+				}
+			} else {
+				delete(resources, "requests")
+			}
+		}
+		if paths.mainLimits {
+			if desiredRes != nil {
+				if lim, ok := desiredRes["limits"]; ok {
+					resources["limits"] = lim
+				} else {
+					delete(resources, "limits")
+				}
+			} else {
+				delete(resources, "limits")
+			}
+		}
+		if len(resources) == 0 {
+			delete(base, "resources")
+		} else {
+			base["resources"] = resources
+		}
+	}
+	return upsertNamedContainer(containers, base)
+}
+
+func indexNamedContainer(containers []interface{}, name string) int {
+	for i, c := range containers {
+		m, ok := c.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		if n, _ := m["name"].(string); n == name {
+			return i
+		}
+	}
+	return -1
+}
+
+func upsertNamedContainer(containers []interface{}, container map[string]interface{}) []interface{} {
+	name, _ := container["name"].(string)
+	if name == "" {
+		name = "main"
+		container["name"] = name
+	}
+	idx := indexNamedContainer(containers, name)
+	if idx < 0 {
+		return append(containers, container)
+	}
+	out := append([]interface{}{}, containers...)
+	out[idx] = container
+	return out
+}
+
+func deepCopyMap(in map[string]interface{}) map[string]interface{} {
+	if in == nil {
+		return nil
+	}
+	out := make(map[string]interface{}, len(in))
+	for k, v := range in {
+		switch t := v.(type) {
+		case map[string]interface{}:
+			out[k] = deepCopyMap(t)
+		case []interface{}:
+			out[k] = deepCopySlice(t)
+		default:
+			out[k] = v
+		}
+	}
+	return out
+}
+
+func deepCopySlice(in []interface{}) []interface{} {
+	if in == nil {
+		return nil
+	}
+	out := make([]interface{}, len(in))
+	for i, v := range in {
+		switch t := v.(type) {
+		case map[string]interface{}:
+			out[i] = deepCopyMap(t)
+		case []interface{}:
+			out[i] = deepCopySlice(t)
+		default:
+			out[i] = v
+		}
 	}
 	return out
 }
