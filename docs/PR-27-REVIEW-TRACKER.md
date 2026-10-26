@@ -24,7 +24,7 @@
 | --- | --- | --- | --- | --- |
 | 0 | — | cfchase golangci-lint fixes | done | Landed in `e852ba8` |
 | 1 | — | Kind RBAC incomplete for Models | done | Kind ClusterRole aligned with OpenShift Models RBAC |
-| 2 | — | Subscription Update: merge mask before validate | pending | |
+| 2 | — | Subscription Update: merge mask before validate | done | Merge stored+mask paths before validate; reject unsupported paths |
 | 3 | — | List maps Forbidden→Internal | pending | |
 | 4 | — | Models Update writes unmasked spec.main fields | pending | |
 | 5 | — | Metadata maps merge instead of replace | pending | |
@@ -70,14 +70,14 @@
 - **Decision:** Accepted — Kind SA needs Models CRUD parity with OpenShift.
 - **Implementation notes:** Updated `deploy/kind/ai-grid-provider-backend.yaml` ClusterRole: `maasmodelrefs` now get/list/watch/create/update/patch/delete (was read-only); added `llminferenceservices` (serving.kserve.io), `placements`/`placementdecisions` (cluster.open-cluster-management.io), and `manifestworkreplicasets` (work.open-cluster-management.io) with full CRUD verbs matching `deploy/openshift/rbac.yaml`. Left MaaS subscription/authpolicy and managedcluster rules intact. Intentionally did not copy OpenShift-only `policies` (resourceNames: ai-grid-ready) rule — not Models-related.
 
-### 2. Subscription Update: merge mask before validate — Status: `pending`
+### 2. Subscription Update: merge mask before validate — Status: `done`
 
 - **Source:** Theia #2; DaoDao #4
 - **Description:** Build `candidate = stored + exact mask paths`, validate that candidate, and reject unsupported paths.
 - **Pros:** Matches docs/API.md; partial updates work; no overwrite of unmasked fields.
 - **Cons:** Update rewrite + tests; must enumerate supported paths.
-- **Decision:**
-- **Implementation notes:**
+- **Decision:** Accepted — validate the merged object per docs/API.md.
+- **Implementation notes:** `subscriptionUpdatePaths` now rejects unsupported paths and tracks exact spec fields (`spec.priority`, `spec.owner`, …). Update clones the stored subscription, applies only selected mask paths, validates that candidate (plus org immutability), and merge-patches only those fields. AuthPolicy sync uses the candidate. Tests cover priority-only success, unmasked owner/model_refs preserved, and unsupported path → InvalidArgument.
 
 ### 3. List maps Forbidden→Internal — Status: `pending`
 

@@ -8,6 +8,7 @@ import (
 
 	connect "connectrpc.com/connect/v2"
 	aigridv1 "github.com/osac-project/ai-grid-provider-backend/gen/ai_grid/v1"
+	"google.golang.org/protobuf/types/known/fieldmaskpb"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -302,6 +303,63 @@ func TestSubscriptionsUpdateSkipsMissingManagedPolicy(t *testing.T) {
 	if _, err := srv.Update(context.Background(), &aigridv1.SubscriptionsUpdateRequest{Object: obj}); err != nil {
 		t.Fatalf("Update() error = %v", err)
 	}
+}
+
+func TestSubscriptionsUpdateMergeMaskBeforeValidate(t *testing.T) {
+	t.Parallel()
+
+	client := newSubscriptionClient()
+	srv := mustSubscriptionsServer(t, client)
+	ctx := context.Background()
+
+	created, err := srv.Create(ctx, &aigridv1.SubscriptionsCreateRequest{Object: sampleSubscription("mask-sub")})
+	if err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	if got := created.GetObject().GetSpec().GetOwner().GetGroups(); len(got) != 1 || got[0] != "mask-sub" {
+		t.Fatalf("created owner groups = %v", got)
+	}
+
+	// Priority-only partial request succeeds when the mask names only that field.
+	partial := &aigridv1.Subscription{
+		Id:   "mask-sub",
+		Spec: &aigridv1.SubscriptionSpec{Priority: 20},
+	}
+	updated, err := srv.Update(ctx, &aigridv1.SubscriptionsUpdateRequest{
+		Object:     partial,
+		UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.priority"}},
+	})
+	if err != nil {
+		t.Fatalf("priority-only Update() error = %v", err)
+	}
+	if updated.GetObject().GetSpec().GetPriority() != 20 {
+		t.Fatalf("priority = %d, want 20", updated.GetObject().GetSpec().GetPriority())
+	}
+	if got := updated.GetObject().GetSpec().GetOwner().GetGroups(); len(got) != 1 || got[0] != "mask-sub" {
+		t.Fatalf("unmasked owner cleared: %v", got)
+	}
+	if refs := updated.GetObject().GetSpec().GetModelRefs(); len(refs) != 1 || refs[0].GetName() != "sim-model" {
+		t.Fatalf("unmasked model_refs cleared: %#v", refs)
+	}
+
+	stored, err := client.Resource(testSubscriptionsGVR).Namespace("models-as-a-service").Get(ctx, "mask-sub", metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("get stored: %v", err)
+	}
+	groups, _, _ := unstructured.NestedSlice(stored.Object, "spec", "owner", "groups")
+	if len(groups) != 1 {
+		t.Fatalf("stored owner groups = %v", groups)
+	}
+	priority, _, _ := unstructured.NestedInt64(stored.Object, "spec", "priority")
+	if priority != 20 {
+		t.Fatalf("stored priority = %d", priority)
+	}
+
+	_, err = srv.Update(ctx, &aigridv1.SubscriptionsUpdateRequest{
+		Object:     partial,
+		UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.unknown_field"}},
+	})
+	assertConnectCode(t, err, connect.CodeInvalidArgument)
 }
 
 func TestSubscriptionsListFilterOrderAndPaging(t *testing.T) {

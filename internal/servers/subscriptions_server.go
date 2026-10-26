@@ -13,6 +13,7 @@ import (
 	aigridv1 "github.com/osac-project/ai-grid-provider-backend/gen/ai_grid/v1"
 	"github.com/osac-project/ai-grid-provider-backend/gen/ai_grid/v1/aigridv1connect"
 	"github.com/osac-project/ai-grid-provider-backend/internal/celfilter"
+	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -236,43 +237,25 @@ func (s *SubscriptionsServer) Update(ctx context.Context, req *aigridv1.Subscrip
 		return nil, staleSubscriptionError("update", id)
 	}
 
-	paths := subscriptionUpdatePaths(req.GetUpdateMask(), object)
-	if paths.spec {
-		if err := validateSubscriptionSpec(object.GetSpec()); err != nil {
+	paths, err := subscriptionUpdatePaths(req.GetUpdateMask(), object)
+	if err != nil {
+		return nil, err
+	}
+
+	currentSub := subscriptionFromUnstructured(*current)
+	candidate := mergeSubscriptionUpdate(currentSub, object, paths)
+	if paths.anySpec() {
+		if err := validateSubscriptionSpec(candidate.GetSpec()); err != nil {
 			return nil, err
 		}
-		currentSub := subscriptionFromUnstructured(*current)
-		if err := validateOrganizationImmutable(currentSub.GetSpec(), object.GetSpec()); err != nil {
+		if err := validateOrganizationImmutable(currentSub.GetSpec(), candidate.GetSpec()); err != nil {
 			return nil, err
 		}
 	}
 
-	patchBody := map[string]interface{}{}
-	patchMeta := map[string]interface{}{}
-	if paths.labels {
-		if object.GetMetadata() != nil {
-			patchMeta["labels"] = stringMapToInterfaceMap(object.GetMetadata().GetLabels())
-		} else {
-			patchMeta["labels"] = map[string]interface{}{}
-		}
-	}
-	if paths.annotations {
-		if object.GetMetadata() != nil {
-			patchMeta["annotations"] = stringMapToInterfaceMap(object.GetMetadata().GetAnnotations())
-		} else {
-			patchMeta["annotations"] = map[string]interface{}{}
-		}
-	}
-	if len(patchMeta) > 0 {
-		patchBody["metadata"] = patchMeta
-	}
-	if paths.spec {
-		for k, v := range subscriptionSpecPatch(object) {
-			patchBody[k] = v
-		}
-	}
+	patchBody := subscriptionUpdatePatch(candidate, object, paths)
 	if len(patchBody) == 0 {
-		return &aigridv1.SubscriptionsUpdateResponse{Object: subscriptionFromUnstructured(*current)}, nil
+		return &aigridv1.SubscriptionsUpdateResponse{Object: currentSub}, nil
 	}
 	if version != 0 {
 		meta, _ := patchBody["metadata"].(map[string]interface{})
@@ -294,8 +277,8 @@ func (s *SubscriptionsServer) Update(ctx context.Context, req *aigridv1.Subscrip
 		return nil, mapSubscriptionAPIError("update", id, err)
 	}
 
-	if paths.spec {
-		if err := s.syncManagedAuthPolicy(ctx, object); err != nil {
+	if paths.anySpec() {
+		if err := s.syncManagedAuthPolicy(ctx, candidate); err != nil {
 			return nil, err
 		}
 	}
@@ -412,32 +395,217 @@ func (s *SubscriptionsServer) syncManagedAuthPolicy(ctx context.Context, object 
 }
 
 type subUpdatePaths struct {
-	labels, annotations, spec bool
+	labels, annotations bool
+	wholeSpec           bool
+	owner               bool
+	modelRefs           bool
+	priority            bool
+	organization        bool
+	tokenMetadata       bool
+	inferencePriority   bool
+	guardrails          bool
 }
 
-func subscriptionUpdatePaths(mask *fieldmaskpb.FieldMask, object *aigridv1.Subscription) subUpdatePaths {
+func (p subUpdatePaths) anySpec() bool {
+	return p.wholeSpec || p.owner || p.modelRefs || p.priority || p.organization ||
+		p.tokenMetadata || p.inferencePriority || p.guardrails
+}
+
+// subscriptionUpdatePaths decides which fields an Update writes.
+//
+// An empty mask is inferred from the object (REST PATCH often arrives without
+// one). Explicit masks must use supported paths; unsupported paths are rejected.
+func subscriptionUpdatePaths(mask *fieldmaskpb.FieldMask, object *aigridv1.Subscription) (subUpdatePaths, error) {
 	if mask == nil || len(mask.GetPaths()) == 0 {
 		return subUpdatePaths{
 			labels:      len(object.GetMetadata().GetLabels()) > 0,
 			annotations: len(object.GetMetadata().GetAnnotations()) > 0,
-			spec:        object.GetSpec() != nil,
-		}
+			wholeSpec:   object.GetSpec() != nil,
+		}, nil
 	}
 	var paths subUpdatePaths
 	for _, path := range mask.GetPaths() {
 		p := strings.TrimPrefix(path, "object.")
 		switch {
+		case p == "id":
+			// Identity is taken from the path / object.id; ignore in the mask.
 		case p == "metadata":
 			paths.labels, paths.annotations = true, true
 		case p == "metadata.labels" || strings.HasPrefix(p, "metadata.labels."):
 			paths.labels = true
 		case p == "metadata.annotations" || strings.HasPrefix(p, "metadata.annotations."):
 			paths.annotations = true
-		case p == "spec" || strings.HasPrefix(p, "spec."):
-			paths.spec = true
+		case p == "spec":
+			paths.wholeSpec = true
+		case p == "spec.owner" || strings.HasPrefix(p, "spec.owner."):
+			paths.owner = true
+		case p == "spec.model_refs" || strings.HasPrefix(p, "spec.model_refs."):
+			paths.modelRefs = true
+		case p == "spec.priority":
+			paths.priority = true
+		case p == "spec.organization" || strings.HasPrefix(p, "spec.organization."):
+			paths.organization = true
+		case p == "spec.token_metadata" || strings.HasPrefix(p, "spec.token_metadata."):
+			paths.tokenMetadata = true
+		case p == "spec.inference_priority":
+			paths.inferencePriority = true
+		case p == "spec.guardrails" || strings.HasPrefix(p, "spec.guardrails."):
+			paths.guardrails = true
+		default:
+			return subUpdatePaths{}, connect.Errorf(connect.CodeInvalidArgument, "unsupported update_mask path %q", path)
 		}
 	}
-	return paths
+	return paths, nil
+}
+
+// mergeSubscriptionUpdate builds the candidate by applying only selected mask
+// paths from the request onto the stored subscription.
+func mergeSubscriptionUpdate(stored, incoming *aigridv1.Subscription, paths subUpdatePaths) *aigridv1.Subscription {
+	out := proto.Clone(stored).(*aigridv1.Subscription)
+	if out == nil {
+		out = &aigridv1.Subscription{Id: subscriptionID(stored)}
+	}
+	if paths.labels || paths.annotations {
+		meta := out.GetMetadata()
+		if meta == nil {
+			meta = &aigridv1.Metadata{}
+		} else {
+			meta = proto.Clone(meta).(*aigridv1.Metadata)
+		}
+		if paths.labels {
+			if incoming.GetMetadata() != nil {
+				meta.Labels = incoming.GetMetadata().GetLabels()
+			} else {
+				meta.Labels = nil
+			}
+		}
+		if paths.annotations {
+			if incoming.GetMetadata() != nil {
+				meta.Annotations = incoming.GetMetadata().GetAnnotations()
+			} else {
+				meta.Annotations = nil
+			}
+		}
+		out.Metadata = meta
+	}
+	if !paths.anySpec() {
+		return out
+	}
+	if out.Spec == nil {
+		out.Spec = &aigridv1.SubscriptionSpec{}
+	} else {
+		out.Spec = proto.Clone(out.Spec).(*aigridv1.SubscriptionSpec)
+	}
+	in := incoming.GetSpec()
+	if paths.wholeSpec {
+		if in == nil {
+			out.Spec = &aigridv1.SubscriptionSpec{}
+		} else {
+			out.Spec = proto.Clone(in).(*aigridv1.SubscriptionSpec)
+		}
+		return out
+	}
+	if in == nil {
+		in = &aigridv1.SubscriptionSpec{}
+	}
+	if paths.owner {
+		out.Spec.Owner = in.GetOwner()
+	}
+	if paths.modelRefs {
+		out.Spec.ModelRefs = in.GetModelRefs()
+	}
+	if paths.priority {
+		out.Spec.Priority = in.GetPriority()
+	}
+	if paths.organization {
+		out.Spec.Organization = in.GetOrganization()
+	}
+	if paths.tokenMetadata {
+		out.Spec.TokenMetadata = in.GetTokenMetadata()
+	}
+	if paths.inferencePriority {
+		out.Spec.InferencePriority = in.InferencePriority
+	}
+	if paths.guardrails {
+		out.Spec.Guardrails = in.GetGuardrails()
+	}
+	return out
+}
+
+// subscriptionUpdatePatch builds a merge-patch body with only the selected fields.
+// Metadata labels/annotations come from the request object (explicit replace of
+// the maps named by the mask). Spec fields come from the merged candidate so
+// partial updates never write zeros for unmasked siblings.
+func subscriptionUpdatePatch(candidate, incoming *aigridv1.Subscription, paths subUpdatePaths) map[string]interface{} {
+	patchBody := map[string]interface{}{}
+	patchMeta := map[string]interface{}{}
+	if paths.labels {
+		if incoming.GetMetadata() != nil {
+			patchMeta["labels"] = stringMapToInterfaceMap(incoming.GetMetadata().GetLabels())
+		} else {
+			patchMeta["labels"] = map[string]interface{}{}
+		}
+	}
+	if paths.annotations {
+		if incoming.GetMetadata() != nil {
+			patchMeta["annotations"] = stringMapToInterfaceMap(incoming.GetMetadata().GetAnnotations())
+		} else {
+			patchMeta["annotations"] = map[string]interface{}{}
+		}
+	}
+	if len(patchMeta) > 0 {
+		patchBody["metadata"] = patchMeta
+	}
+	if !paths.anySpec() {
+		return patchBody
+	}
+	if paths.wholeSpec {
+		patchBody["spec"] = subscriptionSpecMap(candidate.GetSpec())
+		return patchBody
+	}
+	specPatch := map[string]interface{}{}
+	full := subscriptionSpecMap(candidate.GetSpec())
+	if paths.owner {
+		specPatch["owner"] = full["owner"]
+	}
+	if paths.modelRefs {
+		specPatch["modelRefs"] = full["modelRefs"]
+	}
+	if paths.priority {
+		specPatch["priority"] = full["priority"]
+	}
+	if paths.organization {
+		if org, ok := full["organization"]; ok {
+			specPatch["organization"] = org
+		} else {
+			specPatch["organization"] = nil
+		}
+	}
+	if paths.tokenMetadata {
+		if tm, ok := full["tokenMetadata"]; ok {
+			specPatch["tokenMetadata"] = tm
+		} else {
+			specPatch["tokenMetadata"] = nil
+		}
+	}
+	if paths.inferencePriority {
+		if ip, ok := full["inferencePriority"]; ok {
+			specPatch["inferencePriority"] = ip
+		} else {
+			specPatch["inferencePriority"] = nil
+		}
+	}
+	if paths.guardrails {
+		if g, ok := full["guardrails"]; ok {
+			specPatch["guardrails"] = g
+		} else {
+			specPatch["guardrails"] = []interface{}{}
+		}
+	}
+	if len(specPatch) > 0 {
+		patchBody["spec"] = specPatch
+	}
+	return patchBody
 }
 
 func validateSubscriptionID(id string) error {
