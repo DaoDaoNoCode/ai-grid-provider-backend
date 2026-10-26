@@ -33,7 +33,7 @@
 | 8 | — | Subscription Delete swallows policy cleanup failure | done | Managed AuthPolicy cleanup errors fail Delete |
 | 9 | — | Reject negative Models List limit | done | Models + Subscriptions validate limit < 0 → InvalidArgument |
 | 10 | — | Models Delete K8s ResourceVersion precondition | done | Preconditioned LLM delete before Placement/MWRS cleanup |
-| 11 | — | Model phase NotAsExpected→FAILED too aggressive | pending | |
+| 11 | — | Model phase NotAsExpected→FAILED too aggressive | done | NotAsExpected → PENDING; FAILED when a work is Degraded |
 | 12 | — | Fill rollout.works (+ P13 fields) | pending | |
 | 13 | — | Locations (P7/P8) | pending | |
 | 14 | — | Subscription Delete resource_version / If-Match | pending | |
@@ -151,14 +151,14 @@
 - **Decision:** Accepted — atomic preconditioned LLM delete first.
 - **Implementation notes:** Nonzero `resource_version` sets `DeleteOptions.Preconditions.ResourceVersion` on LLMInferenceService delete; Conflict maps to Aborted via `mapModelAPIError`. Placement/MWRS/ModelRef cleanup runs only after successful LLM delete (best-effort warn on cleanup errors). Test asserts options include RV and conflict → Aborted without removing the model.
 
-### 11. Model phase NotAsExpected→FAILED too aggressive — Status: `pending`
+### 11. Model phase NotAsExpected→FAILED too aggressive — Status: `done`
 
 - **Source:** DaoDao #6
 - **Description:** Treat NotAsExpected as PENDING unless Degraded/failed apply (draft rule), instead of mapping straight to FAILED.
 - **Pros:** Avoids false Failed flash; better console expectations.
 - **Cons:** Mapping tests needed.
-- **Decision:**
-- **Implementation notes:**
+- **Decision:** Accepted — align with draft ModelPhase rule.
+- **Implementation notes:** `enrichModelFromMWRS` maps NotAsExpected to PENDING. FAILED only when `mwrsHasFailedOrDegradedWork` sees a work with Degraded=True (populated once works[] is filled). Tests cover NotAsExpected→PENDING and degraded helper.
 
 ### 12. Fill rollout.works (+ P13 fields) — Status: `pending`
 

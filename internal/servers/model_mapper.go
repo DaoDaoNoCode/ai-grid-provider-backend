@@ -454,13 +454,31 @@ func enrichModelFromMWRS(model *aigridv1.Model, mwrs *unstructured.Unstructured)
 	model.Status.Rollout = rs
 	if rs.RolledOut && rs.Applied {
 		model.Status.Phase = aigridv1.ModelPhase_MODEL_PHASE_READY
-	} else if rs.Reason == "NotAsExpected" {
+	} else if mwrsHasFailedOrDegradedWork(rs) {
+		// True apply failure / degraded work — not mere NotAsExpected during rollout.
 		model.Status.Phase = aigridv1.ModelPhase_MODEL_PHASE_FAILED
-		model.Status.Reason = rs.Reason
-	} else if model.Status.Phase == aigridv1.ModelPhase_MODEL_PHASE_UNSPECIFIED {
+		if rs.Reason != "" {
+			model.Status.Reason = rs.Reason
+		}
+	} else if model.Status.Phase == aigridv1.ModelPhase_MODEL_PHASE_UNSPECIFIED || rs.Reason == "NotAsExpected" {
+		// NotAsExpected is common while agents have not reported yet; stay PENDING.
 		model.Status.Phase = aigridv1.ModelPhase_MODEL_PHASE_PENDING
 		model.Status.Reason = rs.Reason
 	}
+}
+
+// mwrsHasFailedOrDegradedWork reports whether rollout status indicates a real
+// failure (Degraded work), not in-progress NotAsExpected during apply.
+func mwrsHasFailedOrDegradedWork(rs *aigridv1.ModelRolloutStatus) bool {
+	if rs == nil {
+		return false
+	}
+	for _, w := range rs.GetWorks() {
+		if w != nil && strings.EqualFold(w.GetDegraded(), "True") {
+			return true
+		}
+	}
+	return false
 }
 
 // --- builders ---
