@@ -69,8 +69,34 @@ func manifestWork(cluster, ready string, conds ...map[string]interface{}) unstru
 		"apiVersion": "work.open-cluster-management.io/v1",
 		"kind":       "ManifestWork",
 		"metadata":   map[string]interface{}{"name": "model-m", "namespace": cluster},
-		"status":     status,
+		"spec": map[string]interface{}{
+			"manifestConfigs": []interface{}{llmManifestConfig("ai-grid-models", "m")},
+		},
+		"status": status,
 	}}
+}
+
+// legacyWork is a work generated from a template without manifestConfigs:
+// an MWRS created before the backend asked for feedback, or by GitOps.
+func legacyWork(cluster string, conds ...map[string]interface{}) unstructured.Unstructured {
+	w := manifestWork(cluster, "", conds...)
+	delete(w.Object, "spec")
+	return w
+}
+
+// withGenerations adds the generation and observedGeneration feedback values.
+func withGenerations(w unstructured.Unstructured, generation, observed int64) unstructured.Unstructured {
+	manifests, _, _ := unstructured.NestedSlice(w.Object, "status", "resourceStatus", "manifests")
+	m := manifests[0].(map[string]interface{})
+	values, _, _ := unstructured.NestedSlice(m, "statusFeedback", "values")
+	for name, v := range map[string]int64{"generation": generation, "observedGeneration": observed} {
+		values = append(values, map[string]interface{}{
+			"name": name, "fieldValue": map[string]interface{}{"type": "Integer", "integer": v},
+		})
+	}
+	_ = unstructured.SetNestedSlice(m, values, "statusFeedback", "values")
+	_ = unstructured.SetNestedSlice(w.Object, manifests, "status", "resourceStatus", "manifests")
+	return w
 }
 
 var (
@@ -136,6 +162,43 @@ func TestModelWorkStatusFromManifestWork(t *testing.T) {
 			wantPhase: aigridv1.ModelPhase_MODEL_PHASE_PENDING,
 		},
 		{
+			name:      "ready feedback for the current generation is READY",
+			work:      withGenerations(manifestWork("site-a", "True", condAppliedTrue, condAvailableTrue, condProgressingOff), 3, 3),
+			wantPhase: aigridv1.ModelPhase_MODEL_PHASE_READY,
+			wantReady: boolPtr(true),
+		},
+		{
+			name:        "Ready from an older generation does not count",
+			work:        withGenerations(manifestWork("site-a", "True", condAppliedTrue, condAvailableTrue, condProgressingTrue, condDegradedFalse), 2, 1),
+			wantPhase:   aigridv1.ModelPhase_MODEL_PHASE_PENDING,
+			wantReason:  "ConditionRulesAggregated",
+			wantMessage: "LLMInferenceService rolling out",
+		},
+		{
+			name:      "template without ready feedback: Applied and Available is READY",
+			work:      legacyWork("site-a", condAppliedTrue, condAvailableTrue),
+			wantPhase: aigridv1.ModelPhase_MODEL_PHASE_READY,
+		},
+		{
+			name:        "template without ready feedback: still Progressing is PENDING",
+			work:        legacyWork("site-a", condAppliedTrue, condAvailableTrue, condProgressingTrue),
+			wantPhase:   aigridv1.ModelPhase_MODEL_PHASE_PENDING,
+			wantReason:  "ConditionRulesAggregated",
+			wantMessage: "LLMInferenceService rolling out",
+		},
+		{
+			name:        "template without ready feedback: Applied False is FAILED",
+			work:        legacyWork("site-a", condAppliedFalse, condAvailableUnk),
+			wantPhase:   aigridv1.ModelPhase_MODEL_PHASE_FAILED,
+			wantReason:  "AppliedManifestWorkFailed",
+			wantMessage: "Failed to apply manifest work",
+		},
+		{
+			name:      "template with ready feedback not reported yet stays PENDING",
+			work:      manifestWork("site-a", "", condAppliedTrue, condAvailableTrue),
+			wantPhase: aigridv1.ModelPhase_MODEL_PHASE_PENDING,
+		},
+		{
 			name:      "ready Unknown leaves ready unset",
 			work:      manifestWork("site-a", "Unknown", condAppliedTrue, condAvailableTrue, condProgressingTrue),
 			wantPhase: aigridv1.ModelPhase_MODEL_PHASE_PENDING, wantReason: "ConditionRulesAggregated",
@@ -193,7 +256,7 @@ func TestReadyFeedbackBoolean(t *testing.T) {
 		map[string]interface{}{"name": "ready", "fieldValue": map[string]interface{}{"type": "Boolean", "boolean": false}},
 	}}
 	_ = unstructured.SetNestedSlice(work.Object, manifests, "status", "resourceStatus", "manifests")
-	if got := readyFeedback(work); got == nil || *got {
+	if got := readyFromFeedback(llmFeedbackValues(work)); got == nil || *got {
 		t.Fatalf("ready = %v, want false", got)
 	}
 }
@@ -205,7 +268,7 @@ func TestReadyFeedbackIgnoresOtherManifests(t *testing.T) {
 	m := manifests[0].(map[string]interface{})
 	m["resourceMeta"] = map[string]interface{}{"group": "", "resource": "namespaces", "kind": "Namespace", "name": "ai-grid-models"}
 	_ = unstructured.SetNestedSlice(work.Object, manifests, "status", "resourceStatus", "manifests")
-	if got := readyFeedback(work); got != nil {
+	if got := readyFromFeedback(llmFeedbackValues(work)); got != nil {
 		t.Fatalf("ready = %v, want unset for a Namespace manifest", *got)
 	}
 }
@@ -213,9 +276,19 @@ func TestReadyFeedbackIgnoresOtherManifests(t *testing.T) {
 // placedModel builds a placed model as enrichPlacement does: placement status
 // with `selected` clusters, the MWRS conditions, then the works.
 func placedModel(selected int, mwrs *unstructured.Unstructured, works ...unstructured.Unstructured) *aigridv1.Model {
+	return placedModelOn(nil, selected, mwrs, works...)
+}
+
+// placedModelOn is placedModel with known decisions (clusters).
+func placedModelOn(clusters []string, selected int, mwrs *unstructured.Unstructured, works ...unstructured.Unstructured) *aigridv1.Model {
+	if clusters != nil {
+		selected = len(clusters)
+	}
 	model := &aigridv1.Model{
-		Spec:   &aigridv1.ModelSpec{},
-		Status: &aigridv1.ModelStatus{Placement: &aigridv1.ModelPlacementStatus{NumberOfSelectedClusters: int32(selected)}},
+		Spec: &aigridv1.ModelSpec{},
+		Status: &aigridv1.ModelStatus{Placement: &aigridv1.ModelPlacementStatus{
+			NumberOfSelectedClusters: int32(selected), SelectedClusters: clusters,
+		}},
 	}
 	enrichModelFromMWRS(model, mwrs)
 	for _, w := range works {
@@ -330,6 +403,79 @@ func TestDeriveModelPhaseFromRollout(t *testing.T) {
 			if st.GetPhase() != tt.wantPhase || st.GetReason() != tt.wantReason || st.GetMessage() != tt.wantMessage {
 				t.Fatalf("phase/reason/message = %v/%q/%q, want %v/%q/%q",
 					st.GetPhase(), st.GetReason(), st.GetMessage(), tt.wantPhase, tt.wantReason, tt.wantMessage)
+			}
+		})
+	}
+}
+
+// TestLegacyTemplateRolledOutIsReady: an MWRS created without
+// manifestConfigs (before the backend asked for feedback, or by GitOps)
+// generates works that never report ready; rolled out with every work
+// applied and available, the model is READY, not stuck in PENDING.
+func TestLegacyTemplateRolledOutIsReady(t *testing.T) {
+	t.Parallel()
+	mwrs := mwrsWithConditions(
+		cond("PlacementVerified", "True", "AsExpected", ""),
+		cond("PlacementRolledOut", "True", "Complete", ""),
+		cond("ManifestworkApplied", "True", "AsExpected", ""))
+	st := placedModelOn([]string{"site-a", "site-b"}, 0, mwrs,
+		legacyWork("site-a", condAppliedTrue, condAvailableTrue),
+		legacyWork("site-b", condAppliedTrue, condAvailableTrue)).GetStatus()
+	if st.GetPhase() != aigridv1.ModelPhase_MODEL_PHASE_READY || st.GetReason() != "Complete" {
+		t.Fatalf("status = %v/%q, want READY/Complete", st.GetPhase(), st.GetReason())
+	}
+	for _, w := range st.GetRollout().GetWorks() {
+		if w.Ready != nil {
+			t.Fatalf("work %s ready = %v, want unset without feedback", w.GetCluster(), *w.Ready)
+		}
+	}
+}
+
+// TestDeriveModelPhaseCountsSelectedClustersOnly: with decisions known,
+// works on clusters that left the decision do not count, a selected cluster
+// without a work is not serving, and a cluster counts once.
+func TestDeriveModelPhaseCountsSelectedClustersOnly(t *testing.T) {
+	t.Parallel()
+	rolling := mwrsWithConditions(
+		cond("PlacementVerified", "True", "AsExpected", ""),
+		cond("PlacementRolledOut", "False", "Progressing", ""),
+		cond("ManifestworkApplied", "False", "Processing", ""))
+	ready := func(c string) unstructured.Unstructured {
+		return manifestWork(c, "True", condAppliedTrue, condAvailableTrue, condProgressingOff, condDegradedFalse)
+	}
+	failedApply := manifestWork("site-b", "", condAppliedFalse, condAvailableUnk)
+	tests := []struct {
+		name       string
+		selected   []string
+		works      []unstructured.Unstructured
+		wantPhase  aigridv1.ModelPhase
+		wantReason string
+		wantMsg    string
+	}{
+		{
+			name:     "same-size swap A to B: A's lingering READY work does not count",
+			selected: []string{"site-b"}, works: []unstructured.Unstructured{ready("site-a")},
+			wantPhase: aigridv1.ModelPhase_MODEL_PHASE_PENDING, wantReason: "Processing",
+		},
+		{
+			name:     "a deselected FAILED work is ignored",
+			selected: []string{"site-a"}, works: []unstructured.Unstructured{ready("site-a"), failedApply},
+			wantPhase: aigridv1.ModelPhase_MODEL_PHASE_READY,
+		},
+		{
+			name:      "a cluster selected twice and with two works counts once",
+			selected:  []string{"site-a", "site-a", "site-c"},
+			works:     []unstructured.Unstructured{ready("site-a"), ready("site-a")},
+			wantPhase: aigridv1.ModelPhase_MODEL_PHASE_PARTIALLY_AVAILABLE, wantReason: "PartiallyAvailable",
+			wantMsg: "1 of 2 clusters are serving the model.",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			st := placedModelOn(tt.selected, 0, rolling, tt.works...).GetStatus()
+			if st.GetPhase() != tt.wantPhase || st.GetReason() != tt.wantReason || st.GetMessage() != tt.wantMsg {
+				t.Fatalf("status = %v/%q/%q, want %v/%q/%q", st.GetPhase(), st.GetReason(), st.GetMessage(), tt.wantPhase, tt.wantReason, tt.wantMsg)
 			}
 		})
 	}

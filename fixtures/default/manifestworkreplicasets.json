@@ -107,6 +107,14 @@
                     {
                       "name": "ready",
                       "path": ".status.conditions[?(@.type==\"Ready\")].status"
+                    },
+                    {
+                      "name": "generation",
+                      "path": ".metadata.generation"
+                    },
+                    {
+                      "name": "observedGeneration",
+                      "path": ".status.observedGeneration"
                     }
                   ]
                 }
@@ -116,7 +124,7 @@
                   "condition": "Progressing",
                   "type": "CEL",
                   "celExpressions": [
-                    "!(has(object.status) && has(object.status.conditions) && object.status.conditions.exists(c, c.type == \"Ready\" && c.status == \"True\"))"
+                    "!(has(object.status) && has(object.status.conditions) && (!has(object.status.observedGeneration) || !has(object.metadata.generation) || object.status.observedGeneration == object.metadata.generation) && object.status.conditions.exists(c, c.type == \"Ready\" && c.status == \"True\"))"
                   ],
                   "message": "LLMInferenceService rolling out"
                 },
@@ -124,7 +132,7 @@
                   "condition": "Degraded",
                   "type": "CEL",
                   "celExpressions": [
-                    "has(object.status) && has(object.status.conditions) && object.status.conditions.exists(c, c.type == \"Ready\" && c.status == \"False\" && has(c.reason) && c.reason in [\"ConfigNotFound\", \"RefsInvalid\", \"GatewaysNotReady\"])"
+                    "has(object.status) && has(object.status.conditions) && (!has(object.status.observedGeneration) || !has(object.metadata.generation) || object.status.observedGeneration == object.metadata.generation) && object.status.conditions.exists(c, c.type == \"Ready\" && c.status == \"False\" && has(c.reason) && c.reason in [\"ConfigNotFound\", \"RefsInvalid\", \"GatewaysNotReady\"])"
                   ],
                   "message": "LLMInferenceService not ready"
                 }
@@ -272,6 +280,14 @@
                     {
                       "name": "ready",
                       "path": ".status.conditions[?(@.type==\"Ready\")].status"
+                    },
+                    {
+                      "name": "generation",
+                      "path": ".metadata.generation"
+                    },
+                    {
+                      "name": "observedGeneration",
+                      "path": ".status.observedGeneration"
                     }
                   ]
                 }
@@ -281,7 +297,7 @@
                   "condition": "Progressing",
                   "type": "CEL",
                   "celExpressions": [
-                    "!(has(object.status) && has(object.status.conditions) && object.status.conditions.exists(c, c.type == \"Ready\" && c.status == \"True\"))"
+                    "!(has(object.status) && has(object.status.conditions) && (!has(object.status.observedGeneration) || !has(object.metadata.generation) || object.status.observedGeneration == object.metadata.generation) && object.status.conditions.exists(c, c.type == \"Ready\" && c.status == \"True\"))"
                   ],
                   "message": "LLMInferenceService rolling out"
                 },
@@ -289,7 +305,7 @@
                   "condition": "Degraded",
                   "type": "CEL",
                   "celExpressions": [
-                    "has(object.status) && has(object.status.conditions) && object.status.conditions.exists(c, c.type == \"Ready\" && c.status == \"False\" && has(c.reason) && c.reason in [\"ConfigNotFound\", \"RefsInvalid\", \"GatewaysNotReady\"])"
+                    "has(object.status) && has(object.status.conditions) && (!has(object.status.observedGeneration) || !has(object.metadata.generation) || object.status.observedGeneration == object.metadata.generation) && object.status.conditions.exists(c, c.type == \"Ready\" && c.status == \"False\" && has(c.reason) && c.reason in [\"ConfigNotFound\", \"RefsInvalid\", \"GatewaysNotReady\"])"
                   ],
                   "message": "LLMInferenceService not ready"
                 }

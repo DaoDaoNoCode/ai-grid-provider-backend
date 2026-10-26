@@ -589,7 +589,11 @@ the whole placement, and a field you leave out is removed.
 | `PENDING` | otherwise | otherwise, with the MWRS condition's reason |
 
 The works win over the MWRS conditions: an MWRS that still says rolled out
-does not make the model READY while a work has failed.
+does not make the model READY while a work has failed. With the decisions
+known, only the selected clusters count, one work each: a selected cluster
+without a work is not serving, and the work of a cluster that left the
+decision is ignored (it stays in `works[]` until the MWRS controller
+deletes it).
 
 `status.rollout.works[]` is one entry per selected cluster that has a
 ManifestWork, in cluster-name order:
@@ -597,17 +601,20 @@ ManifestWork, in cluster-name order:
 | Field | Meaning |
 | --- | --- |
 | `cluster` | The cluster (the work's namespace); its `location` label is the location |
-| `phase` | `READY` when `ready` is true; `FAILED` when `Applied` is False or `Degraded` is True; else `PENDING` (never `PARTIALLY_AVAILABLE`) |
+| `phase` | `READY` when `ready` is true; `FAILED` when `Applied` is False or `Degraded` is True; for a work whose template asks for no `ready` feedback (an MWRS created earlier, or by GitOps), `READY` when `Applied` and `Available` are True and `Progressing` is not; else `PENDING` (never `PARTIALLY_AVAILABLE`) |
 | `reason`, `message` | Of the condition that decided `phase`; empty for `READY` and before the agent reports |
-| `ready` | The spoke LLMInferenceService's `Ready` status from the work's `ready` status feedback; absent until reported |
+| `ready` | The spoke LLMInferenceService's `Ready` status from the work's `ready` status feedback; absent until reported, without the feedback rule, and while the spoke has not reconciled its current spec (`generation` and `observedGeneration` feedback differ) |
 | `conditions[]` | The ManifestWork's `Applied`, `Available`, `Progressing`, `Degraded` |
 | `applied`, `available`, `progressing`, `degraded` | Those conditions' statuses as strings (kept for compatibility) |
 
 `Progressing` and `Degraded` come from the condition rules the backend puts
 in the MWRS template (`Progressing` until the spoke model is Ready,
 `Degraded` when its Ready is False with a reason that does not recover);
-`ready` comes from the template's JSONPaths feedback rule
-`.status.conditions[?(@.type=="Ready")].status`.
+`ready` comes from the template's JSONPaths feedback rules
+`.status.conditions[?(@.type=="Ready")].status`, `.metadata.generation` and
+`.status.observedGeneration`; both condition rules also wait for
+`observedGeneration` to reach `generation`, so a Ready left from an older
+spec does not count after an update.
 
 gRPC: `ai_grid.v1.Models/{List,Get,Create,Update,Delete}`.
 

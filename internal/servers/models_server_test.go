@@ -207,8 +207,10 @@ func TestModelsGetEnrichesRolloutWorks(t *testing.T) {
 	if works[0].GetApplied() != "True" || works[0].GetDegraded() != "False" {
 		t.Fatalf("work conditions = %#v", works[0])
 	}
-	if got.GetObject().GetStatus().GetPhase() != aigridv1.ModelPhase_MODEL_PHASE_PENDING {
-		t.Fatalf("phase = %v, want PENDING for NotAsExpected without degraded work", got.GetObject().GetStatus().GetPhase())
+	// The work's template asks for no ready feedback (no manifestConfigs), so
+	// Applied and Available True with Progressing False is serving.
+	if got.GetObject().GetStatus().GetPhase() != aigridv1.ModelPhase_MODEL_PHASE_READY {
+		t.Fatalf("phase = %v, want READY for a legacy work that is applied and available", got.GetObject().GetStatus().GetPhase())
 	}
 }
 

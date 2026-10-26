@@ -86,13 +86,20 @@ func (ModelRolloutStrategy) EnumDescriptor() ([]byte, []int) {
 // Placed model (the ManifestWorkReplicaSet `model-<id>` exists): from the
 // per-location works first, because the spoke agents write them and the
 // ManifestWorkReplicaSet summary is computed from them later, so a summary can
-// be stale while a work is not. With `total` the larger of the number of works
-// and `status.placement.number_of_selected_clusters` (a selected cluster
-// without a work yet is not serving), and `serving` the works whose phase is
-// READY, the first rule that matches decides:
+// be stale while a work is not. When the placement's decisions are known
+// (`status.placement.selected_clusters` is not empty) only the selected
+// clusters count, one work each: `total` is the number of selected clusters,
+// a selected cluster without a work yet is not serving, and the work of a
+// cluster that left the decision (deleted shortly by the
+// ManifestWorkReplicaSet controller) is ignored. Without decisions, `total`
+// is the larger of the number of works and
+// `status.placement.number_of_selected_clusters`. With `serving` the counted
+// works whose phase is READY (see ModelWorkStatus.phase, which also covers
+// works whose template asks for no `ready` feedback), the first rule that
+// matches decides:
 //
-//  1. READY when `total` > 0 and every location is serving, or, when there
-//     is no work to read, when the ManifestWorkReplicaSet's
+//  1. READY when `total` > 0 and every counted location is serving, or,
+//     when there is no work to read at all, when the ManifestWorkReplicaSet's
 //     `PlacementRolledOut` and `ManifestworkApplied` are both True; with the
 //     reason and message of `PlacementRolledOut` when it is True, else none;
 //  2. PARTIALLY_AVAILABLE when some but not all locations are serving, reason
@@ -1361,7 +1368,9 @@ type ModelRolloutStatus struct {
 	// Reason from the deciding condition.
 	Reason string `protobuf:"bytes,3,opt,name=reason,proto3" json:"reason,omitempty"`
 	// One entry per ManifestWork the ManifestWorkReplicaSet generated (one per
-	// selected cluster that has a work yet), in cluster-name order.
+	// selected cluster that has a work yet), in cluster-name order. A cluster
+	// that just left the decision keeps its entry until its work is deleted;
+	// it does not count towards the model's phase.
 	Works []*ModelWorkStatus `protobuf:"bytes,4,rep,name=works,proto3" json:"works,omitempty"`
 	// MWRS conditions.
 	Conditions    []*Condition `protobuf:"bytes,5,rep,name=conditions,proto3" json:"conditions,omitempty"`
@@ -1457,12 +1466,17 @@ type ModelWorkStatus struct {
 	// decides:
 	//
 	//  1. READY when `ready` is true (the spoke reports the
-	//     LLMInferenceService Ready), with no reason;
+	//     LLMInferenceService Ready for its current spec), with no reason;
 	//  2. FAILED when the work's `Applied` is False (the agent could not apply
 	//     it, for example the spoke has no LLMInferenceService CRD), or its
 	//     `Degraded` is True (the spoke's Ready is False with a terminal
 	//     reason), with that condition's reason and message, Applied first;
-	//  3. PENDING otherwise: with the reason and message of `Available` when it
+	//  3. READY, with no reason, when the work's template asks for no `ready`
+	//     status feedback (a ManifestWorkReplicaSet created before the backend
+	//     added the rule, or written by GitOps without it) and the work's
+	//     `Applied` and `Available` are True and `Progressing` is not. This is
+	//     coarser: `Available` only says the object exists on the spoke;
+	//  4. PENDING otherwise: with the reason and message of `Available` when it
 	//     is present and not True, else of `Progressing` when present, else
 	//     with none (the agent has not reported the work yet).
 	Phase ModelPhase `protobuf:"varint,6,opt,name=phase,proto3,enum=ai_grid.v1.ModelPhase" json:"phase,omitempty"`
@@ -1477,7 +1491,10 @@ type ModelWorkStatus struct {
 	// The spoke's LLMInferenceService `Ready` condition status, from the `ready`
 	// status feedback value the template asks for
 	// (`status.resourceStatus.manifests[].statusFeedback.values[]`). Unset until
-	// the agent reports it, and when it reports neither True nor False.
+	// the agent reports it, when it reports neither True nor False, when the
+	// template asks for no `ready` feedback, and when the `generation` and
+	// `observedGeneration` feedback values are both reported and differ (KServe
+	// has not reconciled the current spec, so Ready is about an older one).
 	Ready         *bool `protobuf:"varint,10,opt,name=ready,proto3,oneof" json:"ready,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache

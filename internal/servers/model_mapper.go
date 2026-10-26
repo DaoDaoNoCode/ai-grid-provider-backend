@@ -44,6 +44,10 @@ const (
 	// feedbackReady names the status feedback value that carries the spoke
 	// LLMInferenceService's Ready condition status.
 	feedbackReady = "ready"
+	// feedbackGeneration and feedbackObservedGeneration carry the spoke
+	// LLMInferenceService's metadata.generation and status.observedGeneration.
+	feedbackGeneration         = "generation"
+	feedbackObservedGeneration = "observedGeneration"
 
 	// Reason and message of a PARTIALLY_AVAILABLE model, the console's
 	// proposal P13 (ai-grid-provider-console mock/proto/ai_grid/v1/model_type.proto,
@@ -589,6 +593,11 @@ func enrichModelFromMWRS(model *aigridv1.Model, mwrs *unstructured.Unstructured)
 // come first: the spoke agents write them and the MWRS controller summarizes
 // them afterwards, so the MWRS conditions can still say rolled out while a
 // work has already failed. Call it again once works are populated.
+//
+// When the placement's decisions are known, only the selected clusters
+// count, one work each: a selected cluster without a work is not serving,
+// and the work of a cluster that left the decision (the MWRS controller
+// deletes it shortly) is ignored.
 func deriveModelPhaseFromRollout(model *aigridv1.Model) {
 	if model == nil || model.Status == nil || model.Status.Rollout == nil {
 		return
@@ -596,10 +605,30 @@ func deriveModelPhaseFromRollout(model *aigridv1.Model) {
 	st := model.Status
 	rs := st.Rollout
 	works := rs.GetWorks()
-	total := max(len(works), int(st.GetPlacement().GetNumberOfSelectedClusters()))
+	counted, total := works, max(len(works), int(st.GetPlacement().GetNumberOfSelectedClusters()))
+	if selected := st.GetPlacement().GetSelectedClusters(); len(selected) > 0 {
+		byCluster := map[string]*aigridv1.ModelWorkStatus{}
+		for _, w := range works {
+			if _, dup := byCluster[w.GetCluster()]; !dup {
+				byCluster[w.GetCluster()] = w
+			}
+		}
+		seen := map[string]bool{}
+		counted = nil
+		for _, cluster := range selected {
+			if seen[cluster] {
+				continue
+			}
+			seen[cluster] = true
+			if w := byCluster[cluster]; w != nil {
+				counted = append(counted, w)
+			}
+		}
+		total = len(seen)
+	}
 	serving := 0
 	var failed *aigridv1.ModelWorkStatus
-	for _, w := range works {
+	for _, w := range counted {
 		switch w.GetPhase() {
 		case aigridv1.ModelPhase_MODEL_PHASE_READY:
 			serving++
@@ -652,21 +681,27 @@ func modelWorkStatusFromManifestWork(mw unstructured.Unstructured) *aigridv1.Mod
 	out.Available = conditionStatusName(out.Conditions, condWorkAvailable)
 	out.Progressing = conditionStatusName(out.Conditions, condWorkProgressing)
 	out.Degraded = conditionStatusName(out.Conditions, condWorkDegraded)
-	out.Ready = readyFeedback(mw)
-	out.Phase, out.Reason, out.Message = deriveWorkPhase(out)
+	out.Ready = readyFromFeedback(llmFeedbackValues(mw))
+	out.Phase, out.Reason, out.Message = deriveWorkPhase(out, asksForReadyFeedback(mw))
 	return out
 }
 
-// readyFeedback is the `ready` status feedback value of the
-// LLMInferenceService manifest in a ManifestWork: true or false for a
-// String "True"/"False" or a Boolean, nil when the agent has not reported it
-// or reports anything else (Kubernetes' "Unknown", for example). The work
-// agent writes it to status.resourceStatus.manifests[].statusFeedback.values[]
-// with fieldValue {type, string|boolean} (open-cluster-management-io/api
+// isLLMResource reports whether a resourceMeta or resourceIdentifier names
+// the LLMInferenceService (by kind or by plural resource).
+func isLLMResource(meta map[string]interface{}) bool {
+	return stringField(meta, "group") == llmInferenceGroup &&
+		(stringField(meta, "kind") == llmInferenceKind || stringField(meta, "resource") == llmInferenceServicesResource.Resource)
+}
+
+// llmFeedbackValues returns the status feedback values of the
+// LLMInferenceService manifest of a ManifestWork by name: a string for type
+// String, an int64 for Integer, a bool for Boolean. The work agent writes
+// them to status.resourceStatus.manifests[].statusFeedback.values[] with
+// fieldValue {type, string|integer|boolean} (open-cluster-management-io/api
 // work/v1/types.go, ManifestCondition.StatusFeedbacks `json:"statusFeedback"`,
 // FeedbackValue, FieldValue; ocm pkg/work/spoke/statusfeedback/reader.go
-// getValueByJsonPath, which reports a string field as type String).
-func readyFeedback(mw unstructured.Unstructured) *bool {
+// getValueByJsonPath).
+func llmFeedbackValues(mw unstructured.Unstructured) map[string]interface{} {
 	manifests, found, err := unstructured.NestedSlice(mw.Object, "status", "resourceStatus", "manifests")
 	if err != nil || !found {
 		return nil
@@ -677,42 +712,105 @@ func readyFeedback(mw unstructured.Unstructured) *bool {
 			continue
 		}
 		meta, _, _ := unstructured.NestedMap(m, "resourceMeta")
-		if stringField(meta, "group") != llmInferenceGroup ||
-			(stringField(meta, "kind") != llmInferenceKind && stringField(meta, "resource") != llmInferenceServicesResource.Resource) {
+		if !isLLMResource(meta) {
 			continue
 		}
+		out := map[string]interface{}{}
 		values, _, _ := unstructured.NestedSlice(m, "statusFeedback", "values")
 		for _, rawValue := range values {
 			v, ok := rawValue.(map[string]interface{})
-			if !ok || stringField(v, "name") != feedbackReady {
+			if !ok {
 				continue
 			}
 			field, _, _ := unstructured.NestedMap(v, "fieldValue")
 			switch stringField(field, "type") {
 			case "String":
-				switch stringField(field, "string") {
-				case "True":
-					return proto.Bool(true)
-				case "False":
-					return proto.Bool(false)
+				out[stringField(v, "name")] = stringField(field, "string")
+			case "Integer":
+				if _, ok := field["integer"]; ok {
+					out[stringField(v, "name")] = nestedInt64(field, "integer")
 				}
 			case "Boolean":
 				if b, ok := field["boolean"].(bool); ok {
-					return proto.Bool(b)
+					out[stringField(v, "name")] = b
 				}
 			}
-			return nil
 		}
+		return out
 	}
 	return nil
+}
+
+// readyFromFeedback is ModelWorkStatus.ready: the `ready` value (String
+// "True"/"False" or a Boolean), counted only when it describes the spoke
+// object's current spec: when both the `generation` and `observedGeneration`
+// values are reported and differ, KServe has not reconciled the latest spec
+// yet and its Ready condition is about an older one, so ready is unset.
+// Anything else (no value, Kubernetes' "Unknown") is unset too.
+func readyFromFeedback(values map[string]interface{}) *bool {
+	var ready bool
+	switch v := values[feedbackReady].(type) {
+	case string:
+		switch v {
+		case "True":
+			ready = true
+		case "False":
+		default:
+			return nil
+		}
+	case bool:
+		ready = v
+	default:
+		return nil
+	}
+	gen, hasGen := values[feedbackGeneration].(int64)
+	observed, hasObserved := values[feedbackObservedGeneration].(int64)
+	if hasGen && hasObserved && gen != observed {
+		return nil
+	}
+	return proto.Bool(ready)
+}
+
+// asksForReadyFeedback reports whether the work's spec has a JSONPaths
+// feedback rule named `ready` for the LLMInferenceService, as the template
+// mwrsFromModel writes does. An MWRS created before that, or by GitOps
+// without it, generates works that never report `ready`.
+func asksForReadyFeedback(mw unstructured.Unstructured) bool {
+	configs, _, _ := unstructured.NestedSlice(mw.Object, "spec", "manifestConfigs")
+	for _, raw := range configs {
+		cfg, ok := raw.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		id, _, _ := unstructured.NestedMap(cfg, "resourceIdentifier")
+		if !isLLMResource(id) {
+			continue
+		}
+		rules, _, _ := unstructured.NestedSlice(cfg, "feedbackRules")
+		for _, rawRule := range rules {
+			rule, ok := rawRule.(map[string]interface{})
+			if !ok || stringField(rule, "type") != "JSONPaths" {
+				continue
+			}
+			paths, _, _ := unstructured.NestedSlice(rule, "jsonPaths")
+			for _, rawPath := range paths {
+				if p, ok := rawPath.(map[string]interface{}); ok && stringField(p, "name") == feedbackReady {
+					return true
+				}
+			}
+		}
+	}
+	return false
 }
 
 // deriveWorkPhase is the model's phase on one location (ModelWorkStatus.phase
 // in model_type.proto, the console's proposal P13): READY when the spoke
 // reports ready; FAILED when Applied is False or Degraded is True, Applied
-// first; otherwise PENDING with the reason of Available while it is not
-// True, else of Progressing, else none (the agent has not reported).
-func deriveWorkPhase(w *aigridv1.ModelWorkStatus) (aigridv1.ModelPhase, string, string) {
+// first; READY, for a work whose template asks for no `ready` feedback,
+// when Applied and Available are True and Progressing is not; otherwise
+// PENDING with the reason of Available while it is not True, else of
+// Progressing, else none (the agent has not reported).
+func deriveWorkPhase(w *aigridv1.ModelWorkStatus, asksForReady bool) (aigridv1.ModelPhase, string, string) {
 	if w.GetReady() {
 		return aigridv1.ModelPhase_MODEL_PHASE_READY, "", ""
 	}
@@ -722,6 +820,12 @@ func deriveWorkPhase(w *aigridv1.ModelWorkStatus) (aigridv1.ModelPhase, string, 
 	}
 	if c := conditionByType(conds, condWorkDegraded); c.GetStatus() == aigridv1.ConditionStatus_CONDITION_STATUS_TRUE {
 		return aigridv1.ModelPhase_MODEL_PHASE_FAILED, c.GetReason(), c.GetMessage()
+	}
+	isTrue := func(typ string) bool {
+		return conditionByType(conds, typ).GetStatus() == aigridv1.ConditionStatus_CONDITION_STATUS_TRUE
+	}
+	if !asksForReady && isTrue(condWorkApplied) && isTrue(condWorkAvailable) && !isTrue(condWorkProgressing) {
+		return aigridv1.ModelPhase_MODEL_PHASE_READY, "", ""
 	}
 	if c := conditionByType(conds, condWorkAvailable); c != nil && c.GetStatus() != aigridv1.ConditionStatus_CONDITION_STATUS_TRUE {
 		return aigridv1.ModelPhase_MODEL_PHASE_PENDING, c.GetReason(), c.GetMessage()
@@ -1276,17 +1380,25 @@ func mwrsFromModel(object *aigridv1.Model, namespace string, deployment *unstruc
 // NewConditionReader); an expression that fails to evaluate sets the
 // condition False/ConditionRuleExpressionError (evaluateCelExpressions), so
 // each one guards the fields it reads: an error on Progressing would read as
-// rolled out. Degraded uses the Ready reasons that do not recover on their own
-// (the set deriveModelPhase calls FAILED on the hub), so a model that is
-// starting or stuck stays Progressing; the console's template does the same
+// rolled out. Both rules read Ready only once KServe has reconciled the
+// current spec (status.observedGeneration equals metadata.generation, or
+// either is absent), so a Ready condition left from an older spec neither
+// ends Progressing nor raises Degraded right after an update. Degraded uses
+// the Ready reasons that do not recover on their own (the set
+// deriveModelPhase calls FAILED on the hub), so a model that is starting or
+// stuck stays Progressing; the console's template does the same
 // (ai-grid-provider-console bff/internal/fakebackend/kserve.go,
 // terminalReadyReasons) and its messages are the template author's.
 const (
-	llmReadyFeedbackPath = `.status.conditions[?(@.type=="Ready")].status`
+	llmReadyFeedbackPath              = `.status.conditions[?(@.type=="Ready")].status`
+	llmGenerationFeedbackPath         = `.metadata.generation`
+	llmObservedGenerationFeedbackPath = `.status.observedGeneration`
 
-	llmProgressingCEL = `!(has(object.status) && has(object.status.conditions) && ` +
+	llmCurrentGenerationCEL = `(!has(object.status.observedGeneration) || !has(object.metadata.generation) || ` +
+		`object.status.observedGeneration == object.metadata.generation)`
+	llmProgressingCEL = `!(has(object.status) && has(object.status.conditions) && ` + llmCurrentGenerationCEL + ` && ` +
 		`object.status.conditions.exists(c, c.type == "Ready" && c.status == "True"))`
-	llmDegradedCEL = `has(object.status) && has(object.status.conditions) && ` +
+	llmDegradedCEL = `has(object.status) && has(object.status.conditions) && ` + llmCurrentGenerationCEL + ` && ` +
 		`object.status.conditions.exists(c, c.type == "Ready" && c.status == "False" && ` +
 		`has(c.reason) && c.reason in ["ConfigNotFound", "RefsInvalid", "GatewaysNotReady"])`
 
@@ -1296,15 +1408,22 @@ const (
 
 // llmManifestConfig is the template's manifestConfigs entry for the
 // LLMInferenceService manifest (open-cluster-management-io/api
-// work/v1/types.go, ManifestConfigOption): a JSONPaths feedback rule that
-// copies the spoke's Ready condition status back as `ready`, and CEL
-// condition rules that give the work Progressing and Degraded. The JSONPath
-// is evaluated against the whole object and must yield one string, integer or
-// bool (JsonPath.Path; ocm pkg/work/spoke/statusfeedback/reader.go
-// getValueByJsonPath). Without a rule that yields Progressing the MWRS
-// rollout keeps every cluster ToApply and PlacementRolledOut never turns True
-// (console mock/research/acm.md 4, "Rollout counting"); that is why the
-// template carries condition rules and not only the feedback rule.
+// work/v1/types.go, ManifestConfigOption): JSONPaths feedback rules that copy
+// the spoke's Ready condition status back as `ready`, with `generation` and
+// `observedGeneration` to tell whether that Ready is about the current spec,
+// and CEL condition rules that give the work Progressing and Degraded. A
+// JSONPath is evaluated against the whole object and must yield one string,
+// integer or bool (JsonPath.Path; ocm pkg/work/spoke/statusfeedback/reader.go
+// getValueByJsonPath runs it on obj.UnstructuredContent(), so a
+// .metadata path works although the API comment speaks of status fields).
+// Without a rule that yields Progressing the MWRS rollout keeps every
+// cluster ToApply and PlacementRolledOut never turns True (console
+// mock/research/acm.md 4, "Rollout counting"); that is why the template
+// carries condition rules and not only the feedback rule. The
+// ManifestWorkReplicaSet (v1alpha1) and ManifestWork (v1) CRD schemas of
+// MCE 2.17.3 (multicluster-engine.v2.17.3) include manifestConfigs with
+// feedbackRules (type JSONPaths) and conditionRules (type CEL); how its work
+// agent evaluates them has not been exercised live.
 func llmManifestConfig(namespace, name string) map[string]interface{} {
 	return map[string]interface{}{
 		"resourceIdentifier": map[string]interface{}{
@@ -1318,6 +1437,8 @@ func llmManifestConfig(namespace, name string) map[string]interface{} {
 				"type": "JSONPaths",
 				"jsonPaths": []interface{}{
 					map[string]interface{}{"name": feedbackReady, "path": llmReadyFeedbackPath},
+					map[string]interface{}{"name": feedbackGeneration, "path": llmGenerationFeedbackPath},
+					map[string]interface{}{"name": feedbackObservedGeneration, "path": llmObservedGenerationFeedbackPath},
 				},
 			},
 		},

@@ -34,9 +34,12 @@ func TestMWRSTemplateCarriesManifestConfig(t *testing.T) {
 	}
 	rule := rules[0].(map[string]interface{})
 	paths, _, _ := unstructured.NestedSlice(rule, "jsonPaths")
-	if rule["type"] != "JSONPaths" || len(paths) != 1 ||
-		paths[0].(map[string]interface{})["name"] != "ready" ||
-		paths[0].(map[string]interface{})["path"] != llmReadyFeedbackPath {
+	gotPaths := map[string]interface{}{}
+	for _, p := range paths {
+		gotPaths[p.(map[string]interface{})["name"].(string)] = p.(map[string]interface{})["path"]
+	}
+	if rule["type"] != "JSONPaths" || len(paths) != 3 || gotPaths["ready"] != llmReadyFeedbackPath ||
+		gotPaths["generation"] != llmGenerationFeedbackPath || gotPaths["observedGeneration"] != llmObservedGenerationFeedbackPath {
 		t.Fatalf("feedback rule = %v", rule)
 	}
 	condRules, _, _ := unstructured.NestedSlice(cfg, "conditionRules")
@@ -56,14 +59,29 @@ func TestMWRSTemplateCarriesManifestConfig(t *testing.T) {
 // spokeLLM is a spoke LLMInferenceService with the given Ready condition;
 // status "" leaves status out entirely.
 func spokeLLM(status, reason string) map[string]interface{} {
+	return spokeLLMAt(status, reason, 0, 0)
+}
+
+// spokeLLMAt is spokeLLM with metadata.generation and
+// status.observedGeneration (zero leaves either out).
+func spokeLLMAt(status, reason string, generation, observed int64) map[string]interface{} {
+	md := map[string]interface{}{"name": "m", "namespace": "ai-grid-models"}
+	if generation != 0 {
+		md["generation"] = generation
+	}
 	obj := map[string]interface{}{
 		"apiVersion": "serving.kserve.io/v1alpha2",
 		"kind":       "LLMInferenceService",
-		"metadata":   map[string]interface{}{"name": "m", "namespace": "ai-grid-models"},
+		"metadata":   md,
 	}
 	if status == "" {
 		return obj
 	}
+	defer func() {
+		if observed != 0 {
+			obj["status"].(map[string]interface{})["observedGeneration"] = observed
+		}
+	}()
 	ready := map[string]interface{}{"type": "Ready", "status": status}
 	if reason != "" {
 		ready["reason"] = reason
@@ -105,6 +123,16 @@ func TestReadyFeedbackPath(t *testing.T) {
 	}
 	if got := eval(spokeLLM("", "")); len(got) != 0 {
 		t.Fatalf("no status -> %v, want no value", got)
+	}
+	for path, want := range map[string]int64{llmGenerationFeedbackPath: 4, llmObservedGenerationFeedbackPath: 3} {
+		j := jsonpath.New("gen").AllowMissingKeys(true)
+		if err := j.Parse(fmt.Sprintf("{%s}", path)); err != nil {
+			t.Fatalf("parse %s: %v", path, err)
+		}
+		results, err := j.FindResults(spokeLLMAt("True", "", 4, 3))
+		if err != nil || len(results) != 1 || len(results[0]) != 1 || results[0][0].Interface() != want {
+			t.Fatalf("%s -> %v (%v), want %d", path, results, err, want)
+		}
 	}
 }
 
@@ -148,6 +176,10 @@ func TestConditionRulesCEL(t *testing.T) {
 		{"terminal ConfigNotFound", spokeLLM("False", "ConfigNotFound"), true, true},
 		{"terminal GatewaysNotReady", spokeLLM("False", "GatewaysNotReady"), true, true},
 		{"ready", spokeLLM("True", ""), false, false},
+		{"ready at the current generation", spokeLLMAt("True", "", 3, 3), false, false},
+		{"Ready left from an older generation", spokeLLMAt("True", "", 3, 2), true, false},
+		{"terminal reason left from an older generation", spokeLLMAt("False", "ConfigNotFound", 3, 2), true, false},
+		{"terminal at the current generation", spokeLLMAt("False", "ConfigNotFound", 3, 3), true, true},
 	}
 	for _, tt := range tests {
 		if got := eval(progressing, tt.obj); got != tt.progressing {
