@@ -33,6 +33,9 @@ var (
 	testManifestWorksGVR = schema.GroupVersionResource{
 		Group: "work.open-cluster-management.io", Version: "v1", Resource: "manifestworks",
 	}
+	testManagedClustersGVR = schema.GroupVersionResource{
+		Group: "cluster.open-cluster-management.io", Version: "v1", Resource: "managedclusters",
+	}
 )
 
 func TestModelsServerRequiresClient(t *testing.T) {
@@ -689,12 +692,63 @@ func newModelsClient(objects ...runtime.Object) *fake.FakeDynamicClient {
 			testPlacementDecisionGVR: "PlacementDecisionList",
 			testMWRSGVR:              "ManifestWorkReplicaSetList",
 			testManifestWorksGVR:     "ManifestWorkList",
+			testManagedClustersGVR:   "ManagedClusterList",
 			testModelRefsGVR:         "MaaSModelRefList",
 			testSubscriptionsGVR:     "MaaSSubscriptionList",
 			testAuthPoliciesGVR:      "MaaSAuthPolicyList",
 		},
 		objects...,
 	)
+}
+
+func TestModelsListLocations(t *testing.T) {
+	t.Parallel()
+	mk := func(name, loc string, enabled, provisioned, available bool) *unstructured.Unstructured {
+		labels := map[string]interface{}{}
+		if loc != "" {
+			labels["location"] = loc
+		}
+		if enabled {
+			labels["ai-grid/enabled"] = "true"
+		}
+		if provisioned {
+			labels["ai-grid/provisioned"] = "true"
+		}
+		conds := []interface{}{}
+		if available {
+			conds = append(conds, map[string]interface{}{
+				"type": "ManagedClusterConditionAvailable", "status": "True",
+			})
+		}
+		return &unstructured.Unstructured{Object: map[string]interface{}{
+			"apiVersion": "cluster.open-cluster-management.io/v1",
+			"kind":       "ManagedCluster",
+			"metadata":   map[string]interface{}{"name": name, "labels": labels},
+			"status":     map[string]interface{}{"conditions": conds},
+		}}
+	}
+	client := newModelsClient(
+		mk("paris", "eu-west", true, true, true),
+		mk("london", "eu-west", true, true, true), // duplicate location
+		mk("nyc", "us-east", true, true, true),
+		mk("disabled", "apac", false, true, true),
+		mk("unavail", "sa", true, true, false),
+		mk("noloc", "", true, true, true),
+	)
+	srv := mustModelsServer(t, client)
+	got, err := srv.ListLocations(context.Background(), &aigridv1.ModelsListLocationsRequest{})
+	if err != nil {
+		t.Fatalf("ListLocations() error = %v", err)
+	}
+	want := []string{"eu-west", "us-east"}
+	if len(got.GetLocations()) != len(want) {
+		t.Fatalf("locations = %v, want %v", got.GetLocations(), want)
+	}
+	for i := range want {
+		if got.GetLocations()[i] != want[i] {
+			t.Fatalf("locations = %v, want %v", got.GetLocations(), want)
+		}
+	}
 }
 
 func sampleModel(id string) *aigridv1.Model {

@@ -72,6 +72,15 @@ message ModelsDeleteRequest {
 
 message ModelsDeleteResponse {}
 
+// Request of ListLocations (P7). Empty.
+message ModelsListLocationsRequest {}
+
+// Response of ListLocations (P7).
+message ModelsListLocationsResponse {
+  // Unique sorted `location` labels of AI Grid member clusters that are Available.
+  repeated string locations = 1;
+}
+
 // Models manage LLMInferenceService deployments (optionally placed via ACM).
 // Create also writes a MaaSModelRef for catalog registration.
 service Models {
@@ -106,5 +115,12 @@ service Models {
 
   rpc Delete(ModelsDeleteRequest) returns (ModelsDeleteResponse) {
     option (google.api.http) = {delete: "/api/v1/models/{id}"};
+  }
+
+  // Locations a model can be placed on: unique sorted `location` labels of
+  // ManagedClusters that are AI Grid members (ai-grid/enabled and
+  // ai-grid/provisioned "true") and Available.
+  rpc ListLocations(ModelsListLocationsRequest) returns (ModelsListLocationsResponse) {
+    option (google.api.http) = {get: "/api/v1/models:listLocations"};
   }
 }

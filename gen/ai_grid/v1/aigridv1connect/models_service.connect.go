@@ -34,6 +34,8 @@ const (
 	ModelsUpdateProcedure = "/ai_grid.v1.Models/Update"
 	// ModelsDeleteProcedure is the procedure name of the Models's Delete RPC.
 	ModelsDeleteProcedure = "/ai_grid.v1.Models/Delete"
+	// ModelsListLocationsProcedure is the procedure name of the Models's ListLocations RPC.
+	ModelsListLocationsProcedure = "/ai_grid.v1.Models/ListLocations"
 )
 
 var (
@@ -72,6 +74,13 @@ var (
 			Procedure:  ModelsDeleteProcedure,
 		}
 	})
+	modelsListLocationsSpec = sync.OnceValue(func() connect.Spec {
+		return connect.Spec{
+			StreamType: connect.StreamTypeUnary,
+			Schema:     v1.File_ai_grid_v1_models_service_proto.Services().ByName("Models").Methods().ByName("ListLocations"),
+			Procedure:  ModelsListLocationsProcedure,
+		}
+	})
 )
 
 // ModelsClient is a client for the ai_grid.v1.Models service.
@@ -83,6 +92,10 @@ type ModelsClient interface {
 	Create(context.Context, *v1.ModelsCreateRequest) (*v1.ModelsCreateResponse, error)
 	Update(context.Context, *v1.ModelsUpdateRequest) (*v1.ModelsUpdateResponse, error)
 	Delete(context.Context, *v1.ModelsDeleteRequest) (*v1.ModelsDeleteResponse, error)
+	// Locations a model can be placed on: unique sorted `location` labels of
+	// ManagedClusters that are AI Grid members (ai-grid/enabled and
+	// ai-grid/provisioned "true") and Available.
+	ListLocations(context.Context, *v1.ModelsListLocationsRequest) (*v1.ModelsListLocationsResponse, error)
 }
 
 // NewModelsClient constructs a client for the ai_grid.v1.Models service. Multiple service clients
@@ -100,6 +113,10 @@ type ModelsHandler interface {
 	Create(context.Context, *v1.ModelsCreateRequest) (*v1.ModelsCreateResponse, error)
 	Update(context.Context, *v1.ModelsUpdateRequest) (*v1.ModelsUpdateResponse, error)
 	Delete(context.Context, *v1.ModelsDeleteRequest) (*v1.ModelsDeleteResponse, error)
+	// Locations a model can be placed on: unique sorted `location` labels of
+	// ManagedClusters that are AI Grid members (ai-grid/enabled and
+	// ai-grid/provisioned "true") and Available.
+	ListLocations(context.Context, *v1.ModelsListLocationsRequest) (*v1.ModelsListLocationsResponse, error)
 }
 
 // RegisterModelsHandler registers svc as the ai_grid.v1.Models implementation on server.
@@ -111,6 +128,7 @@ func RegisterModelsHandler(server *connect.Server, svc ModelsHandler) {
 		connect.Method{Spec: modelsCreateSpec(), Handler: adapter.create},
 		connect.Method{Spec: modelsUpdateSpec(), Handler: adapter.update},
 		connect.Method{Spec: modelsDeleteSpec(), Handler: adapter.delete},
+		connect.Method{Spec: modelsListLocationsSpec(), Handler: adapter.listLocations},
 	)
 }
 
@@ -135,6 +153,10 @@ func (UnimplementedModelsHandler) Update(context.Context, *v1.ModelsUpdateReques
 
 func (UnimplementedModelsHandler) Delete(context.Context, *v1.ModelsDeleteRequest) (*v1.ModelsDeleteResponse, error) {
 	return nil, connect.NewError(connect.CodeUnimplemented, "ai_grid.v1.Models.Delete is not implemented")
+}
+
+func (UnimplementedModelsHandler) ListLocations(context.Context, *v1.ModelsListLocationsRequest) (*v1.ModelsListLocationsResponse, error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, "ai_grid.v1.Models.ListLocations is not implemented")
 }
 
 type modelsClient struct {
@@ -176,6 +198,14 @@ func (c *modelsClient) Update(ctx context.Context, req *v1.ModelsUpdateRequest) 
 func (c *modelsClient) Delete(ctx context.Context, req *v1.ModelsDeleteRequest) (*v1.ModelsDeleteResponse, error) {
 	var res v1.ModelsDeleteResponse
 	if err := c.client.CallUnary(ctx, modelsDeleteSpec(), req, &res); err != nil {
+		return nil, err
+	}
+	return &res, nil
+}
+
+func (c *modelsClient) ListLocations(ctx context.Context, req *v1.ModelsListLocationsRequest) (*v1.ModelsListLocationsResponse, error) {
+	var res v1.ModelsListLocationsResponse
+	if err := c.client.CallUnary(ctx, modelsListLocationsSpec(), req, &res); err != nil {
 		return nil, err
 	}
 	return &res, nil
@@ -237,6 +267,18 @@ func (h modelsHandler) delete(ctx context.Context, _ connect.Spec, stream connec
 		return err
 	}
 	res, err := h.svc.Delete(ctx, &req)
+	if err != nil {
+		return err
+	}
+	return stream.Send(res)
+}
+
+func (h modelsHandler) listLocations(ctx context.Context, _ connect.Spec, stream connect.ServerStream) error {
+	var req v1.ModelsListLocationsRequest
+	if err := stream.Receive(&req); err != nil {
+		return err
+	}
+	res, err := h.svc.ListLocations(ctx, &req)
 	if err != nil {
 		return err
 	}

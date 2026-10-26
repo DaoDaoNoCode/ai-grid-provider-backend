@@ -449,6 +449,29 @@
         ]
       }
     },
+    "/api/v1/models:listLocations": {
+      "get": {
+        "summary": "Locations a model can be placed on: unique sorted `location` labels of\nManagedClusters that are AI Grid members (ai-grid/enabled and\nai-grid/provisioned \"true\") and Available.",
+        "operationId": "Models_ListLocations",
+        "responses": {
+          "200": {
+            "description": "A successful response.",
+            "schema": {
+              "$ref": "#/definitions/v1ModelsListLocationsResponse"
+            }
+          },
+          "default": {
+            "description": "An unexpected error response.",
+            "schema": {
+              "$ref": "#/definitions/rpcStatus"
+            }
+          }
+        },
+        "tags": [
+          "Models"
+        ]
+      }
+    },
     "/api/v1/ping": {
       "get": {
         "operationId": "AiGrid_Ping",
@@ -1432,6 +1455,14 @@
             "$ref": "#/definitions/v1Condition"
           },
           "description": "Placement conditions when present."
+        },
+        "locations": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Unique sorted `location` labels of decided clusters (P8). A decided\ncluster without a location label adds nothing. Output only.",
+          "readOnly": true
         }
       },
       "description": "Placement observed state."
@@ -1725,6 +1756,19 @@
           "$ref": "#/definitions/v1Model"
         }
       }
+    },
+    "v1ModelsListLocationsResponse": {
+      "type": "object",
+      "properties": {
+        "locations": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Unique sorted `location` labels of AI Grid member clusters that are Available."
+        }
+      },
+      "description": "Response of ListLocations (P7)."
     },
     "v1ModelsListResponse": {
       "type": "object",

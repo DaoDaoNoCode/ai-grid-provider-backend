@@ -19,11 +19,12 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	Models_List_FullMethodName   = "/ai_grid.v1.Models/List"
-	Models_Get_FullMethodName    = "/ai_grid.v1.Models/Get"
-	Models_Create_FullMethodName = "/ai_grid.v1.Models/Create"
-	Models_Update_FullMethodName = "/ai_grid.v1.Models/Update"
-	Models_Delete_FullMethodName = "/ai_grid.v1.Models/Delete"
+	Models_List_FullMethodName          = "/ai_grid.v1.Models/List"
+	Models_Get_FullMethodName           = "/ai_grid.v1.Models/Get"
+	Models_Create_FullMethodName        = "/ai_grid.v1.Models/Create"
+	Models_Update_FullMethodName        = "/ai_grid.v1.Models/Update"
+	Models_Delete_FullMethodName        = "/ai_grid.v1.Models/Delete"
+	Models_ListLocations_FullMethodName = "/ai_grid.v1.Models/ListLocations"
 )
 
 // ModelsClient is the client API for Models service.
@@ -40,6 +41,10 @@ type ModelsClient interface {
 	Create(ctx context.Context, in *ModelsCreateRequest, opts ...grpc.CallOption) (*ModelsCreateResponse, error)
 	Update(ctx context.Context, in *ModelsUpdateRequest, opts ...grpc.CallOption) (*ModelsUpdateResponse, error)
 	Delete(ctx context.Context, in *ModelsDeleteRequest, opts ...grpc.CallOption) (*ModelsDeleteResponse, error)
+	// Locations a model can be placed on: unique sorted `location` labels of
+	// ManagedClusters that are AI Grid members (ai-grid/enabled and
+	// ai-grid/provisioned "true") and Available.
+	ListLocations(ctx context.Context, in *ModelsListLocationsRequest, opts ...grpc.CallOption) (*ModelsListLocationsResponse, error)
 }
 
 type modelsClient struct {
@@ -100,6 +105,16 @@ func (c *modelsClient) Delete(ctx context.Context, in *ModelsDeleteRequest, opts
 	return out, nil
 }
 
+func (c *modelsClient) ListLocations(ctx context.Context, in *ModelsListLocationsRequest, opts ...grpc.CallOption) (*ModelsListLocationsResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ModelsListLocationsResponse)
+	err := c.cc.Invoke(ctx, Models_ListLocations_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // ModelsServer is the server API for Models service.
 // All implementations must embed UnimplementedModelsServer
 // for forward compatibility.
@@ -114,6 +129,10 @@ type ModelsServer interface {
 	Create(context.Context, *ModelsCreateRequest) (*ModelsCreateResponse, error)
 	Update(context.Context, *ModelsUpdateRequest) (*ModelsUpdateResponse, error)
 	Delete(context.Context, *ModelsDeleteRequest) (*ModelsDeleteResponse, error)
+	// Locations a model can be placed on: unique sorted `location` labels of
+	// ManagedClusters that are AI Grid members (ai-grid/enabled and
+	// ai-grid/provisioned "true") and Available.
+	ListLocations(context.Context, *ModelsListLocationsRequest) (*ModelsListLocationsResponse, error)
 	mustEmbedUnimplementedModelsServer()
 }
 
@@ -138,6 +157,9 @@ func (UnimplementedModelsServer) Update(context.Context, *ModelsUpdateRequest) (
 }
 func (UnimplementedModelsServer) Delete(context.Context, *ModelsDeleteRequest) (*ModelsDeleteResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method Delete not implemented")
+}
+func (UnimplementedModelsServer) ListLocations(context.Context, *ModelsListLocationsRequest) (*ModelsListLocationsResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method ListLocations not implemented")
 }
 func (UnimplementedModelsServer) mustEmbedUnimplementedModelsServer() {}
 func (UnimplementedModelsServer) testEmbeddedByValue()                {}
@@ -250,6 +272,24 @@ func _Models_Delete_Handler(srv interface{}, ctx context.Context, dec func(inter
 	return interceptor(ctx, in, info, handler)
 }
 
+func _Models_ListLocations_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ModelsListLocationsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ModelsServer).ListLocations(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Models_ListLocations_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ModelsServer).ListLocations(ctx, req.(*ModelsListLocationsRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // Models_ServiceDesc is the grpc.ServiceDesc for Models service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -276,6 +316,10 @@ var Models_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "Delete",
 			Handler:    _Models_Delete_Handler,
+		},
+		{
+			MethodName: "ListLocations",
+			Handler:    _Models_ListLocations_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

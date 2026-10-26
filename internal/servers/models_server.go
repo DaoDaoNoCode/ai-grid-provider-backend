@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -229,17 +230,13 @@ func (s *ModelsServer) Create(ctx context.Context, req *aigridv1.ModelsCreateReq
 			gvr: placementsResource, name: createdPlacement.GetName(), uid: createdPlacement.GetUID(),
 		})
 		mwrs := mwrsFromModel(object, s.namespace, created)
-		createdMWRS, err := s.client.Resource(manifestWorkReplicaSetsResource).Namespace(s.namespace).Create(ctx, mwrs, metav1.CreateOptions{})
-		if err != nil {
+		if _, err := s.client.Resource(manifestWorkReplicaSetsResource).Namespace(s.namespace).Create(ctx, mwrs, metav1.CreateOptions{}); err != nil {
 			s.compensateCreate(ctx, createdRefs)
 			if apierrors.IsNotFound(err) {
 				return nil, connect.NewError(connect.CodeFailedPrecondition, "ManifestWorkReplicaSet feature gate disabled on hub")
 			}
 			return nil, mapModelAPIError("create ManifestWorkReplicaSet", id, err)
 		}
-		createdRefs = append(createdRefs, createdObjectRef{
-			gvr: manifestWorkReplicaSetsResource, name: createdMWRS.GetName(), uid: createdMWRS.GetUID(),
-		})
 	}
 
 	m := modelFromLLMInferenceService(*created)
@@ -417,6 +414,7 @@ func (s *ModelsServer) enrichPlacement(ctx context.Context, m *aigridv1.Model) {
 		decision = &decisions.Items[0]
 	}
 	enrichModelFromPlacement(m, placement, decision)
+	s.enrichPlacementLocations(ctx, m)
 
 	mwrs, err := s.client.Resource(manifestWorkReplicaSetsResource).Namespace(s.namespace).Get(ctx, pname, metav1.GetOptions{})
 	if err == nil {
@@ -424,6 +422,82 @@ func (s *ModelsServer) enrichPlacement(ctx context.Context, m *aigridv1.Model) {
 		s.enrichManifestWorks(ctx, m, pname)
 		deriveModelPhaseFromRollout(m)
 	}
+}
+
+// ListLocations returns unique sorted location labels of Available AI Grid member clusters.
+func (s *ModelsServer) ListLocations(ctx context.Context, _ *aigridv1.ModelsListLocationsRequest) (*aigridv1.ModelsListLocationsResponse, error) {
+	list, err := s.client.Resource(managedClustersResource).List(ctx, metav1.ListOptions{})
+	if err != nil {
+		if apierrors.IsNotFound(err) {
+			return &aigridv1.ModelsListLocationsResponse{}, nil
+		}
+		return nil, mapModelAPIError("list locations", "", err)
+	}
+	seen := map[string]struct{}{}
+	var locs []string
+	for i := range list.Items {
+		item := list.Items[i]
+		if !isAIGridMemberCluster(item) {
+			continue
+		}
+		loc := item.GetLabels()["location"]
+		if loc == "" {
+			continue
+		}
+		if _, ok := seen[loc]; ok {
+			continue
+		}
+		seen[loc] = struct{}{}
+		locs = append(locs, loc)
+	}
+	sort.Strings(locs)
+	return &aigridv1.ModelsListLocationsResponse{Locations: locs}, nil
+}
+
+func isAIGridMemberCluster(item unstructured.Unstructured) bool {
+	labels := item.GetLabels()
+	if labels["ai-grid/enabled"] != "true" || labels["ai-grid/provisioned"] != "true" {
+		return false
+	}
+	status := managedClusterStatusFromUnstructured(item)
+	return status != nil && status.GetAvailable()
+}
+
+// enrichPlacementLocations fills status.placement.locations from decided clusters.
+func (s *ModelsServer) enrichPlacementLocations(ctx context.Context, m *aigridv1.Model) {
+	if m == nil || m.Status == nil || m.Status.Placement == nil {
+		return
+	}
+	clusters := m.Status.Placement.GetSelectedClusters()
+	if len(clusters) == 0 {
+		return
+	}
+	list, err := s.client.Resource(managedClustersResource).List(ctx, metav1.ListOptions{})
+	if err != nil {
+		return
+	}
+	byName := map[string]string{}
+	for i := range list.Items {
+		name := list.Items[i].GetName()
+		if loc := list.Items[i].GetLabels()["location"]; loc != "" {
+			byName[name] = loc
+		}
+	}
+	seen := map[string]struct{}{}
+	var locs []string
+	for _, name := range clusters {
+		loc := byName[name]
+		if loc == "" {
+			continue
+		}
+		if _, ok := seen[loc]; ok {
+			continue
+		}
+		seen[loc] = struct{}{}
+		locs = append(locs, loc)
+	}
+	sort.Strings(locs)
+	m.Status.Placement.Locations = locs
 }
 
 // enrichManifestWorks fills status.rollout.works from ManifestWorks owned by

@@ -224,6 +224,9 @@ message ModelPlacementStatus {
   repeated string selected_clusters = 2;
   // Placement conditions when present.
   repeated Condition conditions = 3;
+  // Unique sorted `location` labels of decided clusters (P8). A decided
+  // cluster without a location label adds nothing. Output only.
+  repeated string locations = 4;
 }
 
 // ManifestWorkReplicaSet observed state.

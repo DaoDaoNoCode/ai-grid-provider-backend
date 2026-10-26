@@ -219,6 +219,15 @@ func (c *Client) DeleteModel(ctx context.Context, id string) error {
 	return err
 }
 
+// ListModelLocations returns unique sorted location labels of Available AI Grid member clusters.
+func (c *Client) ListModelLocations(ctx context.Context) ([]string, error) {
+	response, err := c.models.ListLocations(ctx, &aigridv1.ModelsListLocationsRequest{})
+	if err != nil {
+		return nil, err
+	}
+	return response.GetLocations(), nil
+}
+
 // ListSubscriptions returns Subscription objects from the MaaS namespace.
 func (c *Client) ListSubscriptions(ctx context.Context) ([]*aigridv1.Subscription, error) {
 	response, err := c.subscriptions.List(ctx, &aigridv1.SubscriptionsListRequest{})

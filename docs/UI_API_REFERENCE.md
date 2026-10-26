@@ -43,6 +43,7 @@ unwraps them via `response_body: "object"`.
 | `DELETE` | `/api/v1/tenants/{id}` | Delete tenant |
 | `GET` | `/api/v1/tenants/{id}:listMembers` | List users in the tenant Organization |
 | `GET` | `/api/v1/models` | List models (LLMInferenceService) |
+| `GET` | `/api/v1/models:listLocations` | Unique sorted location labels of Available AI Grid members |
 | `GET` | `/api/v1/models/{id}` | Get one model |
 | `POST` | `/api/v1/models` | Create (= deploy) model |
 | `PATCH` | `/api/v1/models/{id}` | Update model (FieldMask) |
@@ -500,7 +501,8 @@ FailedPrecondition if MWRS is unavailable on the hub).
 | Method | Path | Notes |
 | --- | --- | --- |
 | GET | `/api/v1/models` | List; CEL `filter`; `order` allowlist `id`, `-id`, `metadata.name`, `-metadata.name` |
-| GET | `/api/v1/models/{id}` | Get one (unwraps to the Model object) |
+| GET | `/api/v1/models:listLocations` | Unique sorted `location` labels of Available AI Grid member clusters (P7) |
+| GET | `/api/v1/models/{id}` | Get one (unwraps to the Model object); `status.placement.locations` when placed (P8) |
 | POST | `/api/v1/models` | Create (= deploy); body is the Model object |
 | PATCH | `/api/v1/models/{id}` | FieldMask update (`spec.replicas`, `spec.main.image`, `spec.main.env`, `spec.placement`, `spec.rollout`, `metadata.labels`, `metadata.annotations`) |
 | DELETE | `/api/v1/models/{id}` | Refuses while a Subscription or AuthPolicy references the model |

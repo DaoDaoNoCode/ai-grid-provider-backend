@@ -35,7 +35,7 @@
 | 10 | — | Models Delete K8s ResourceVersion precondition | done | Preconditioned LLM delete before Placement/MWRS cleanup |
 | 11 | — | Model phase NotAsExpected→FAILED too aggressive | done | NotAsExpected → PENDING; FAILED when a work is Degraded |
 | 12 | — | Fill rollout.works (+ P13 fields) | done | works[] from ManifestWorks + RBAC; fuller P13 fields still optional follow-up |
-| 13 | — | Locations (P7/P8) | pending | |
+| 13 | — | Locations (P7/P8) | done | ListLocations RPC + placement.locations enrichment |
 | 14 | — | Subscription Delete resource_version / If-Match | pending | |
 | 15 | — | Agree models namespace | pending | |
 | 16 | — | resourceVersionToVersion int32 overflow→0 unlocks | later | Deferred: fail-closed or wider type; shared helper + console string-version ADR |
@@ -169,14 +169,14 @@
 - **Decision:** Accepted — usable works[] for console; remaining P13 field expansions optional.
 - **Implementation notes:** `enrichManifestWorks` lists ManifestWorks by MWRS/placement labels and fills `ModelWorkStatus` (cluster, applied/available/progressing/degraded). Kind+OpenShift RBAC grants get/list/watch on `manifestworks`. Phase re-derived after works so Degraded→FAILED. Remaining draft P13 extras (per-work conditions/feedback/PARTIALLY_AVAILABLE) not added to v1 proto in this pass.
 
-### 13. Locations (P7/P8) — Status: `pending`
+### 13. Locations (P7/P8) — Status: `done`
 
 - **Source:** DaoDao #10
 - **Description:** Support placement location labels and `ListLocations`.
 - **Pros:** Console Locations / wizard.
 - **Cons:** New RPC; easy follow-up.
-- **Decision:**
-- **Implementation notes:**
+- **Decision:** Accepted — ship P7/P8 on v1.
+- **Implementation notes:** Added `Models.ListLocations` + `ModelPlacementStatus.locations`. ListLocations returns unique sorted `location` labels of clusters with ai-grid/enabled+provisioned and Available. Get/List enrich placement.locations from decided clusters. Client helper `ListModelLocations`; UI docs updated.
 
 ### 14. Subscription Delete resource_version / If-Match — Status: `pending`
 
