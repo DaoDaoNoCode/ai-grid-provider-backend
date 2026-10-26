@@ -370,7 +370,9 @@ type ModelSource struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// Artifact URI (hf://, oci://, s3://, pvc://, http(s)://).
 	Uri string `protobuf:"bytes,1,opt,name=uri,proto3" json:"uri,omitempty"`
-	// Identifier clients send in the request model field. Defaults to id.
+	// Identifier clients send in the request model field. Defaults to id:
+	// Create writes the id when it is empty, and a stored model without one
+	// reads as the id.
 	Name          string `protobuf:"bytes,2,opt,name=name,proto3" json:"name,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache

@@ -121,7 +121,7 @@ func modelFromLLMInferenceService(item unstructured.Unstructured) *aigridv1.Mode
 	}
 
 	spec := &aigridv1.ModelSpec{
-		Model: modelSourceFromUnstructured(item.Object),
+		Model: modelSourceFromUnstructured(item.Object, name),
 		Main:  modelContainerFromUnstructured(item.Object),
 	}
 	if _, found, _ := unstructured.NestedFieldNoCopy(item.Object, "spec", "replicas"); found {
@@ -157,11 +157,21 @@ func modelFromLLMInferenceService(item unstructured.Unstructured) *aigridv1.Mode
 	}
 }
 
-func modelSourceFromUnstructured(obj map[string]interface{}) *aigridv1.ModelSource {
+// modelSourceFromUnstructured reads spec.model. An empty name reads as the
+// model id, the name the model is served under: the LLMInferenceService's
+// spec.model.name defaults to metadata.name (the console's research,
+// ai-grid-provider-console mock/proto/ai_grid/v1/model_type.proto
+// ModelSource.name), and Create writes the id when the caller sends none
+// (modelSpecToLLMMap), so a model written outside the API reads the same as
+// one written through it.
+func modelSourceFromUnstructured(obj map[string]interface{}, id string) *aigridv1.ModelSource {
 	uri, _, _ := unstructured.NestedString(obj, "spec", "model", "uri")
 	name, _, _ := unstructured.NestedString(obj, "spec", "model", "name")
 	if uri == "" && name == "" {
 		return nil
+	}
+	if name == "" {
+		name = id
 	}
 	return &aigridv1.ModelSource{Uri: uri, Name: name}
 }

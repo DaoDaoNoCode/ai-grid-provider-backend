@@ -68,7 +68,9 @@ message ModelSource {
     max_len: 2048
   }];
 
-  // Identifier clients send in the request model field. Defaults to id.
+  // Identifier clients send in the request model field. Defaults to id:
+  // Create writes the id when it is empty, and a stored model without one
+  // reads as the id.
   string name = 2;
 }
 

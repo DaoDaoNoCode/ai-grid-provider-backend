@@ -1648,7 +1648,7 @@
         },
         "name": {
           "type": "string",
-          "description": "Identifier clients send in the request model field. Defaults to id."
+          "description": "Identifier clients send in the request model field. Defaults to id:\nCreate writes the id when it is empty, and a stored model without one\nreads as the id."
         }
       },
       "description": "Model artifact source (spec.model)."

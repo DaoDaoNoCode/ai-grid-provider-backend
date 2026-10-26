@@ -9,6 +9,25 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 )
 
+func TestModelSourceNameDefaultsToID(t *testing.T) {
+	t.Parallel()
+	item := unstructured.Unstructured{Object: map[string]interface{}{
+		"metadata": map[string]interface{}{"name": "gitops-llm"},
+		"spec":     map[string]interface{}{"model": map[string]interface{}{"uri": "hf://facebook/opt-125m"}},
+	}}
+	if got := modelFromLLMInferenceService(item).GetSpec().GetModel(); got.GetName() != "gitops-llm" || got.GetUri() != "hf://facebook/opt-125m" {
+		t.Fatalf("spec.model = %v, want name gitops-llm", got)
+	}
+	_ = unstructured.SetNestedField(item.Object, "facebook/opt-125m", "spec", "model", "name")
+	if got := modelFromLLMInferenceService(item).GetSpec().GetModel().GetName(); got != "facebook/opt-125m" {
+		t.Fatalf("stored name = %q, want it kept", got)
+	}
+	unstructured.RemoveNestedField(item.Object, "spec", "model")
+	if got := modelFromLLMInferenceService(item).GetSpec().GetModel(); got != nil {
+		t.Fatalf("spec.model = %v, want nil without a stored spec.model", got)
+	}
+}
+
 // TestModelFromFixtureLLMInferenceService checks the mapper against the
 // shipped fake-hub fixture shape (fixtures/default/llminferenceservices.json).
 func TestModelFromFixtureLLMInferenceService(t *testing.T) {
