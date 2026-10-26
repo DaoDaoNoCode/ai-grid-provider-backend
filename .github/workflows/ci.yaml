@@ -72,6 +72,21 @@ jobs:
         with:
           version: ${{ env.BUF_VERSION }}
 
+      - name: Lint protobuf
+        run: buf lint proto
+
+      # The contract's clients (the console pins a commit of proto/) must never
+      # meet a surprise break: docs/API_CONTRACT.md. An approved break (expand,
+      # migrate, contract) skips this step with the "buf skip breaking" label.
+      - name: Check for breaking API changes
+        if: >-
+          github.event_name == 'pull_request' &&
+          !contains(github.event.pull_request.labels.*.name, 'buf skip breaking')
+        env:
+          REPO: ${{ github.repository }}
+          BASE_REF: ${{ github.base_ref }}
+        run: buf breaking proto --against "https://github.com/${REPO}.git#branch=${BASE_REF},subdir=proto"
+
       - name: Verify generated files are up to date
         # check-generated generates into a temporary directory and compares, so
         # it also catches a file the protobuf no longer produces — which a diff

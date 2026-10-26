@@ -12,6 +12,10 @@ lint:
     - PACKAGE_VERSION_SUFFIX
     - SERVICE_SUFFIX
 
+# FILE is the strictest level. The draft (ai_grid/draft) is the console's proposal,
+# not this service's API, so it may change freely; see docs/API_CONTRACT.md.
 breaking:
   use:
     - FILE
+  ignore:
+    - ai_grid/draft

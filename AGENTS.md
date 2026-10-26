@@ -11,6 +11,7 @@ supported.
 
 1. Follow this file for repository-wide invariants and validation.
 2. For API, protobuf, REST, resource-shape, server-layer, error, logging, testing, and security work, read and follow [`docs/API.md`](docs/API.md).
+   For any change to an existing message, field, enum or RPC in `proto/ai_grid/v1`, also read [`docs/API_CONTRACT.md`](docs/API_CONTRACT.md): who consumes the contract, what CI checks, and the procedure for breaking changes.
 3. For UI-facing REST payloads and examples, read [`docs/UI_API_REFERENCE.md`](docs/UI_API_REFERENCE.md).
 4. Use [`README.md`](README.md) for supported setup and operational workflows.
 5. If documentation and executable configuration disagree, stop and report the mismatch; do not silently choose one.
@@ -21,6 +22,7 @@ The OSAC fulfillment-service standards are the reference architecture. Apply the
 
 - Protobuf is the API contract. Edit sources under `proto/`; never hand-edit generated files under `gen/`, `docs/openapi/`, or `internal/restgateway/openapi/`.
 - After any protobuf change, run `make generate`, commit all generated outputs, and verify regeneration leaves the worktree clean.
+- `buf breaking` must pass for `ai_grid.v1`. Never remove, renumber, rename or retype a field, enum value, message or RPC in one step: expand (add the replacement, deprecate the old), let consumers migrate, then contract (remove, and `reserved` both the number and the name) as an approved break. Never reuse a field number. A changed meaning is a new field, not an edited comment. See [`docs/API_CONTRACT.md`](docs/API_CONTRACT.md).
 - Managed resources use the OSAC shape: `id`, `metadata`, `spec`, and `status`.
   - `spec` is caller-controlled desired state.
   - `status` is service-controlled observed state.
@@ -40,7 +42,8 @@ The OSAC fulfillment-service standards are the reference architecture. Apply the
 
 - `ai_grid.draft.v1` (`proto/ai_grid/draft/v1`, `gen/ai_grid/draft/v1`) is the console's proposal for APIs this backend does not implement yet, and `internal/fakeinfra/draft` is its in-memory fake, served by `make dev-fake` on `:9094`. See [`docs/draft/README.md`](docs/draft/README.md).
 - The draft is not this backend's API: never import `gen/ai_grid/draft/v1` from `cmd/ai-grid-provider-backend`, `internal/servers`, `internal/restgateway` or `client`, and never give it HTTP annotations or OpenAPI output.
-- The draft is gRPC only, on purpose: no Connect, gRPC-Web or REST. Its one client is the console's BFF, which calls it with grpc-go; a browser reaches it only through the BFF. Each area moves to `ai_grid.v1` (gRPC, Connect and REST) when it is implemented for real, so until then the console has two paths: the real API for implemented areas, the draft through the BFF for the rest.
+- The draft is gRPC only, on purpose: no Connect, gRPC-Web or REST. Each area moves to `ai_grid.v1` (gRPC, Connect and REST) when it is implemented for real. The console is moving every page to generated clients of `ai_grid.v1` and keeps no proto or fake of its own; once no page needs the draft, the draft package and `internal/fakeinfra/draft` are deleted. Don't add new areas to the draft: add what the console needs to `ai_grid.v1`.
+- The draft is excluded from `buf breaking` (`proto/buf.yaml`); `ai_grid.v1` is not.
 - When an area is implemented for real in `ai_grid.v1`, delete that area's draft proto, generated code, fake code and tests, fixtures and `docs/draft/areas` page (`docs/draft/README.md`, "When an area moves to the real backend").
 - For real services, fake only infrastructure (`internal/fakeinfra/hub`, `internal/fakeinfra/keycloak`); never fake a real server.
 - The draft proto keeps the console's messages, fields, numbers and types; only its package, `go_package`, imports and the comments that described the console's setup (the file headers) differ. Keep it passing `buf lint`. The API invariants above govern `ai_grid.v1`; the draft keeps the console's shapes (for example the flat `ManagedCluster`) until an area is implemented for real.
@@ -156,6 +159,7 @@ make acm-hub-down     # tear down ACM hub Helm release
 
 ```bash
 cd proto && buf lint
+cd proto && buf breaking --against '../.git#branch=main,subdir=proto'   # docs/API_CONTRACT.md
 make generate
 git status --porcelain   # must print nothing
 make check-generated     # also catches output the protobuf no longer produces
@@ -230,8 +234,10 @@ make acm-hub-down     # tear down ACM hub Helm release
 
 [`.github/workflows/ci.yaml`](.github/workflows/ci.yaml) runs Check on pull
 requests and on pushes to `main` and `v*` tags (`make build`, `fmt-check`,
-`vet`, pinned golangci-lint + `.golangci.yml`, `unit`, `make generate` dirty
-diff). After Check passes, pushes, tags and manual runs publish the image to
+`vet`, pinned golangci-lint + `.golangci.yml`, `unit`, `buf lint`, `buf
+breaking` against the base branch on pull requests (skipped by the `buf skip
+breaking` label for an approved break, docs/API_CONTRACT.md), `make generate`
+dirty diff). After Check passes, pushes, tags and manual runs publish the image to
 `ghcr.io/ai-grid-cloud/ai-grid-provider-backend` (never on PRs).
 
 Tags: `sha-<full sha>` on every publish (deploy this one), `latest` on `main`,
@@ -273,4 +279,4 @@ every Monday.
 
 ## Documentation
 
-Update documentation in the same change when behavior, API contracts, configuration, permissions, deployment steps, or developer commands change. Keep `README.md`, `docs/API.md`, `docs/UI_API_REFERENCE.md`, generated OpenAPI, manifests, and this file consistent with executable behavior.
+Update documentation in the same change when behavior, API contracts, configuration, permissions, deployment steps, or developer commands change. Keep `README.md`, `docs/API.md`, `docs/API_CONTRACT.md`, `docs/UI_API_REFERENCE.md`, generated OpenAPI, manifests, and this file consistent with executable behavior.
