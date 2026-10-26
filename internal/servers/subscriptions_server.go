@@ -287,6 +287,8 @@ func (s *SubscriptionsServer) Update(ctx context.Context, req *aigridv1.Subscrip
 }
 
 // Delete deletes a MaaSSubscription and its managed <id>-policy when present.
+// Managed AuthPolicy cleanup failures are returned so clients do not see success
+// with a leaked policy; unmanaged same-named policies are left alone.
 func (s *SubscriptionsServer) Delete(ctx context.Context, req *aigridv1.SubscriptionsDeleteRequest) (*aigridv1.SubscriptionsDeleteResponse, error) {
 	id := req.GetId()
 	if err := validateSubscriptionID(id); err != nil {
@@ -300,16 +302,16 @@ func (s *SubscriptionsServer) Delete(ctx context.Context, req *aigridv1.Subscrip
 	policyName := authPolicyNameForSubscription(id)
 	existing, getErr := s.client.Resource(maasAuthPoliciesResource).Namespace(s.namespace).Get(ctx, policyName, metav1.GetOptions{})
 	if getErr != nil {
-		if !apierrors.IsNotFound(getErr) {
-			s.logger.Warn("get auth policy after subscription delete", "policy", policyName, "error", getErr)
+		if apierrors.IsNotFound(getErr) {
+			return &aigridv1.SubscriptionsDeleteResponse{}, nil
 		}
-		return &aigridv1.SubscriptionsDeleteResponse{}, nil
+		return nil, mapSubscriptionAPIError("get auth policy", id, getErr)
 	}
 	if !isManagedAuthPolicy(existing) {
 		return &aigridv1.SubscriptionsDeleteResponse{}, nil
 	}
 	if delErr := s.client.Resource(maasAuthPoliciesResource).Namespace(s.namespace).Delete(ctx, policyName, metav1.DeleteOptions{}); delErr != nil && !apierrors.IsNotFound(delErr) {
-		s.logger.Warn("delete managed auth policy", "policy", policyName, "error", delErr)
+		return nil, mapSubscriptionAPIError("delete auth policy", id, delErr)
 	}
 	return &aigridv1.SubscriptionsDeleteResponse{}, nil
 }

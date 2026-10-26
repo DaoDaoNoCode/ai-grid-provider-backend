@@ -30,7 +30,7 @@
 | 5 | — | Metadata maps merge instead of replace | done | Replace semantics via null removals; Models preserve owned labels |
 | 6 | — | Create compensation deletes preexisting Placement/MWRS | done | Compensate only UID-tracked creates from this call |
 | 7 | — | replicas↔scaling explicit null | done | Update patch emits null for cleared mode; subscription optionals too |
-| 8 | — | Subscription Delete swallows policy cleanup failure | pending | |
+| 8 | — | Subscription Delete swallows policy cleanup failure | done | Managed AuthPolicy cleanup errors fail Delete |
 | 9 | — | Reject negative Models List limit | pending | |
 | 10 | — | Models Delete K8s ResourceVersion precondition | pending | |
 | 11 | — | Model phase NotAsExpected→FAILED too aggressive | pending | |
@@ -124,14 +124,14 @@
 - **Decision:** Accepted — explicit nulls on Update merge patch.
 - **Implementation notes:** `modelSpecUpdatePatch` nulls `replicas` when switching to scaling and `scaling` when switching to replicas. Subscriptions whole-spec updates use `subscriptionSpecUpdateMap` to null cleared `tokenMetadata` / `inferencePriority` / `guardrails`. Test covers both mode transitions.
 
-### 8. Subscription Delete swallows policy cleanup failure — Status: `pending`
+### 8. Subscription Delete swallows policy cleanup failure — Status: `done`
 
 - **Source:** Theia #8; DaoDao #1
 - **Description:** Fail Delete (or make cleanup retryable) when AuthPolicy cleanup fails; do not succeed with a leaked AuthPolicy.
 - **Pros:** Security/correctness; UI contract.
 - **Cons:** Retry/ordering change; must not delete unmanaged policies.
-- **Decision:**
-- **Implementation notes:**
+- **Decision:** Accepted — fail Delete when managed policy get/delete fails.
+- **Implementation notes:** After subscription delete, managed AuthPolicy get/delete errors map via `mapSubscriptionAPIError` (NotFound still succeeds). Unmanaged same-named policies remain untouched. Test asserts Internal when policy delete fails.
 
 ### 9. Reject negative Models List limit — Status: `pending`
 

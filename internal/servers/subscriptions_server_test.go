@@ -170,6 +170,21 @@ func TestSubscriptionsCreateRejectsUnmanagedPolicyName(t *testing.T) {
 	assertConnectCode(t, err, connect.CodeFailedPrecondition)
 }
 
+func TestSubscriptionsDeleteFailsWhenManagedPolicyCleanupFails(t *testing.T) {
+	t.Parallel()
+	client := newSubscriptionClient()
+	srv := mustSubscriptionsServer(t, client)
+	ctx := context.Background()
+	if _, err := srv.Create(ctx, &aigridv1.SubscriptionsCreateRequest{Object: sampleSubscription("cleanup-fail")}); err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	client.PrependReactor("delete", "maasauthpolicies", func(clienttesting.Action) (bool, runtime.Object, error) {
+		return true, nil, apierrors.NewInternalError(fmt.Errorf("policy delete boom"))
+	})
+	_, err := srv.Delete(ctx, &aigridv1.SubscriptionsDeleteRequest{Id: "cleanup-fail"})
+	assertConnectCode(t, err, connect.CodeInternal)
+}
+
 func TestSubscriptionsDeleteLeavesUnmanagedPolicy(t *testing.T) {
 	t.Parallel()
 
