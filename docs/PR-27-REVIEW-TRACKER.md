@@ -4,7 +4,7 @@
 | --- | --- |
 | **PR** | https://github.com/ai-grid-cloud/ai-grid-provider-backend/pull/27 |
 | **Branch** | `feat/models-and-subscriptions` |
-| **Reviewed head** | `e852ba8` |
+| **Reviewed head** | `e852ba8` (round 1); re-check `9ff1f1b` (round 2) |
 | **Date** | 2026-10-26 |
 | **Purpose** | Decide yes / no / later per review finding; implement accepted items. |
 
@@ -41,6 +41,14 @@
 | 16 | — | resourceVersionToVersion int32 overflow→0 unlocks | later | Deferred: fail-closed or wider type; shared helper + console string-version ADR |
 | 17 | — | Fakeinfra duplicated resource-handler (P3) | done | Shared writeNamespacedUpdate + decodeTypedObject |
 | 18 | — | Retire draft Models/Subscriptions surfaces | done | Draft protos, fake, fixtures, docs retired per workflow |
+| 19 | high | Stale subscription delete removes policy first | done | Get+RV compare before policy delete; K8s precondition kept |
+| 20 | high | Model delete can leave spoke MWRS | done | MWRS/Placement/ModelRef first (errors returned); orphan cleanup on NotFound |
+| 21 | medium-high | Model update replaces containers list | done | Path-selective LLM patch; merge main into stored containers |
+| 22 | medium | ManifestWorks wrong MWRS label value | done | Select `namespace.name`; filter placementname fallback by owner |
+| 23 | medium | Applied=False kept Pending | done | `mwrsHasFailedOrDegradedWork` treats Applied=False as failure |
+| 24 | medium | Nested subscription masks replace parent | done | Reject nested owner/model_refs/organization/token_metadata/guardrails |
+| 25 | smaller | Clear replicas/scaling; tokenMetadata keys; poc fixtures | done | Null cleared modes; replace tokenMetadata keys; seed poc MaaS/LLM fixtures |
+| 26 | follow-up | P13 per-work phase/reason/message/feedback + PARTIALLY_AVAILABLE | later | Console PR #66; offered as follow-up |
 
 ## How we use this
 
@@ -226,3 +234,60 @@
 - **Cons:** Bigger cleanup; next PR OK.
 - **Decision:** Accepted — complete retirement now (not a follow-up link).
 - **Implementation notes:** Removed draft `model_*.proto` / `subscription_*.proto` (+ gen), fake handlers (`models.go`, `subscriptions.go`, `kserve.go`, `placement.go`, `work.go`, `subscription/`), fixtures (`models.json`, `subscriptions.json`, `presets.json` in default+poc), `areas/models.md`, and ListLocations from the draft fake (P7 lives on `ai_grid.v1.Models`). Kept Grid, CatalogItems stubs, Clusters, Tenants, GetHubCapabilities. Updated registration, intentionallyUnimplemented expectations, validation FrontendOnly, draft docs, and tests. Shared helpers (`cTrue`/`ClusterSetDefault`, `newRepoServer`, GetHubCapabilities) moved out of deleted files.
+
+## Round 2 (re-check at `9ff1f1b`)
+
+### 19. Stale subscription delete removes policy first — Status: `done`
+
+- **Source:** DaoDao re-review (high)
+- **Description:** Compare subscription resourceVersion before deleting the managed AuthPolicy so a stale delete changes nothing.
+- **Decision:** Accepted.
+- **Implementation notes:** Get subscription first; when request RV is nonzero and live RV is non-empty and mismatches → Aborted before policy delete. K8s Delete precondition retained. Orphan policy cleanup on NotFound unchanged. Test seeds RV and asserts policy remains on stale delete.
+
+### 20. Model delete can leave spoke MWRS — Status: `done`
+
+- **Source:** DaoDao re-review (high)
+- **Description:** Delete MWRS/Placement before LLM (return errors); allow retry cleanup when the service is already gone.
+- **Decision:** Accepted.
+- **Implementation notes:** `deleteModelSideEffects` removes MWRS → Placement → ModelRef (errors returned). Stale RV checked before side-effect deletes. Missing LLM still cleans side effects then NotFound. Tests cover stale RV leaving MWRS.
+
+### 21. Model update replaces containers list — Status: `done`
+
+- **Source:** DaoDao re-review (medium-high)
+- **Description:** Do not rewrite `spec.template.containers` on unrelated masks; when main paths are selected, merge into the stored containers list.
+- **Decision:** Accepted.
+- **Implementation notes:** `modelSpecUpdatePatch` is path-selective; `mergeMainContainerIntoStored` updates the `main` container in place and keeps sidecars / unmapped fields. Test `TestModelsUpdateReplicasOnlyPreservesSidecar`.
+
+### 22. ManifestWorks wrong MWRS label value — Status: `done`
+
+- **Source:** DaoDao re-review (medium)
+- **Description:** Select works with `<namespace>.<name>` owner label; do not use bare placement name alone.
+- **Decision:** Accepted.
+- **Implementation notes:** Primary selector `manifestworkreplicaset=<ns>.<pname>`; placementname fallback filters out works with a different owner label. (Slash owner values are not valid K8s label values, so not selected.)
+
+### 23. Applied=False kept Pending — Status: `done`
+
+- **Source:** DaoDao re-review (medium)
+- **Description:** Treat Applied=False (without Degraded) as failure.
+- **Decision:** Accepted.
+- **Implementation notes:** `mwrsHasFailedOrDegradedWork` returns true for Degraded=True or Applied=False.
+
+### 24. Nested subscription masks replace parent — Status: `done`
+
+- **Source:** DaoDao re-review (medium)
+- **Description:** Reject nested `spec.owner.*` / `model_refs.*` / `organization.*` (and token_metadata/guardrails) with InvalidArgument.
+- **Decision:** Accepted (reject nested rather than deep-merge).
+- **Implementation notes:** Exact paths only (`spec.owner`, `spec.model_refs`, …). Test covers `spec.owner.groups` → InvalidArgument.
+
+### 25. Clear replicas/scaling; tokenMetadata keys; poc fixtures — Status: `done`
+
+- **Source:** DaoDao re-review (smaller)
+- **Description:** Emit nulls when clearing a mode; replace tokenMetadata keys (incl. labels); restore Models/Subscriptions seeds for `dev-fake-poc`.
+- **Decision:** Accepted.
+- **Implementation notes:** Path-selective patch nulls cleared replicas/scaling; `replaceTokenMetadataPatch` nulls removed keys/labels; copied default MaaS/LLM fixtures into `fixtures/poc/` and updated README.
+
+### 26. P13 per-work phase/reason/message/feedback + PARTIALLY_AVAILABLE — Status: `later`
+
+- **Source:** DaoDao re-review / console PR #66
+- **Description:** Fuller `ModelWorkStatus` fields and `MODEL_PHASE_PARTIALLY_AVAILABLE`.
+- **Decision:** `later` (follow-up as offered).

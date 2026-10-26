@@ -483,20 +483,32 @@ func subscriptionUpdatePaths(mask *fieldmaskpb.FieldMask, object *aigridv1.Subsc
 			paths.annotations = true
 		case p == "spec":
 			paths.wholeSpec = true
-		case p == "spec.owner" || strings.HasPrefix(p, "spec.owner."):
+		case p == "spec.owner":
 			paths.owner = true
-		case p == "spec.model_refs" || strings.HasPrefix(p, "spec.model_refs."):
+		case strings.HasPrefix(p, "spec.owner."):
+			// Nested owner paths would replace the whole owner (clearing the
+			// sibling users/groups). Reject until nested merge is supported.
+			return subUpdatePaths{}, connect.Errorf(connect.CodeInvalidArgument, "update_mask path %q is not supported; use spec.owner", path)
+		case p == "spec.model_refs":
 			paths.modelRefs = true
+		case strings.HasPrefix(p, "spec.model_refs."):
+			return subUpdatePaths{}, connect.Errorf(connect.CodeInvalidArgument, "update_mask path %q is not supported; use spec.model_refs", path)
 		case p == "spec.priority":
 			paths.priority = true
-		case p == "spec.organization" || strings.HasPrefix(p, "spec.organization."):
+		case p == "spec.organization":
 			paths.organization = true
-		case p == "spec.token_metadata" || strings.HasPrefix(p, "spec.token_metadata."):
+		case strings.HasPrefix(p, "spec.organization."):
+			return subUpdatePaths{}, connect.Errorf(connect.CodeInvalidArgument, "update_mask path %q is not supported; use spec.organization", path)
+		case p == "spec.token_metadata":
 			paths.tokenMetadata = true
+		case strings.HasPrefix(p, "spec.token_metadata."):
+			return subUpdatePaths{}, connect.Errorf(connect.CodeInvalidArgument, "update_mask path %q is not supported; use spec.token_metadata", path)
 		case p == "spec.inference_priority":
 			paths.inferencePriority = true
-		case p == "spec.guardrails" || strings.HasPrefix(p, "spec.guardrails."):
+		case p == "spec.guardrails":
 			paths.guardrails = true
+		case strings.HasPrefix(p, "spec.guardrails."):
+			return subUpdatePaths{}, connect.Errorf(connect.CodeInvalidArgument, "update_mask path %q is not supported; use spec.guardrails", path)
 		default:
 			return subUpdatePaths{}, connect.Errorf(connect.CodeInvalidArgument, "unsupported update_mask path %q", path)
 		}
@@ -612,7 +624,7 @@ func subscriptionUpdatePatch(stored, candidate, incoming *aigridv1.Subscription,
 		return patchBody
 	}
 	if paths.wholeSpec {
-		patchBody["spec"] = subscriptionSpecUpdateMap(candidate.GetSpec())
+		patchBody["spec"] = subscriptionSpecUpdateMap(candidate.GetSpec(), stored.GetSpec())
 		return patchBody
 	}
 	specPatch := map[string]interface{}{}
@@ -634,10 +646,15 @@ func subscriptionUpdatePatch(stored, candidate, incoming *aigridv1.Subscription,
 		}
 	}
 	if paths.tokenMetadata {
-		if tm, ok := full["tokenMetadata"]; ok {
-			specPatch["tokenMetadata"] = tm
-		} else {
+		next := tokenMetadataToUnstructured(candidate.GetSpec().GetTokenMetadata())
+		var prev map[string]interface{}
+		if stored != nil && stored.GetSpec() != nil {
+			prev = tokenMetadataToUnstructured(stored.GetSpec().GetTokenMetadata())
+		}
+		if next == nil {
 			specPatch["tokenMetadata"] = nil
+		} else {
+			specPatch["tokenMetadata"] = replaceTokenMetadataPatch(prev, next)
 		}
 	}
 	if paths.inferencePriority {

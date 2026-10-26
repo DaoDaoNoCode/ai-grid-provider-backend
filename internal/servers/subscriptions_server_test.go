@@ -356,6 +356,20 @@ func TestSubscriptionsCreateCompensatesWhenPolicyFails(t *testing.T) {
 	}
 }
 
+func TestSubscriptionsUpdateRejectsNestedOwnerMask(t *testing.T) {
+	t.Parallel()
+	srv := mustSubscriptionsServer(t, newSubscriptionClient())
+	ctx := context.Background()
+	if _, err := srv.Create(ctx, &aigridv1.SubscriptionsCreateRequest{Object: sampleSubscription("nested-mask")}); err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	_, err := srv.Update(ctx, &aigridv1.SubscriptionsUpdateRequest{
+		Object:     sampleSubscription("nested-mask"),
+		UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.owner.groups"}},
+	})
+	assertConnectCode(t, err, connect.CodeInvalidArgument)
+}
+
 func TestSubscriptionsValidation(t *testing.T) {
 	t.Parallel()
 

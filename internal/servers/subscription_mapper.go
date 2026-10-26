@@ -219,16 +219,74 @@ func subscriptionSpecMap(spec *aigridv1.SubscriptionSpec) map[string]interface{}
 
 // subscriptionSpecUpdateMap is like subscriptionSpecMap but emits null for
 // optional fields that are cleared so JSON Merge Patch removes them.
-func subscriptionSpecUpdateMap(spec *aigridv1.SubscriptionSpec) map[string]interface{} {
+// When tokenMetadata is set, removed keys (including nested labels) are
+// nulled against the stored value so a smaller replace does not keep old keys.
+func subscriptionSpecUpdateMap(spec, stored *aigridv1.SubscriptionSpec) map[string]interface{} {
 	out := subscriptionSpecMap(spec)
 	if spec == nil || spec.GetTokenMetadata() == nil {
 		out["tokenMetadata"] = nil
+	} else {
+		var prev map[string]interface{}
+		if stored != nil {
+			prev = tokenMetadataToUnstructured(stored.GetTokenMetadata())
+		}
+		out["tokenMetadata"] = replaceTokenMetadataPatch(prev, tokenMetadataToUnstructured(spec.GetTokenMetadata()))
 	}
 	if spec == nil || spec.InferencePriority == nil {
 		out["inferencePriority"] = nil
 	}
 	if spec == nil || len(spec.GetGuardrails()) == 0 {
 		out["guardrails"] = nil
+	}
+	return out
+}
+
+// replaceTokenMetadataPatch builds a merge-patch object that replaces
+// tokenMetadata, nulling removed top-level keys and nested label keys.
+func replaceTokenMetadataPatch(current, next map[string]interface{}) map[string]interface{} {
+	if next == nil {
+		return nil
+	}
+	out := map[string]interface{}{}
+	for k, v := range next {
+		if k == "labels" {
+			continue
+		}
+		out[k] = v
+	}
+	var curLabels, nextLabels map[string]string
+	if current != nil {
+		curLabels = stringMapFromInterface(current["labels"])
+	}
+	nextLabels = stringMapFromInterface(next["labels"])
+	if len(curLabels) > 0 || len(nextLabels) > 0 {
+		out["labels"] = replaceStringMapPatch(curLabels, nextLabels, nil)
+	} else if current != nil {
+		if _, had := current["labels"]; had {
+			out["labels"] = nil
+		}
+	}
+	for k := range current {
+		if _, ok := out[k]; !ok {
+			out[k] = nil
+		}
+	}
+	return out
+}
+
+func stringMapFromInterface(v interface{}) map[string]string {
+	m, ok := v.(map[string]interface{})
+	if !ok || len(m) == 0 {
+		if sm, ok := v.(map[string]string); ok {
+			return sm
+		}
+		return nil
+	}
+	out := make(map[string]string, len(m))
+	for k, raw := range m {
+		if s, ok := raw.(string); ok {
+			out[k] = s
+		}
 	}
 	return out
 }

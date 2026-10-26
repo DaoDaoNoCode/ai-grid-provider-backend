@@ -13,7 +13,7 @@ at commit `537df38`:
 | Directory here | Console directory | Preset |
 |---|---|---|
 | `default/` | `mock/fixtures/` | Ten clusters in every state the ACM console distinguishes, six organizations, a timeline of cluster events. |
-| `poc/` | `mock/fixtures-poc/` | The PoC's four sites (`site1`-`site4`) and three organizations; no timeline, so nothing changes over time. **No MaaS / LLMInferenceService seeds** — use `fixtures/default` (`make dev-fake`) for Models and Subscriptions. |
+| `poc/` | `mock/fixtures-poc/` | The PoC's four sites (`site1`-`site4`) and three organizations; no timeline, so nothing changes over time. Also seeds the same hand-authored MaaS / LLMInferenceService CRs as `default/` so `make dev-fake-poc` exercises Models and Subscriptions. |
 
 `draft/` is different: the draft fake's fixtures, the console's protojson of its draft API
 copied **verbatim, not converted**. `hack/convert-console-fixtures` and everything below about
@@ -71,9 +71,9 @@ objects via the dynamic client. `llminferenceservices.json` seeds one hub-only
 model (`fixture-cpu-llm`) whose shape matches Models Create; Subscriptions use
 the MaaS CR fixtures above instead of the console's flat `subscriptions.json`.
 
-`fixtures/poc` has none of those hand-authored MaaS / LLMInferenceService files
-(only clusters, organizations, access, settings). For Models or Subscriptions
-on the fake hub, prefer `make dev-fake` (`fixtures/default`).
+`fixtures/poc` includes the same hand-authored MaaS / LLMInferenceService files as
+`default/` (copied, not console-converted) so `make dev-fake-poc` can exercise
+Models and Subscriptions against the PoC cluster set.
 
 ## Regenerating
 
