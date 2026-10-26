@@ -736,8 +736,11 @@ Clusters `List`, `Get` and `Update` also report each cluster's `status.gpus`
 (the GPU product, memory, count, architecture, driver and sharing of every GPU
 node) from ACM Search, which indexes the managed clusters' nodes with NVIDIA
 GPU Feature Discovery's labels; the hub's own ManagedClusterInfo keeps none of
-them. The backend asks Search once a minute at most, one query at a time
-(callers wait for it only as long as their own deadline), and calls it with its
+them. The backend asks Search once a minute at most, one query at a time. A
+caller gets the last answer at once while a newer one is fetched, unless that
+answer is more than five minutes old: then it waits for the query, only as long
+as its own deadline. The backend keeps only the GPU labels it reads from each
+node, and refuses an answer larger than 16 MiB. It calls Search with its
 own credential: the ServiceAccount token in a pod, the kubeconfig's token, exec
 plugin or auth provider out of one. A kubeconfig with only a client certificate
 leaves Search calls anonymous, so clusters carry no `gpus` (the backend warns at
@@ -747,13 +750,14 @@ startup). Settings:
 | --- | --- | --- |
 | `SEARCH_API_URL` | `https://search-search-api.open-cluster-management.svc:4010/searchapi/graphql` | Search's GraphQL endpoint, https only; `off` turns GPUs off (the Kind deployment does). Redirects are never followed, so the credential can't be sent elsewhere |
 | `SEARCH_CA_FILE` | the pod's service CA (`/var/run/secrets/kubernetes.io/serviceaccount/service-ca.crt`), else the system roots | CA of Search's serving certificate |
-| `SEARCH_INSECURE_SKIP_VERIFY` | unset | `true` skips the certificate check; only for a local run against a port-forwarded Search |
+| `SEARCH_INSECURE_SKIP_VERIFY` | unset | `true` skips the certificate check; only for a local run against a port-forwarded Search, so the backend refuses to start with it unless `SEARCH_API_URL` is a loopback address (`127.0.0.1`, `::1` or `localhost`) |
 
 The ClusterRole grants `get` on `searches/allManagedData`
 (`search.open-cluster-management.io`), which Search reads as "may see every
 managed cluster's resources": broader than the GPU nodes the backend asks for
 (see the comment in `deploy/openshift/rbac.yaml`). When Search is missing, slow or refuses the
-token, clusters carry no `gpus` and the call still succeeds; the backend logs a
+token, the backend keeps serving the last answer for up to five minutes, then
+clusters carry no `gpus`; the call still succeeds, and the backend logs a
 warning once per minute.
 
 Locally against a hub (`make run`), port-forward Search and point the backend at it:

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -28,13 +29,16 @@ func TestGPUNodesQueryAndAnswer(t *testing.T) {
 		_, _ = w.Write([]byte(`{"data":{"searchResult":[{"items":[
 			{"cluster":"site-b","name":"gpu-node-b","kind":"Node","condition":"DiskPressure=False; MemoryPressure=False; PIDPressure=False; Ready=True",
 			 "label":"node-role.kubernetes.io/gpu=; nvidia.com/gpu.count=1; nvidia.com/gpu.product=NVIDIA-L4"},
-			{"cluster":"site-a","name":"gpu-node-a","kind":"Node","condition":"Ready=False","label":"nvidia.com/gpu.present=true"},
+			{"cluster":"site-a","name":"gpu-node-a","kind":"Node","condition":"Ready=False","label":"nvidia.com/gpu.present=true",
+			 "cpu":8,"_uid":"local-cluster/abc","extra":{"nested":[1,2,3]}},
+			{"cluster":"site-c","name":["not","a","string"],"label":42},
 			{"cluster":"","name":"no-cluster","label":""}
 		]}]}}`))
 	}))
 	defer srv.Close()
 
-	nodes, err := New(srv.URL, srv.Client()).GPUNodes(context.Background())
+	nodes, err := New(srv.URL, srv.Client()).GPUNodes(context.Background(),
+		"nvidia.com/gpu.product", "nvidia.com/gpu.count", "node-role.kubernetes.io/gpu")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -48,7 +52,7 @@ func TestGPUNodesQueryAndAnswer(t *testing.T) {
 		t.Fatalf("query = %q", got.Query)
 	}
 	if len(nodes) != 2 {
-		t.Fatalf("nodes = %+v, want 2 (an item without a cluster is skipped)", nodes)
+		t.Fatalf("nodes = %+v, want 2 (an item without a cluster or a string name is skipped)", nodes)
 	}
 	// Sorted by cluster, then name.
 	if nodes[0].Cluster != "site-a" || nodes[0].Ready || nodes[1].Cluster != "site-b" || !nodes[1].Ready {
@@ -59,6 +63,33 @@ func TestGPUNodesQueryAndAnswer(t *testing.T) {
 	}
 	if v, ok := nodes[1].Labels["node-role.kubernetes.io/gpu"]; !ok || v != "" {
 		t.Fatalf("an empty-valued label must be kept: %v", nodes[1].Labels)
+	}
+	// Only the named labels are kept.
+	if len(nodes[0].Labels) != 0 || len(nodes[1].Labels) != 3 {
+		t.Fatalf("labels = %v and %v, want only the named ones", nodes[0].Labels, nodes[1].Labels)
+	}
+}
+
+// A node's labels are written by its cluster's administrators. However many
+// a node carries, its Node keeps only the ones the caller named.
+func TestGPUNodesKeepsOnlyTheNamedLabels(t *testing.T) {
+	t.Parallel()
+	var label strings.Builder
+	label.WriteString("nvidia.com/gpu.count=8")
+	for i := range 10000 {
+		fmt.Fprintf(&label, "; nvidia.com/junk-%d=x", i)
+	}
+	item, _ := json.Marshal(map[string]string{"cluster": "site-a", "name": "n", "label": label.String(), "condition": "Ready=True"})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = fmt.Fprintf(w, `{"data":{"searchResult":[{"items":[%s]}]}}`, item)
+	}))
+	defer srv.Close()
+	nodes, err := New(srv.URL, srv.Client()).GPUNodes(context.Background(), "nvidia.com/gpu.count")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(nodes) != 1 || len(nodes[0].Labels) != 1 || nodes[0].Labels["nvidia.com/gpu.count"] != "8" || !nodes[0].Ready {
+		t.Fatalf("nodes = %d, labels = %d", len(nodes), len(nodes[0].Labels))
 	}
 }
 
@@ -88,7 +119,7 @@ func TestGPUNodesErrors(t *testing.T) {
 
 func TestParsePairs(t *testing.T) {
 	t.Parallel()
-	got := ParsePairs("a=1; b=; c=x=y; ; d")
+	got := ParsePairs("a=1; b=; c=x=y; ; d; skipped=1", map[string]bool{"a": true, "b": true, "c": true, "d": true, "missing": true})
 	want := map[string]string{"a": "1", "b": "", "c": "x=y", "d": ""}
 	if len(got) != len(want) {
 		t.Fatalf("got %v", got)

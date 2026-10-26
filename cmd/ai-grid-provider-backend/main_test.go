@@ -36,6 +36,31 @@ func TestNewGPUInventoryURL(t *testing.T) {
 	}
 }
 
+// Skipping the certificate check is only for a port-forward on this
+// machine: anywhere else, whoever answered would receive the credential.
+func TestNewGPUInventorySkipVerifyOnlyOnLoopback(t *testing.T) {
+	config := &rest.Config{BearerToken: "token"}
+	t.Setenv("SEARCH_CA_FILE", "")
+	t.Setenv("SEARCH_INSECURE_SKIP_VERIFY", "true")
+	for _, tc := range []struct {
+		url     string
+		wantErr bool
+	}{
+		{url: "https://127.0.0.1:14012/searchapi/graphql"},
+		{url: "https://localhost:4010/searchapi/graphql"},
+		{url: "https://[::1]:4010/searchapi/graphql"},
+		{url: "https://search-search-api.open-cluster-management.svc:4010/searchapi/graphql", wantErr: true},
+		{url: "https://10.0.0.5:4010/searchapi/graphql", wantErr: true},
+		{url: "https://127.0.0.1.example.com/searchapi/graphql", wantErr: true},
+	} {
+		t.Setenv("SEARCH_API_URL", tc.url)
+		_, err := newGPUInventory(config)
+		if (err != nil) != tc.wantErr {
+			t.Errorf("%q: error = %v, want error %v", tc.url, err, tc.wantErr)
+		}
+	}
+}
+
 // A token file builds an authenticated Search client; a client certificate
 // alone still builds one (anonymous, with a warning) rather than failing.
 func TestNewGPUInventoryCredentials(t *testing.T) {

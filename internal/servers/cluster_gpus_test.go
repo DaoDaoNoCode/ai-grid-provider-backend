@@ -3,6 +3,7 @@ package servers
 import (
 	"context"
 	"errors"
+	"math"
 	"sync"
 	"testing"
 	"time"
@@ -150,11 +151,27 @@ type countingSource struct {
 	fn    func() ([]acmsearch.Node, error)
 }
 
-func (s *countingSource) GPUNodes(context.Context) ([]acmsearch.Node, error) {
+func (s *countingSource) GPUNodes(context.Context, ...string) ([]acmsearch.Node, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.calls++
 	return s.fn()
+}
+
+func (s *countingSource) callCount() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.calls
+}
+
+// waitForRefresh waits for the query a stale call started in the background.
+func waitForRefresh(inv *GPUInventory) {
+	inv.mu.Lock()
+	done := inv.inflight
+	inv.mu.Unlock()
+	if done != nil {
+		<-done
+	}
 }
 
 func TestGPUInventoryCachesAnswersAndFailures(t *testing.T) {
@@ -175,18 +192,129 @@ func TestGPUInventoryCachesAnswersAndFailures(t *testing.T) {
 		t.Fatalf("failure: %v", got)
 	}
 	inv.Clusters(context.Background())
-	if src.calls != 1 {
-		t.Fatalf("calls = %d, want 1 within the TTL", src.calls)
+	if n := src.callCount(); n != 1 {
+		t.Fatalf("calls = %d, want 1 within the TTL", n)
 	}
 
+	// After the TTL, the stale answer serves while a query refreshes it.
 	fail = false
 	now = now.Add(time.Minute)
-	if got := inv.Clusters(context.Background()); got["site-a"].GetTotal() != 1 || src.calls != 2 {
-		t.Fatalf("after the TTL: %v, calls %d", got, src.calls)
+	if got := inv.Clusters(context.Background()); len(got) != 0 {
+		t.Fatalf("while refreshing: %v, want the stale answer", got)
+	}
+	waitForRefresh(inv)
+	if got := inv.Clusters(context.Background()); got["site-a"].GetTotal() != 1 || src.callCount() != 2 {
+		t.Fatalf("after the refresh: %v, calls %d", got, src.callCount())
 	}
 	inv.Clusters(context.Background())
-	if src.calls != 2 {
-		t.Fatalf("calls = %d, want 2", src.calls)
+	if n := src.callCount(); n != 2 {
+		t.Fatalf("calls = %d, want 2", n)
+	}
+}
+
+// A failure keeps the last answer for up to maxStale, then clears it.
+func TestGPUInventoryKeepsTheLastAnswerWhileSearchFails(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 10, 26, 12, 0, 0, 0, time.UTC)
+	fail := false
+	src := &countingSource{fn: func() ([]acmsearch.Node, error) {
+		if fail {
+			return nil, errors.New("search unavailable")
+		}
+		return []acmsearch.Node{{Cluster: "site-a", Name: "gpu-a", Labels: gfdLabels(nil)}}, nil
+	}}
+	inv := NewGPUInventory(src, time.Minute, nil)
+	inv.now = func() time.Time { return now }
+	wait := func() { waitForRefresh(inv) }
+
+	if got := inv.Clusters(context.Background()); got["site-a"].GetTotal() != 1 {
+		t.Fatalf("first answer: %v", got)
+	}
+	fail = true
+	for i := 1; i < gpuInventoryMaxStaleTTLs; i++ {
+		now = now.Add(time.Minute)
+		if got := inv.Clusters(context.Background()); got["site-a"].GetTotal() != 1 {
+			t.Fatalf("after %d failed minutes: %v, want the last answer", i, got)
+		}
+		wait()
+	}
+	now = now.Add(time.Minute)
+	inv.Clusters(context.Background())
+	wait()
+	if got := inv.Clusters(context.Background()); len(got) != 0 {
+		t.Fatalf("after %d failed minutes: %v, want no GPUs", gpuInventoryMaxStaleTTLs, got)
+	}
+}
+
+// A stale cache answers at once while the query refreshes it; a cache older
+// than maxStale makes the caller wait for the query.
+func TestGPUInventoryServesStaleWhileRefreshing(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 10, 26, 12, 0, 0, 0, time.UTC)
+	release := make(chan struct{})
+	src := &blockingSource{release: release, nodes: []acmsearch.Node{{Cluster: "site-a", Name: "gpu-a", Labels: gfdLabels(nil)}}}
+	inv := NewGPUInventory(src, time.Minute, nil)
+	inv.now = func() time.Time { return now }
+	inv.byName = map[string]*aigridv1.ClusterGPUs{"site-old": {Total: 2}}
+	inv.fetched, inv.answered = now, now
+
+	now = now.Add(2 * time.Minute)
+	got := inv.Clusters(context.Background())
+	if got["site-old"].GetTotal() != 2 {
+		t.Fatalf("a stale cache within maxStale: %v, want it at once", got)
+	}
+	src.waitStarted(t)
+	close(release)
+	waitForRefresh(inv)
+	if got := inv.Clusters(context.Background()); got["site-a"].GetTotal() != 1 {
+		t.Fatalf("after the refresh: %v", got)
+	}
+
+	// Idle past maxStale: the next caller waits for a fresh answer.
+	src.nodes = []acmsearch.Node{{Cluster: "site-b", Name: "gpu-b", Labels: gfdLabels(nil)}}
+	now = now.Add(time.Duration(gpuInventoryMaxStaleTTLs) * time.Minute)
+	if got := inv.Clusters(context.Background()); got["site-b"].GetTotal() != 1 || got["site-a"] != nil {
+		t.Fatalf("past maxStale: %v, want the fresh answer", got)
+	}
+}
+
+// The labels asked of the source are every label the inventory reads: a node
+// keeping only them reads the same as one with all its labels.
+func TestGPULabelKeysCoverWhatTheInventoryReads(t *testing.T) {
+	t.Parallel()
+	all := gfdLabels(map[string]string{
+		"nvidia.com/cuda.driver-version.full": "-", "nvidia.com/cuda.runtime-version.full": "-", "nvidia.com/gpu.machine": "-",
+		"nvidia.com/cuda.driver.major": "580", "nvidia.com/cuda.driver.minor": "105", "nvidia.com/cuda.driver.rev": "08",
+		"nvidia.com/cuda.runtime.major": "13", "nvidia.com/cuda.runtime.minor": "0",
+		"nvidia.com/mig.strategy": "single", "nvidia.com/gpu.replicas": "4", "nvidia.com/gpu.sharing-strategy": "time-slicing",
+	})
+	kept := map[string]string{}
+	for _, k := range gpuLabelKeys {
+		if v, ok := all[k]; ok {
+			kept[k] = v
+		}
+	}
+	full := gpuNodeFromLabels(acmsearch.Node{Name: "n", Labels: all})
+	filtered := gpuNodeFromLabels(acmsearch.Node{Name: "n", Labels: kept})
+	if !proto.Equal(full, filtered) {
+		t.Fatalf("with only gpuLabelKeys: %v, with all labels: %v", filtered, full)
+	}
+	if full.GetDriverVersion() != "580.105.08" || full.GetInstanceType() != "g6.xlarge" || full.GetSharing().GetStrategy() != "mig" {
+		t.Fatalf("the fallbacks were not exercised: %v", full)
+	}
+}
+
+// Counts come from labels a spoke's administrators write; a cluster's total
+// stops at the int32 maximum rather than wrapping negative.
+func TestClusterGPUsTotalSaturates(t *testing.T) {
+	t.Parallel()
+	huge := gfdLabels(map[string]string{"nvidia.com/gpu.count": "2147483647"})
+	got := clusterGPUsFromNodes([]acmsearch.Node{
+		{Cluster: "site-a", Name: "a", Labels: huge},
+		{Cluster: "site-a", Name: "b", Labels: huge},
+	})["site-a"]
+	if got.GetTotal() != math.MaxInt32 {
+		t.Fatalf("total = %d, want %d", got.GetTotal(), math.MaxInt32)
 	}
 }
 
@@ -232,8 +360,8 @@ func TestClustersListAndGetAttachGPUs(t *testing.T) {
 	if again.GetObject().GetStatus().GetGpus().GetTotal() != 1 {
 		t.Fatal("the cached inventory was changed through a response")
 	}
-	if src.calls != 1 {
-		t.Fatalf("Search calls = %d, want 1 for List and both Gets", src.calls)
+	if n := src.callCount(); n != 1 {
+		t.Fatalf("Search calls = %d, want 1 for List and both Gets", n)
 	}
 }
 
@@ -363,7 +491,7 @@ type blockingSource struct {
 	once    sync.Once
 }
 
-func (s *blockingSource) GPUNodes(ctx context.Context) ([]acmsearch.Node, error) {
+func (s *blockingSource) GPUNodes(ctx context.Context, _ ...string) ([]acmsearch.Node, error) {
 	s.mu.Lock()
 	s.calls++
 	if s.started == nil {

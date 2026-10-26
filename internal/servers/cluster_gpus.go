@@ -3,6 +3,7 @@ package servers
 import (
 	"context"
 	"log/slog"
+	"math"
 	"sort"
 	"strconv"
 	"sync"
@@ -13,10 +14,11 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
-// GPUNodeSource lists the GPU nodes of every managed cluster; the ACM Search
-// client in production (acmsearch.Client).
+// GPUNodeSource lists the GPU nodes of every managed cluster, each with the
+// labels named in labelKeys; the ACM Search client in production
+// (acmsearch.Client).
 type GPUNodeSource interface {
-	GPUNodes(ctx context.Context) ([]acmsearch.Node, error)
+	GPUNodes(ctx context.Context, labelKeys ...string) ([]acmsearch.Node, error)
 }
 
 // DefaultGPUInventoryTTL is how long one Search answer serves List and Get.
@@ -29,19 +31,30 @@ const DefaultGPUInventoryTTL = 60 * time.Second
 // a List or Get for long: the call answers without GPUs instead.
 const gpuQueryTimeout = 10 * time.Second
 
+// gpuInventoryMaxStaleTTLs is how many TTLs an answer may serve once it is
+// stale: while a refresh runs, and while Search fails. Past that, a caller
+// waits for a fresh answer, and a failure clears the GPUs rather than show
+// ones that may be gone.
+const gpuInventoryMaxStaleTTLs = 5
+
 // GPUInventory caches each cluster's GPUs from a GPUNodeSource. A failed
 // query is cached for the same time as an answer, so an unavailable Search
-// is asked (and logged) once per TTL, not on every call. One query runs at a
-// time, outside the lock: callers that find the cache stale wait for it, each
-// only as long as its own context allows.
+// is asked (and logged) once per TTL, not on every call, and it keeps the
+// last good answer for up to gpuInventoryMaxStaleTTLs TTLs. One query runs
+// at a time, outside the lock. A caller that finds the cache stale but
+// recent gets it at once and the query refreshes it in the background;
+// otherwise the caller waits for the query, only as long as its own context
+// allows.
 type GPUInventory struct {
-	source GPUNodeSource
-	ttl    time.Duration
-	logger *slog.Logger
-	now    func() time.Time
+	source   GPUNodeSource
+	ttl      time.Duration
+	maxStale time.Duration
+	logger   *slog.Logger
+	now      func() time.Time
 
 	mu       sync.Mutex
-	fetched  time.Time
+	fetched  time.Time // when the last query ended, answered or not
+	answered time.Time // when the last query that answered ended
 	byName   map[string]*aigridv1.ClusterGPUs
 	inflight chan struct{} // closed when the running query has stored its answer; nil when none runs
 }
@@ -55,18 +68,21 @@ func NewGPUInventory(source GPUNodeSource, ttl time.Duration, logger *slog.Logge
 	if logger == nil {
 		logger = slog.Default()
 	}
-	return &GPUInventory{source: source, ttl: ttl, logger: logger, now: time.Now}
+	return &GPUInventory{source: source, ttl: ttl, maxStale: gpuInventoryMaxStaleTTLs * ttl, logger: logger, now: time.Now}
 }
 
 // Clusters returns each cluster's GPUs by cluster name, from the cache while
-// it is fresh. When it isn't, it starts a query (or joins the one running)
-// and waits for it, at most until ctx ends: then it returns an empty map
-// and the query carries on for later callers. When Search fails it returns
-// an empty map too: clusters then carry no `gpus`, and the call that asked
+// it is fresh. When it isn't, it starts a query (or joins the one running).
+// A cache that is stale but within maxStale is returned at once while the
+// query refreshes it; otherwise Clusters waits for the query, at most until
+// ctx ends: then it returns an empty map and the query carries on for later
+// callers. When Search fails and there is no recent answer, it returns an
+// empty map too: clusters then carry no `gpus`, and the call that asked
 // still succeeds. The map is shared; callers must not change it.
 func (inv *GPUInventory) Clusters(ctx context.Context) map[string]*aigridv1.ClusterGPUs {
 	inv.mu.Lock()
-	if inv.byName != nil && inv.now().Sub(inv.fetched) < inv.ttl {
+	age := inv.now().Sub(inv.fetched)
+	if inv.byName != nil && age < inv.ttl {
 		byName := inv.byName
 		inv.mu.Unlock()
 		return byName
@@ -76,6 +92,11 @@ func (inv *GPUInventory) Clusters(ctx context.Context) map[string]*aigridv1.Clus
 		done = make(chan struct{})
 		inv.inflight = done
 		go inv.refresh(done)
+	}
+	if inv.byName != nil && age < inv.maxStale {
+		byName := inv.byName
+		inv.mu.Unlock()
+		return byName
 	}
 	inv.mu.Unlock()
 
@@ -90,21 +111,26 @@ func (inv *GPUInventory) Clusters(ctx context.Context) map[string]*aigridv1.Clus
 }
 
 // refresh queries the source once, bounded by gpuQueryTimeout rather than by
-// any caller's context (it answers every caller waiting on it), stores the
-// answer, or an empty one on failure, and closes done.
+// any caller's context (it answers every caller waiting on it), and closes
+// done. It stores the answer; on failure it keeps the last answer while that
+// is within maxStale, and stores an empty one otherwise.
 func (inv *GPUInventory) refresh(done chan struct{}) {
 	ctx, cancel := context.WithTimeout(context.Background(), gpuQueryTimeout)
 	defer cancel()
-	nodes, err := inv.source.GPUNodes(ctx)
-	byName := map[string]*aigridv1.ClusterGPUs{}
+	nodes, err := inv.source.GPUNodes(ctx, gpuLabelKeys...)
 	if err != nil {
 		inv.logger.Warn("read cluster GPUs from ACM Search", "error", err)
-	} else {
-		byName = clusterGPUsFromNodes(nodes)
 	}
 	inv.mu.Lock()
-	inv.byName = byName
-	inv.fetched = inv.now()
+	now := inv.now()
+	switch {
+	case err == nil:
+		inv.byName = clusterGPUsFromNodes(nodes)
+		inv.answered = now
+	case inv.byName == nil || now.Sub(inv.answered) >= inv.maxStale:
+		inv.byName = map[string]*aigridv1.ClusterGPUs{}
+	}
+	inv.fetched = now
 	inv.inflight = nil
 	inv.mu.Unlock()
 	close(done)
@@ -134,7 +160,7 @@ func clusterGPUsFromNodes(nodes []acmsearch.Node) map[string]*aigridv1.ClusterGP
 			out[n.Cluster] = gpus
 		}
 		gpus.Nodes = append(gpus.Nodes, node)
-		gpus.Total += node.GetCount()
+		gpus.Total = addSaturated(gpus.Total, node.GetCount())
 		gpus.NodeCount++
 	}
 	for _, gpus := range out {
@@ -197,6 +223,15 @@ const (
 	labelMachine         = "nvidia.com/gpu.machine"
 	labelInstanceType    = "node.kubernetes.io/instance-type"
 )
+
+// gpuLabelKeys are the labels gpuNodeFromLabels reads, the only ones asked
+// of the source.
+var gpuLabelKeys = []string{
+	labelGPUProduct, labelGPUCount, labelGPUMemory, labelGPUFamily, labelComputeMajor, labelComputeMinor,
+	labelDriverFull, labelDriverMajor, labelDriverMinor, labelDriverRev,
+	labelRuntimeFull, labelRuntimeMajor, labelRuntimeMinor,
+	labelSharingStrategy, labelReplicas, labelMIGCapable, labelMIGStrategy, labelMachine, labelInstanceType,
+}
 
 // gpuNodeFromLabels reads one node's GPU Feature Discovery labels.
 func gpuNodeFromLabels(n acmsearch.Node) *aigridv1.GPUNode {
@@ -261,6 +296,16 @@ func joinVersion(parts ...string) string {
 		out += p
 	}
 	return out
+}
+
+// addSaturated adds two counts, stopping at math.MaxInt32 instead of
+// wrapping negative. A node's labels come from its cluster's administrators,
+// so one could claim any count.
+func addSaturated(a, b int32) int32 {
+	if sum := int64(a) + int64(b); sum < math.MaxInt32 {
+		return int32(sum)
+	}
+	return math.MaxInt32
 }
 
 func atoi32(s string) int32 {

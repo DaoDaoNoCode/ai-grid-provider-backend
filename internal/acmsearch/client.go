@@ -23,8 +23,11 @@ import (
 const DefaultURL = "https://search-search-api.open-cluster-management.svc:4010/searchapi/graphql"
 
 // maxResponseBytes caps a Search answer. A node item is about 3 KiB with
-// GPU Feature Discovery's labels; this is room for thousands of GPU nodes.
-const maxResponseBytes = 32 << 20
+// GPU Feature Discovery's labels, so this is room for about 5000 GPU nodes.
+// Decoding keeps only four fields of each item and the labels the caller
+// names (GPUNodes), so reading and decoding an answer allocate a few times
+// its size, whatever its items hold: about 70 MiB at this cap.
+const maxResponseBytes = 16 << 20
 
 // Node is one node of a managed cluster as Search indexes it.
 type Node struct {
@@ -32,7 +35,8 @@ type Node struct {
 	Cluster string
 	// Name is the node's name.
 	Name string
-	// Labels are the node's labels, parsed from Search's "k=v; k=v" form.
+	// Labels are the node's labels that the query named, parsed from
+	// Search's "k=v; k=v" form.
 	Labels map[string]string
 	// Ready is true when the node's Ready condition is True.
 	Ready bool
@@ -89,7 +93,7 @@ type graphQLRequest struct {
 type graphQLResponse struct {
 	Data struct {
 		SearchResult []struct {
-			Items []map[string]any `json:"items"`
+			Items []searchItem `json:"items"`
 		} `json:"searchResult"`
 	} `json:"data"`
 	Errors []struct {
@@ -97,9 +101,36 @@ type graphQLResponse struct {
 	} `json:"errors"`
 }
 
+// searchItem is the part of a Search item of kind Node the backend reads:
+// `cluster`, `name`, `label` as "k=v; k=v" and `condition` as
+// "DiskPressure=False; ...; Ready=True" (the shape search-v2's collector
+// indexes, as an ACM hub answered it). Every other key of the item is
+// skipped while decoding, without being kept.
+type searchItem struct {
+	Cluster   text `json:"cluster"`
+	Name      text `json:"name"`
+	Label     text `json:"label"`
+	Condition text `json:"condition"`
+}
+
+// text is a JSON string. Any other JSON value reads as "", as a missing key
+// does, so one odd item can't fail the whole answer.
+type text string
+
+func (t *text) UnmarshalJSON(b []byte) error {
+	var s string
+	if json.Unmarshal(b, &s) == nil {
+		*t = text(s)
+	}
+	return nil
+}
+
 // GPUNodes returns every node Search knows with nvidia.com/gpu.present=true,
-// sorted by cluster and then by name.
-func (c *Client) GPUNodes(ctx context.Context) ([]Node, error) {
+// sorted by cluster and then by name. Each node's Labels hold only the
+// labelKeys it carries: a node's labels are written by whoever administers
+// its cluster, so keeping only the ones the caller reads bounds what a node
+// with thousands of labels costs.
+func (c *Client) GPUNodes(ctx context.Context, labelKeys ...string) ([]Node, error) {
 	var req graphQLRequest
 	req.Query = gpuNodesQuery
 	req.Variables.Input = []searchInput{{
@@ -145,10 +176,19 @@ func (c *Client) GPUNodes(ctx context.Context) ([]Node, error) {
 		}
 		return nil, errors.New("search: " + strings.Join(msgs, "; "))
 	}
+	keep := make(map[string]bool, len(labelKeys))
+	for _, k := range labelKeys {
+		keep[k] = true
+	}
 	var nodes []Node
 	for _, result := range out.Data.SearchResult {
 		for _, item := range result.Items {
-			node := nodeFromItem(item)
+			node := Node{
+				Cluster: string(item.Cluster),
+				Name:    string(item.Name),
+				Labels:  ParsePairs(string(item.Label), keep),
+				Ready:   ParsePairs(string(item.Condition), map[string]bool{"Ready": true})["Ready"] == "True",
+			}
 			if node.Cluster == "" || node.Name == "" {
 				continue
 			}
@@ -164,34 +204,18 @@ func (c *Client) GPUNodes(ctx context.Context) ([]Node, error) {
 	return nodes, nil
 }
 
-// nodeFromItem reads a Search item of kind Node: `cluster`, `name`, `label`
-// as "k=v; k=v" and `condition` as "DiskPressure=False; ...; Ready=True"
-// (the shape search-v2's collector indexes, as an ACM hub answered it).
-func nodeFromItem(item map[string]any) Node {
-	str := func(key string) string {
-		v, _ := item[key].(string)
-		return v
-	}
-	return Node{
-		Cluster: str("cluster"),
-		Name:    str("name"),
-		Labels:  ParsePairs(str("label")),
-		Ready:   ParsePairs(str("condition"))["Ready"] == "True",
-	}
-}
-
-// ParsePairs reads Search's "k=v; k=v" encoding of a map. A pair without
-// "=" is a key with an empty value, as a label like
-// node-role.kubernetes.io/worker= is written.
-func ParsePairs(s string) map[string]string {
+// ParsePairs reads the keys in keep from Search's "k=v; k=v" encoding of a
+// map, and skips the others. A pair without "=" is a key with an empty
+// value, as a label like node-role.kubernetes.io/worker= is written.
+func ParsePairs(s string, keep map[string]bool) map[string]string {
 	out := map[string]string{}
-	for _, part := range strings.Split(s, "; ") {
-		part = strings.TrimSpace(part)
-		if part == "" {
-			continue
+	for len(s) > 0 {
+		part, rest, _ := strings.Cut(s, "; ")
+		s = rest
+		k, v, _ := strings.Cut(strings.TrimSpace(part), "=")
+		if keep[k] {
+			out[k] = v
 		}
-		k, v, _ := strings.Cut(part, "=")
-		out[k] = v
 	}
 	return out
 }
