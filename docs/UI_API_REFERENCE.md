@@ -542,6 +542,73 @@ Without `placement`, the model is hub-only. Gateway defaults to
 `openshift-ingress/openshift-ai-inference`. Display name / description live in
 `openshift.io/display-name` and `openshift.io/description` annotations.
 
+### Placement (`spec.placement`)
+
+| Field | Placement field | Notes |
+| --- | --- | --- |
+| `cluster_sets` | `spec.clusterSets` | Empty: every bound set |
+| `label_selector` | `spec.predicates[0].requiredClusterSelector.labelSelector` | The backend always adds `ai-grid/enabled=true` and `ai-grid/provisioned=true` |
+| `claim_expressions[]` | `…requiredClusterSelector.claimSelector.matchExpressions` | `{key, operator, values}` over cluster claims; `In`, `NotIn`, `Exists`, `DoesNotExist` |
+| `tolerations[]` | `spec.tolerations` | `{key, operator, value, effect, toleration_seconds}`; operator `Equal` (default) or `Exists`; effect `NoSelect`, `PreferNoSelect`, `NoSelectIfNew` or empty |
+| `number_of_clusters` | `spec.numberOfClusters` | Unset: all matching |
+
+A Placement written outside the API reads back with all of these, so send
+the placement you loaded when you PATCH `spec.placement`: the update replaces
+the whole placement, and a field you leave out is removed.
+
+`spec.model.name` reads as the model `id` when the stored object has none.
+
+### Status of a placed model
+
+```json
+"status": {
+  "phase": "MODEL_PHASE_PARTIALLY_AVAILABLE",
+  "reason": "PartiallyAvailable",
+  "message": "1 of 2 clusters are serving the model.",
+  "placement": {"number_of_selected_clusters": 2, "selected_clusters": ["site-madrid-1", "site-paris-1"], "locations": ["madrid", "paris"]},
+  "rollout": {
+    "works": [
+      {"cluster": "site-madrid-1", "phase": "MODEL_PHASE_PENDING", "reason": "ConditionRulesAggregated",
+       "message": "LLMInferenceService rolling out", "ready": false,
+       "applied": "True", "available": "True", "progressing": "True", "degraded": "False",
+       "conditions": [{"type": "Applied", "status": "CONDITION_STATUS_TRUE", "reason": "AppliedManifestWorkComplete", "...": "..."}]},
+      {"cluster": "site-paris-1", "phase": "MODEL_PHASE_READY", "ready": true, "...": "..."}
+    ]
+  }
+}
+```
+
+`status.phase` (the full precedence is on `ModelPhase` in
+`proto/ai_grid/v1/model_type.proto`):
+
+| Phase | Hub-only model | Placed model |
+| --- | --- | --- |
+| `READY` | `Ready` True | every selected location serving (or, with no work readable, the MWRS rolled out and applied) |
+| `PARTIALLY_AVAILABLE` | never | some but not all selected locations serving; message "`<n>` of `<m>` clusters are serving the model." |
+| `FAILED` | `Ready` False with `ConfigNotFound`, `RefsInvalid` or `GatewaysNotReady` | no location serving and a work FAILED (its reason and message) |
+| `PENDING` | otherwise | otherwise, with the MWRS condition's reason |
+
+The works win over the MWRS conditions: an MWRS that still says rolled out
+does not make the model READY while a work has failed.
+
+`status.rollout.works[]` is one entry per selected cluster that has a
+ManifestWork, in cluster-name order:
+
+| Field | Meaning |
+| --- | --- |
+| `cluster` | The cluster (the work's namespace); its `location` label is the location |
+| `phase` | `READY` when `ready` is true; `FAILED` when `Applied` is False or `Degraded` is True; else `PENDING` (never `PARTIALLY_AVAILABLE`) |
+| `reason`, `message` | Of the condition that decided `phase`; empty for `READY` and before the agent reports |
+| `ready` | The spoke LLMInferenceService's `Ready` status from the work's `ready` status feedback; absent until reported |
+| `conditions[]` | The ManifestWork's `Applied`, `Available`, `Progressing`, `Degraded` |
+| `applied`, `available`, `progressing`, `degraded` | Those conditions' statuses as strings (kept for compatibility) |
+
+`Progressing` and `Degraded` come from the condition rules the backend puts
+in the MWRS template (`Progressing` until the spoke model is Ready,
+`Degraded` when its Ready is False with a reason that does not recover);
+`ready` comes from the template's JSONPaths feedback rule
+`.status.conditions[?(@.type=="Ready")].status`.
+
 gRPC: `ai_grid.v1.Models/{List,Get,Create,Update,Delete}`.
 
 ---
@@ -691,7 +758,7 @@ this file is the current contract snapshot).
 ```bash
 # Local without a cluster (fixtures/default seeds LLMInferenceService + MaaS CRs)
 make dev-fake
-# Prefer make dev-fake over make dev-fake-poc: poc has no MaaS/LLMISvc seeds.
+# Both presets seed placed models with per-location status (fixtures/README.md, Placed models).
 # REST :9092, gRPC :9090 — curl /api/v1/models, /api/v1/subscriptions
 
 # Local against a real kubeconfig + Keycloak (needs LLMInferenceService / MaaS CRDs)

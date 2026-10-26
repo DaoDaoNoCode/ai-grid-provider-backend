@@ -48,7 +48,7 @@
 | 23 | medium | Applied=False kept Pending | done | `mwrsHasFailedOrDegradedWork` treats Applied=False as failure |
 | 24 | medium | Nested subscription masks replace parent | done | Reject nested owner/model_refs/organization/token_metadata/guardrails |
 | 25 | smaller | Clear replicas/scaling; tokenMetadata keys; poc fixtures | done | Null cleared modes; replace tokenMetadata keys; seed poc MaaS/LLM fixtures |
-| 26 | follow-up | P13 per-work phase/reason/message/feedback + PARTIALLY_AVAILABLE | later | Console PR #66; offered as follow-up |
+| 26 | follow-up | P13 per-work phase/reason/message/feedback + PARTIALLY_AVAILABLE | done | Follow-up branch `feat/models-p13` |
 
 ## How we use this
 
@@ -286,8 +286,16 @@
 - **Decision:** Accepted.
 - **Implementation notes:** Path-selective patch nulls cleared replicas/scaling; `replaceTokenMetadataPatch` nulls removed keys/labels; copied default MaaS/LLM fixtures into `fixtures/poc/` and updated README.
 
-### 26. P13 per-work phase/reason/message/feedback + PARTIALLY_AVAILABLE — Status: `later`
+### 26. P13 per-work phase/reason/message/feedback + PARTIALLY_AVAILABLE — Status: `done`
 
 - **Source:** DaoDao re-review / console PR #66
 - **Description:** Fuller `ModelWorkStatus` fields and `MODEL_PHASE_PARTIALLY_AVAILABLE`.
 - **Decision:** `later` (follow-up as offered).
+- **Implementation notes:** Follow-up branch `feat/models-p13`. `ModelPhase` gains
+  `PARTIALLY_AVAILABLE`; `ModelWorkStatus` gains `phase`, `reason`, `message`,
+  `conditions`, `ready`. A placed model's phase comes from its works before the
+  MWRS conditions, so a stale MWRS summary no longer makes it READY while a work
+  has failed. The MWRS template carries a `ready` JSONPaths feedback rule and
+  CEL `Progressing`/`Degraded` condition rules. `ModelPlacement` gains
+  `claim_expressions` and `tolerations`; an empty `spec.model.name` reads as the
+  id. The fake hub serves ManifestWorks and the fixtures seed placed models.

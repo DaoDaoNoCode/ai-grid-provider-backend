@@ -62,6 +62,8 @@ with `AI_GRID_MODELS_NAMESPACE`):
 serving.kserve.io/v1alpha2/llminferenceservices
 cluster.open-cluster-management.io/v1beta1/placements          # when placement set
 work.open-cluster-management.io/v1alpha1/manifestworkreplicasets
+cluster.open-cluster-management.io/v1beta1/placementdecisions  # read: selected clusters
+work.open-cluster-management.io/v1/manifestworks               # read: per-location status
 maas.opendatahub.io/v1alpha1/maasmodelrefs
 ```
 
@@ -370,7 +372,8 @@ preset contains and where it comes from.
 
 ```sh
 make dev-fake                         # fixtures/default: ten clusters in every ACM state, six organizations,
-                                      # MaaS subscriptions/auth policies/model refs, and a timeline
+                                      # MaaS subscriptions/auth policies/model refs, placed models
+                                      # with per-location status, and a timeline
                                       # (a cluster joins at 20s, one detaches at 30s, ...)
 make dev-fake-poc                     # fixtures/poc: the PoC's four sites and three organizations, static
                                       # (and fixtures/draft/poc for the draft fake)
