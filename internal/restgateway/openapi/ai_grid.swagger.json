@@ -1764,7 +1764,7 @@
         "toleration_seconds": {
           "type": "string",
           "format": "int64",
-          "description": "How long the taint is tolerated, counted from the taint's `timeAdded`.\nUnset tolerates it forever."
+          "description": "How long the taint is tolerated, counted from the taint's `timeAdded`.\nUnset tolerates it forever. Applies only to a toleration of effect\n`NoSelect` or `PreferNoSelect`; the scheduler ignores it otherwise\n(open-cluster-management-io/api cluster/v1beta1/types_placement.go,\nToleration.TolerationSeconds)."
         }
       },
       "description": "One Placement toleration (`spec.tolerations[]`)."

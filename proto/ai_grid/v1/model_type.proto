@@ -176,7 +176,10 @@ message ModelToleration {
   string effect = 4;
 
   // How long the taint is tolerated, counted from the taint's `timeAdded`.
-  // Unset tolerates it forever.
+  // Unset tolerates it forever. Applies only to a toleration of effect
+  // `NoSelect` or `PreferNoSelect`; the scheduler ignores it otherwise
+  // (open-cluster-management-io/api cluster/v1beta1/types_placement.go,
+  // Toleration.TolerationSeconds).
   optional int64 toleration_seconds = 5;
 }
 

@@ -197,7 +197,7 @@ func TestModelsPlacementValidation(t *testing.T) {
 		ClaimExpressions: []*aigridv1.ModelLabelSelectorRequirement{{Key: "platform.open-cluster-management.io", Operator: "Exists"}},
 		Tolerations: []*aigridv1.ModelToleration{
 			{Operator: "Exists"},
-			{Key: "cluster.open-cluster-management.io/unavailable", Value: "", Effect: "NoSelectIfNew", TolerationSeconds: proto.Int64(60)},
+			{Key: "cluster.open-cluster-management.io/unavailable", Value: "", Effect: "PreferNoSelect", TolerationSeconds: proto.Int64(60)},
 		},
 	}
 	if _, err := srv.Create(context.Background(), &aigridv1.ModelsCreateRequest{Object: ok}); err != nil {

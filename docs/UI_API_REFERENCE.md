@@ -549,7 +549,7 @@ Without `placement`, the model is hub-only. Gateway defaults to
 | `cluster_sets` | `spec.clusterSets` | Empty: every bound set |
 | `label_selector` | `spec.predicates[0].requiredClusterSelector.labelSelector` | The backend always adds `ai-grid/enabled=true` and `ai-grid/provisioned=true` |
 | `claim_expressions[]` | `…requiredClusterSelector.claimSelector.matchExpressions` | `{key, operator, values}` over cluster claims; `In`, `NotIn`, `Exists`, `DoesNotExist` |
-| `tolerations[]` | `spec.tolerations` | `{key, operator, value, effect, toleration_seconds}`; operator `Equal` (default) or `Exists`; effect `NoSelect`, `PreferNoSelect`, `NoSelectIfNew` or empty |
+| `tolerations[]` | `spec.tolerations` | `{key, operator, value, effect, toleration_seconds}`; operator `Equal` (default) or `Exists`; effect `NoSelect`, `PreferNoSelect`, `NoSelectIfNew` or empty; `toleration_seconds` applies only to effects `NoSelect` and `PreferNoSelect` (ignored otherwise) |
 | `number_of_clusters` | `spec.numberOfClusters` | Unset: all matching |
 
 Create and Update answer `InvalidArgument`, before writing anything, when a
@@ -620,7 +620,10 @@ in the MWRS template (`Progressing` until the spoke model is Ready,
 `.status.conditions[?(@.type=="Ready")].status`, `.metadata.generation` and
 `.status.observedGeneration`; both condition rules also wait for
 `observedGeneration` to reach `generation`, so a Ready left from an older
-spec does not count after an update.
+spec does not count after an update. The ManifestWorkReplicaSet (v1alpha1) and ManifestWork (v1) CRD
+schemas of MCE 2.17.3 include `manifestConfigs` with `feedbackRules` (type
+`JSONPaths`) and `conditionRules` (type `CEL`); how its work agent
+evaluates them has not been exercised live.
 
 gRPC: `ai_grid.v1.Models/{List,Get,Create,Update,Delete}`.
 

@@ -908,7 +908,10 @@ type ModelToleration struct {
 	// `NoSelectIfNew`. Empty tolerates every effect.
 	Effect string `protobuf:"bytes,4,opt,name=effect,proto3" json:"effect,omitempty"`
 	// How long the taint is tolerated, counted from the taint's `timeAdded`.
-	// Unset tolerates it forever.
+	// Unset tolerates it forever. Applies only to a toleration of effect
+	// `NoSelect` or `PreferNoSelect`; the scheduler ignores it otherwise
+	// (open-cluster-management-io/api cluster/v1beta1/types_placement.go,
+	// Toleration.TolerationSeconds).
 	TolerationSeconds *int64 `protobuf:"varint,5,opt,name=toleration_seconds,json=tolerationSeconds,proto3,oneof" json:"toleration_seconds,omitempty"`
 	unknownFields     protoimpl.UnknownFields
 	sizeCache         protoimpl.SizeCache
