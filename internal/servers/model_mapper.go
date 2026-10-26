@@ -12,7 +12,7 @@ import (
 )
 
 const (
-	defaultModelsNamespace = "ai-grid-internal-models"
+	defaultModelsNamespace = "ai-grid-models"
 
 	modelLabelKey = "ai-grid/model"
 

@@ -73,7 +73,7 @@ func main() {
 	}
 	modelsServer, err := servers.NewModelsServer().
 		SetDynamicClient(kubeClient).
-		SetNamespace(getEnv("AI_GRID_MODELS_NAMESPACE", "ai-grid-internal-models")).
+		SetNamespace(getEnv("AI_GRID_MODELS_NAMESPACE", "ai-grid-models")).
 		SetSubscriptionNamespace(getEnv("AI_GRID_SUBSCRIPTION_NAMESPACE", "models-as-a-service")).
 		Build()
 	if err != nil {

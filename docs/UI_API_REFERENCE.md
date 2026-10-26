@@ -492,7 +492,7 @@ gRPC: `ai_grid.v1.Tenants/ListMembers` with `{"id":"<org-uuid>"}`.
 
 ## 4. Models (LLMInferenceService deploy)
 
-Models live in `AI_GRID_MODELS_NAMESPACE` (default `ai-grid-internal-models`).
+Models live in `AI_GRID_MODELS_NAMESPACE` (default `ai-grid-models`).
 **Create is deploy:** it writes an `LLMInferenceService` and a `MaaSModelRef`
 (`kind: LLMInferenceService`). When `spec.placement` is set it also writes
 `Placement` / `ManifestWorkReplicaSet` named `model-<id>` (fails with

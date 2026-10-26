@@ -35,8 +35,8 @@ them through the real Kubernetes and Keycloak clients.
 | `settings.json` | fake hub | `speed` of the scenario clock; optional `detachAfter`. | `settings.json` |
 | `maassubscriptions.json` | fake hub | A `MaaSSubscriptionList` (`maas.opendatahub.io/v1alpha1`) for Subscriptions CRUD. Optional; missing means an empty store. | hand-authored (console `subscriptions.json` is draft protojson, not CR-shaped) |
 | `maasauthpolicies.json` | fake hub | A `MaaSAuthPolicyList` paired with the seeded subscriptions (`<id>-policy`). Optional. | hand-authored |
-| `maasmodelrefs.json` | fake hub | A `MaaSModelRefList` (often in namespace `llm`) for Get enrichment / model registrations; also pairs Models fixtures in `ai-grid-internal-models`. Optional. | hand-authored |
-| `llminferenceservices.json` | fake hub | An `LLMInferenceServiceList` (`serving.kserve.io/v1alpha2`) in `ai-grid-internal-models` for Models List/Get. Optional; missing means empty Models List until Create. | hand-authored |
+| `maasmodelrefs.json` | fake hub | A `MaaSModelRefList` (often in namespace `llm`) for Get enrichment / model registrations; also pairs Models fixtures in `ai-grid-models`. Optional. | hand-authored |
+| `llminferenceservices.json` | fake hub | An `LLMInferenceServiceList` (`serving.kserve.io/v1alpha2`) in `ai-grid-models` for Models List/Get. Optional; missing means empty Models List until Create. | hand-authored |
 
 Every file is decoded strictly: a misspelled key stops the fake with an error.
 A missing file leaves its part empty or at its default (no `access.json`

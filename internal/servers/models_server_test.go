@@ -81,7 +81,7 @@ func TestModelsCRUDHubOnly(t *testing.T) {
 		t.Fatalf("Create id = %q", created.GetObject().GetId())
 	}
 
-	llm, err := client.Resource(testLLMGVR).Namespace("ai-grid-internal-models").Get(ctx, "tiny-llm", metav1.GetOptions{})
+	llm, err := client.Resource(testLLMGVR).Namespace("ai-grid-models").Get(ctx, "tiny-llm", metav1.GetOptions{})
 	if err != nil {
 		t.Fatalf("get LLMInferenceService: %v", err)
 	}
@@ -89,7 +89,7 @@ func TestModelsCRUDHubOnly(t *testing.T) {
 	if uri != "hf://facebook/opt-125m" {
 		t.Fatalf("uri = %q", uri)
 	}
-	ref, err := client.Resource(testModelRefsGVR).Namespace("ai-grid-internal-models").Get(ctx, "tiny-llm", metav1.GetOptions{})
+	ref, err := client.Resource(testModelRefsGVR).Namespace("ai-grid-models").Get(ctx, "tiny-llm", metav1.GetOptions{})
 	if err != nil {
 		t.Fatalf("get MaaSModelRef: %v", err)
 	}
@@ -132,10 +132,10 @@ func TestModelsCRUDHubOnly(t *testing.T) {
 	if _, err := srv.Delete(ctx, &aigridv1.ModelsDeleteRequest{Id: "tiny-llm"}); err != nil {
 		t.Fatalf("Delete() error = %v", err)
 	}
-	if _, err := client.Resource(testLLMGVR).Namespace("ai-grid-internal-models").Get(ctx, "tiny-llm", metav1.GetOptions{}); err == nil {
+	if _, err := client.Resource(testLLMGVR).Namespace("ai-grid-models").Get(ctx, "tiny-llm", metav1.GetOptions{}); err == nil {
 		t.Fatal("LLMInferenceService still present after Delete")
 	}
-	if _, err := client.Resource(testModelRefsGVR).Namespace("ai-grid-internal-models").Get(ctx, "tiny-llm", metav1.GetOptions{}); err == nil {
+	if _, err := client.Resource(testModelRefsGVR).Namespace("ai-grid-models").Get(ctx, "tiny-llm", metav1.GetOptions{}); err == nil {
 		t.Fatal("MaaSModelRef still present after Delete")
 	}
 }
@@ -146,7 +146,7 @@ func TestModelsGetEnrichesRolloutWorks(t *testing.T) {
 		"apiVersion": "cluster.open-cluster-management.io/v1beta1",
 		"kind":       "Placement",
 		"metadata": map[string]interface{}{
-			"name": "model-works-llm", "namespace": "ai-grid-internal-models",
+			"name": "model-works-llm", "namespace": "ai-grid-models",
 		},
 		"spec": map[string]interface{}{},
 	}}
@@ -154,7 +154,7 @@ func TestModelsGetEnrichesRolloutWorks(t *testing.T) {
 		"apiVersion": "work.open-cluster-management.io/v1alpha1",
 		"kind":       "ManifestWorkReplicaSet",
 		"metadata": map[string]interface{}{
-			"name": "model-works-llm", "namespace": "ai-grid-internal-models",
+			"name": "model-works-llm", "namespace": "ai-grid-models",
 		},
 		"status": map[string]interface{}{
 			"conditions": []interface{}{
@@ -186,7 +186,7 @@ func TestModelsGetEnrichesRolloutWorks(t *testing.T) {
 		"apiVersion": "serving.kserve.io/v1alpha2",
 		"kind":       "LLMInferenceService",
 		"metadata": map[string]interface{}{
-			"name": "works-llm", "namespace": "ai-grid-internal-models", "resourceVersion": "1",
+			"name": "works-llm", "namespace": "ai-grid-models", "resourceVersion": "1",
 			"labels": map[string]interface{}{"ai-grid/model": "works-llm"},
 		},
 		"spec": map[string]interface{}{
@@ -234,10 +234,10 @@ func TestModelsCreateWithPlacement(t *testing.T) {
 		t.Fatal("expected placement on created model")
 	}
 
-	if _, err := client.Resource(testPlacementGVR).Namespace("ai-grid-internal-models").Get(ctx, "model-placed-llm", metav1.GetOptions{}); err != nil {
+	if _, err := client.Resource(testPlacementGVR).Namespace("ai-grid-models").Get(ctx, "model-placed-llm", metav1.GetOptions{}); err != nil {
 		t.Fatalf("get Placement: %v", err)
 	}
-	if _, err := client.Resource(testMWRSGVR).Namespace("ai-grid-internal-models").Get(ctx, "model-placed-llm", metav1.GetOptions{}); err != nil {
+	if _, err := client.Resource(testMWRSGVR).Namespace("ai-grid-models").Get(ctx, "model-placed-llm", metav1.GetOptions{}); err != nil {
 		t.Fatalf("get ManifestWorkReplicaSet: %v", err)
 	}
 }
@@ -249,7 +249,7 @@ func TestModelsCreatePlacementAlreadyExistsKeepsPreexisting(t *testing.T) {
 		"kind":       "Placement",
 		"metadata": map[string]interface{}{
 			"name":      "model-preexist",
-			"namespace": "ai-grid-internal-models",
+			"namespace": "ai-grid-models",
 			"uid":       "preexisting-placement-uid",
 			"annotations": map[string]interface{}{
 				"gitops.example/owner": "keep-me",
@@ -270,14 +270,14 @@ func TestModelsCreatePlacementAlreadyExistsKeepsPreexisting(t *testing.T) {
 	_, err := srv.Create(ctx, &aigridv1.ModelsCreateRequest{Object: obj})
 	assertConnectCode(t, err, connect.CodeAlreadyExists)
 
-	got, getErr := client.Resource(testPlacementGVR).Namespace("ai-grid-internal-models").Get(ctx, "model-preexist", metav1.GetOptions{})
+	got, getErr := client.Resource(testPlacementGVR).Namespace("ai-grid-models").Get(ctx, "model-preexist", metav1.GetOptions{})
 	if getErr != nil {
 		t.Fatalf("preexisting Placement missing after compensate: %v", getErr)
 	}
 	if got.GetAnnotations()["gitops.example/owner"] != "keep-me" {
 		t.Fatalf("preexisting Placement mutated: %v", got.GetAnnotations())
 	}
-	if _, err := client.Resource(testLLMGVR).Namespace("ai-grid-internal-models").Get(ctx, "preexist", metav1.GetOptions{}); err == nil {
+	if _, err := client.Resource(testLLMGVR).Namespace("ai-grid-models").Get(ctx, "preexist", metav1.GetOptions{}); err == nil {
 		t.Fatal("LLMInferenceService should have been compensated away")
 	}
 }
@@ -330,7 +330,7 @@ func TestModelsDeleteResourceVersionPrecondition(t *testing.T) {
 	if sawRV != "7" {
 		t.Fatalf("DeleteOptions.ResourceVersion = %q, want 7", sawRV)
 	}
-	if _, getErr := client.Resource(testLLMGVR).Namespace("ai-grid-internal-models").Get(ctx, "rv-del", metav1.GetOptions{}); getErr != nil {
+	if _, getErr := client.Resource(testLLMGVR).Namespace("ai-grid-models").Get(ctx, "rv-del", metav1.GetOptions{}); getErr != nil {
 		t.Fatalf("model should remain after failed preconditioned delete: %v", getErr)
 	}
 }
@@ -342,7 +342,7 @@ func TestModelsDeleteGuardedBySubscription(t *testing.T) {
 	_ = unstructured.SetNestedSlice(sub.Object, []interface{}{
 		map[string]interface{}{
 			"name":      "guarded",
-			"namespace": "ai-grid-internal-models",
+			"namespace": "ai-grid-models",
 			"tokenRateLimits": []interface{}{
 				map[string]interface{}{"limit": int64(100), "window": "1m"},
 			},
@@ -449,7 +449,7 @@ func TestModelsUpdateReplicasScalingMutualExclusionNulls(t *testing.T) {
 	if err != nil {
 		t.Fatalf("replicas→scaling Update() error = %v", err)
 	}
-	llm, err := client.Resource(testLLMGVR).Namespace("ai-grid-internal-models").Get(ctx, "mode-switch", metav1.GetOptions{})
+	llm, err := client.Resource(testLLMGVR).Namespace("ai-grid-models").Get(ctx, "mode-switch", metav1.GetOptions{})
 	if err != nil {
 		t.Fatalf("get LLM: %v", err)
 	}
@@ -471,7 +471,7 @@ func TestModelsUpdateReplicasScalingMutualExclusionNulls(t *testing.T) {
 	if err != nil {
 		t.Fatalf("scaling→replicas Update() error = %v", err)
 	}
-	llm, err = client.Resource(testLLMGVR).Namespace("ai-grid-internal-models").Get(ctx, "mode-switch", metav1.GetOptions{})
+	llm, err = client.Resource(testLLMGVR).Namespace("ai-grid-models").Get(ctx, "mode-switch", metav1.GetOptions{})
 	if err != nil {
 		t.Fatalf("get LLM after reverse: %v", err)
 	}
@@ -607,7 +607,7 @@ func TestModelsDeleteGuardedByAuthPolicy(t *testing.T) {
 			"modelRefs": []interface{}{
 				map[string]interface{}{
 					"name":      "pol-guarded",
-					"namespace": "ai-grid-internal-models",
+					"namespace": "ai-grid-models",
 				},
 			},
 		},

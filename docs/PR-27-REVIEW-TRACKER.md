@@ -37,7 +37,7 @@
 | 12 | — | Fill rollout.works (+ P13 fields) | done | works[] from ManifestWorks + RBAC; fuller P13 fields still optional follow-up |
 | 13 | — | Locations (P7/P8) | done | ListLocations RPC + placement.locations enrichment |
 | 14 | — | Subscription Delete resource_version / If-Match | done | Delete resource_version → K8s precondition; Conflict→Aborted |
-| 15 | — | Agree models namespace | pending | |
+| 15 | — | Agree models namespace | done | Default `ai-grid-models`; `AI_GRID_MODELS_NAMESPACE` override kept |
 | 16 | — | resourceVersionToVersion int32 overflow→0 unlocks | later | Deferred: fail-closed or wider type; shared helper + console string-version ADR |
 | 17 | — | Fakeinfra duplicated resource-handler (P3) | pending | |
 | 18 | — | Retire draft Models/Subscriptions surfaces | pending | |
@@ -187,14 +187,14 @@
 - **Decision:** Accepted — match Models Delete version pattern.
 - **Implementation notes:** `SubscriptionsDeleteRequest.resource_version`; nonzero sets K8s Delete Preconditions; Conflict→Aborted via mapper. Generated OpenAPI/connect stubs included. Test asserts RV in DeleteOptions.
 
-### 15. Agree models namespace — Status: `pending`
+### 15. Agree models namespace — Status: `done`
 
 - **Source:** DaoDao #12
 - **Description:** Pick one default / env alignment between `ai-grid-internal-models` and `ai-grid-models` with console.
 - **Pros:** Delete guard and refs work correctly.
 - **Cons:** Cross-repo; renaming default can surprise deploys.
-- **Decision:**
-- **Implementation notes:**
+- **Decision:** Accepted — default `ai-grid-models` to match console; keep env override.
+- **Implementation notes:** Changed `defaultModelsNamespace`, main.go getEnv default, OpenShift deploy env, docs, fixtures, and tests to `ai-grid-models`. `AI_GRID_MODELS_NAMESPACE` still overrides.
 
 ### 16. resourceVersionToVersion int32 overflow→0 unlocks — Status: `later`
 

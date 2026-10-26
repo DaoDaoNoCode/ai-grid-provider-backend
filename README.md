@@ -55,7 +55,7 @@ cluster.open-cluster-management.io/v1/managedclusters
 
 Models RPCs use the same dynamic client against LLMInferenceService (and
 optional ACM Placement / ManifestWorkReplicaSet) plus a MaaSModelRef for
-catalog registration. Default namespace `ai-grid-internal-models` (override
+catalog registration. Default namespace `ai-grid-models` (override
 with `AI_GRID_MODELS_NAMESPACE`):
 
 ```text

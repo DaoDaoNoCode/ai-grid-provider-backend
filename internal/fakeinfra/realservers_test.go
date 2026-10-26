@@ -398,7 +398,7 @@ func modelsServer(t *testing.T, cfg *rest.Config) *servers.ModelsServer {
 	s, err := servers.NewModelsServer().
 		SetLogger(slog.New(slog.DiscardHandler)).
 		SetDynamicClient(client).
-		SetNamespace("ai-grid-internal-models").
+		SetNamespace("ai-grid-models").
 		SetSubscriptionNamespace("models-as-a-service").
 		SetManifestWorkReplicaSetEnabled(true).
 		Build()
