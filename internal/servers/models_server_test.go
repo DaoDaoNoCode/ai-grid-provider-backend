@@ -156,6 +156,46 @@ func TestModelsCreateWithPlacement(t *testing.T) {
 	}
 }
 
+func TestModelsCreatePlacementAlreadyExistsKeepsPreexisting(t *testing.T) {
+	t.Parallel()
+	preexisting := &unstructured.Unstructured{Object: map[string]interface{}{
+		"apiVersion": "cluster.open-cluster-management.io/v1beta1",
+		"kind":       "Placement",
+		"metadata": map[string]interface{}{
+			"name":      "model-preexist",
+			"namespace": "ai-grid-internal-models",
+			"uid":       "preexisting-placement-uid",
+			"annotations": map[string]interface{}{
+				"gitops.example/owner": "keep-me",
+			},
+		},
+		"spec": map[string]interface{}{},
+	}}
+	client := newModelsClient(preexisting)
+	srv := mustModelsServer(t, client)
+	ctx := context.Background()
+
+	obj := sampleModel("preexist")
+	obj.Spec.Placement = &aigridv1.ModelPlacement{
+		LabelSelector: &aigridv1.ModelLabelSelector{
+			MatchLabels: map[string]string{"ai-grid/enabled": "true"},
+		},
+	}
+	_, err := srv.Create(ctx, &aigridv1.ModelsCreateRequest{Object: obj})
+	assertConnectCode(t, err, connect.CodeAlreadyExists)
+
+	got, getErr := client.Resource(testPlacementGVR).Namespace("ai-grid-internal-models").Get(ctx, "model-preexist", metav1.GetOptions{})
+	if getErr != nil {
+		t.Fatalf("preexisting Placement missing after compensate: %v", getErr)
+	}
+	if got.GetAnnotations()["gitops.example/owner"] != "keep-me" {
+		t.Fatalf("preexisting Placement mutated: %v", got.GetAnnotations())
+	}
+	if _, err := client.Resource(testLLMGVR).Namespace("ai-grid-internal-models").Get(ctx, "preexist", metav1.GetOptions{}); err == nil {
+		t.Fatal("LLMInferenceService should have been compensated away")
+	}
+}
+
 func TestModelsCreateMWRSDisabled(t *testing.T) {
 	t.Parallel()
 	client := newModelsClient()

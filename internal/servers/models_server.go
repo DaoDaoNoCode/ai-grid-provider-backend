@@ -19,6 +19,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/dynamic"
 )
@@ -194,32 +195,48 @@ func (s *ModelsServer) Create(ctx context.Context, req *aigridv1.ModelsCreateReq
 		}
 	}
 
+	var createdRefs []createdObjectRef
 	deployment := llmInferenceServiceFromModel(object, s.namespace)
 	created, err := s.client.Resource(llmInferenceServicesResource).Namespace(s.namespace).Create(ctx, deployment, metav1.CreateOptions{})
 	if err != nil {
 		return nil, mapModelAPIError("create", id, err)
 	}
+	createdRefs = append(createdRefs, createdObjectRef{
+		gvr: llmInferenceServicesResource, name: created.GetName(), uid: created.GetUID(),
+	})
 
 	modelRef := maasModelRefFromModel(object, s.namespace)
-	if _, err := s.client.Resource(maasModelRefsResource).Namespace(s.namespace).Create(ctx, modelRef, metav1.CreateOptions{}); err != nil {
-		_ = s.client.Resource(llmInferenceServicesResource).Namespace(s.namespace).Delete(ctx, id, metav1.DeleteOptions{})
+	createdRef, err := s.client.Resource(maasModelRefsResource).Namespace(s.namespace).Create(ctx, modelRef, metav1.CreateOptions{})
+	if err != nil {
+		s.compensateCreate(ctx, createdRefs)
 		return nil, mapModelAPIError("create MaaSModelRef", id, err)
 	}
+	createdRefs = append(createdRefs, createdObjectRef{
+		gvr: maasModelRefsResource, name: createdRef.GetName(), uid: createdRef.GetUID(),
+	})
 
 	if hasPlacement {
 		placement := placementFromModel(object, s.namespace)
-		if _, err := s.client.Resource(placementsResource).Namespace(s.namespace).Create(ctx, placement, metav1.CreateOptions{}); err != nil {
-			s.compensateCreate(ctx, id)
+		createdPlacement, err := s.client.Resource(placementsResource).Namespace(s.namespace).Create(ctx, placement, metav1.CreateOptions{})
+		if err != nil {
+			s.compensateCreate(ctx, createdRefs)
 			return nil, mapModelAPIError("create Placement", id, err)
 		}
+		createdRefs = append(createdRefs, createdObjectRef{
+			gvr: placementsResource, name: createdPlacement.GetName(), uid: createdPlacement.GetUID(),
+		})
 		mwrs := mwrsFromModel(object, s.namespace, created)
-		if _, err := s.client.Resource(manifestWorkReplicaSetsResource).Namespace(s.namespace).Create(ctx, mwrs, metav1.CreateOptions{}); err != nil {
-			s.compensateCreate(ctx, id)
+		createdMWRS, err := s.client.Resource(manifestWorkReplicaSetsResource).Namespace(s.namespace).Create(ctx, mwrs, metav1.CreateOptions{})
+		if err != nil {
+			s.compensateCreate(ctx, createdRefs)
 			if apierrors.IsNotFound(err) {
 				return nil, connect.NewError(connect.CodeFailedPrecondition, "ManifestWorkReplicaSet feature gate disabled on hub")
 			}
 			return nil, mapModelAPIError("create ManifestWorkReplicaSet", id, err)
 		}
+		createdRefs = append(createdRefs, createdObjectRef{
+			gvr: manifestWorkReplicaSetsResource, name: createdMWRS.GetName(), uid: createdMWRS.GetUID(),
+		})
 	}
 
 	m := modelFromLLMInferenceService(*created)
@@ -401,12 +418,24 @@ func (s *ModelsServer) enrichPlacement(ctx context.Context, m *aigridv1.Model) {
 	}
 }
 
-func (s *ModelsServer) compensateCreate(ctx context.Context, id string) {
-	pname := placementNameForModel(id)
-	_ = s.client.Resource(manifestWorkReplicaSetsResource).Namespace(s.namespace).Delete(ctx, pname, metav1.DeleteOptions{})
-	_ = s.client.Resource(placementsResource).Namespace(s.namespace).Delete(ctx, pname, metav1.DeleteOptions{})
-	_ = s.client.Resource(maasModelRefsResource).Namespace(s.namespace).Delete(ctx, id, metav1.DeleteOptions{})
-	_ = s.client.Resource(llmInferenceServicesResource).Namespace(s.namespace).Delete(ctx, id, metav1.DeleteOptions{})
+// createdObjectRef records an object this Create call successfully made so
+// compensateCreate can delete only those UIDs (not preexisting GitOps objects).
+type createdObjectRef struct {
+	gvr  schema.GroupVersionResource
+	name string
+	uid  types.UID
+}
+
+func (s *ModelsServer) compensateCreate(ctx context.Context, refs []createdObjectRef) {
+	for i := len(refs) - 1; i >= 0; i-- {
+		r := refs[i]
+		opts := metav1.DeleteOptions{}
+		if r.uid != "" {
+			uid := r.uid
+			opts.Preconditions = &metav1.Preconditions{UID: &uid}
+		}
+		_ = s.client.Resource(r.gvr).Namespace(s.namespace).Delete(ctx, r.name, opts)
+	}
 }
 
 func (s *ModelsServer) requireMWRS(ctx context.Context) error {

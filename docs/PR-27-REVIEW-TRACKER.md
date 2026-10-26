@@ -28,7 +28,7 @@
 | 3 | — | List maps Forbidden→Internal | done | Typed K8s→Connect mapper on Models/Subscriptions List + coveringAuthPolicies |
 | 4 | — | Models Update writes unmasked spec.main fields | done | Exact main FieldMask paths; env-only no longer clears image |
 | 5 | — | Metadata maps merge instead of replace | done | Replace semantics via null removals; Models preserve owned labels |
-| 6 | — | Create compensation deletes preexisting Placement/MWRS | pending | |
+| 6 | — | Create compensation deletes preexisting Placement/MWRS | done | Compensate only UID-tracked creates from this call |
 | 7 | — | replicas↔scaling explicit null | pending | |
 | 8 | — | Subscription Delete swallows policy cleanup failure | pending | |
 | 9 | — | Reject negative Models List limit | pending | |
@@ -106,14 +106,14 @@
 - **Decision:** Accepted — whole-map replace with owned-label preservation.
 - **Implementation notes:** Added `replaceStringMapPatch` (nulls for removed keys). Models Update preserves `ai-grid/model` + `app.kubernetes.io/managed-by`. Subscriptions Update uses the same helper for labels/annotations. Tests cover `{}` clearing `remove-me`.
 
-### 6. Create compensation deletes preexisting Placement/MWRS — Status: `pending`
+### 6. Create compensation deletes preexisting Placement/MWRS — Status: `done`
 
 - **Source:** Theia #6; DaoDao #2
 - **Description:** Track UIDs of objects created during Create; compensate (delete) only those UIDs on failure—not preexisting GitOps objects.
 - **Pros:** Avoids deleting GitOps-managed objects; correct AlreadyExists handling.
 - **Cons:** Create bookkeeping; UID-preconditioned deletes.
-- **Decision:**
-- **Implementation notes:**
+- **Decision:** Accepted — compensate only objects this Create call made.
+- **Implementation notes:** Create appends `createdObjectRef{gvr,name,uid}` after each successful create; `compensateCreate` deletes those refs in reverse with UID preconditions. Preexisting Placement on AlreadyExists is left alone (test `TestModelsCreatePlacementAlreadyExistsKeepsPreexisting`).
 
 ### 7. replicas↔scaling explicit null — Status: `pending`
 
