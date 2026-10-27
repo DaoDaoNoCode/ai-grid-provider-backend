@@ -102,7 +102,8 @@ Use this for removing a field, changing a field's type, or renaming a field, RPC
    The breaking check fails on this PR, as it should. The PR description names the change,
    the consumers that have migrated (for the console: the pinned commit that no longer uses
    it), and why it's safe now. A maintainer then adds the `buf skip breaking` label, which
-   skips the check for that PR only.
+   skips the check for that PR only. Adding or removing the label reruns CI, so removing
+   the exception restores the breaking check for the current head.
 
 A field's type can never be changed in place. `int32` to `string` is always a new field.
 
@@ -151,8 +152,8 @@ but not implemented yet. So:
 
 1. Edit the proto. Follow [`API.md`](API.md) for shapes and names.
 2. `make generate`, then `make check-generated`.
-3. `cd proto && buf lint`.
-4. `cd proto && buf breaking --against '../.git#branch=main,subdir=proto'`. If it fails,
+3. `buf lint proto`.
+4. `buf breaking proto --against '.git#branch=main,subdir=proto'`. If it fails,
    follow the section above; don't merge a surprise break.
 5. Read the `docs/openapi` diff: does every REST path still say what you mean?
 6. Update `docs/UI_API_REFERENCE.md` and the comments in the proto. They're what the

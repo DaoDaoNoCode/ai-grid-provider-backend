@@ -53,7 +53,7 @@ clients are generated from it, so CI runs `buf lint` and, on pull requests,
 contract. Run the same check locally:
 
 ```sh
-cd proto && buf breaking --against '../.git#branch=main,subdir=proto'
+buf breaking proto --against '.git#branch=main,subdir=proto'
 ```
 
 ManagedCluster RPCs use the Kubernetes dynamic client against:

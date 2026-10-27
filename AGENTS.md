@@ -159,8 +159,8 @@ make acm-hub-down     # tear down ACM hub Helm release
 ### Required for protobuf or API changes
 
 ```bash
-cd proto && buf lint
-cd proto && buf breaking --against '../.git#branch=main,subdir=proto'   # docs/API_CONTRACT.md
+buf lint proto
+buf breaking proto --against '.git#branch=main,subdir=proto'   # docs/API_CONTRACT.md
 make generate
 git status --porcelain   # must print nothing
 make check-generated     # also catches output the protobuf no longer produces
