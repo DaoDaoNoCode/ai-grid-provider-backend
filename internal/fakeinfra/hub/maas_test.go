@@ -120,7 +120,7 @@ func TestShippedDefaultHasMAASFixtures(t *testing.T) {
 		t.Fatalf("default LLMInferenceServices = %d, want 1", len(fx.LLMInferenceServices))
 	}
 	llm := fx.LLMInferenceServices[0]
-	if llm.GetName() != "fixture-cpu-llm" || llm.GetNamespace() != "ai-grid-models" {
+	if llm.GetName() != "fixture-cpu-llm" || llm.GetNamespace() != "ai-grid-internal-models" {
 		t.Fatalf("LLMInferenceService = %s/%s", llm.GetNamespace(), llm.GetName())
 	}
 }

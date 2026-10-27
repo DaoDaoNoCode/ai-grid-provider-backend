@@ -22,7 +22,7 @@ func statusMessage(plural, name, namespace string, ready bool) string {
 }
 
 func modelReady(ready bool) map[string]string {
-	return map[string]string{modelsReadyCheck: statusMessage("llminferenceservices", "granite", "ai-grid-models", ready)}
+	return map[string]string{modelsReadyCheck: statusMessage("llminferenceservices", "granite", "ai-grid-internal-models", ready)}
 }
 
 func modelRefReady(ready bool) map[string]string {

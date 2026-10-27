@@ -43,14 +43,14 @@ func TestModelsGitCRUD(t *testing.T) {
 
 	deployment := readGitYAMLDocs(t, writer, "catalog/models/sim/deployment/deployment.yaml")
 	llm := deployment[0]
-	if llm.GetKind() != llmInferenceKind || llm.GetNamespace() != "ai-grid-models" || llm.GetAnnotations()[gitVersionAnnotation] != "1" {
+	if llm.GetKind() != llmInferenceKind || llm.GetNamespace() != "ai-grid-internal-models" || llm.GetAnnotations()[gitVersionAnnotation] != "1" {
 		t.Fatalf("deployment[0] kind = %q, namespace = %q, annotations = %v", llm.GetKind(), llm.GetNamespace(), llm.GetAnnotations())
 	}
 	if _, found, _ := unstructured.NestedMap(llm.Object, "spec", "router", "scheduler"); !found {
 		t.Fatal("LLMInferenceService has no spec.router.scheduler")
 	}
 	policy := deployment[1]
-	if policy.GetKind() != "NetworkPolicy" || policy.GetName() != "sim-grid" || policy.GetNamespace() != "ai-grid-models" {
+	if policy.GetKind() != "NetworkPolicy" || policy.GetName() != "sim-grid" || policy.GetNamespace() != "ai-grid-internal-models" {
 		t.Fatalf("deployment[1] kind = %q, name = %q, namespace = %q", policy.GetKind(), policy.GetName(), policy.GetNamespace())
 	}
 	if got, _, _ := unstructured.NestedString(policy.Object, "spec", "podSelector", "matchLabels", "app.kubernetes.io/name"); got != "sim" {

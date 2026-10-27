@@ -1,5 +1,5 @@
 {
-  "_comment": "LLMInferenceService CRs for Models List/Get against make dev-fake-poc. Namespace ai-grid-models matches AI_GRID_MODELS_NAMESPACE. Shape matches Models Create (hub-only, replicas=1).",
+  "_comment": "LLMInferenceService CRs for Models List/Get against make dev-fake-poc. Namespace ai-grid-internal-models matches AI_GRID_MODELS_NAMESPACE. Shape matches Models Create (hub-only, replicas=1).",
   "apiVersion": "serving.kserve.io/v1alpha2",
   "kind": "LLMInferenceServiceList",
   "metadata": {},
@@ -9,7 +9,7 @@
       "kind": "LLMInferenceService",
       "metadata": {
         "name": "fixture-cpu-llm",
-        "namespace": "ai-grid-models",
+        "namespace": "ai-grid-internal-models",
         "uid": "b1000001-0000-4000-8000-000000000001",
         "resourceVersion": "1",
         "generation": 1,

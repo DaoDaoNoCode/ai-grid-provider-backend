@@ -97,7 +97,8 @@ func (b *ModelsServerBuilder) SetGridNamespace(namespace string) *ModelsServerBu
 }
 
 // SetNamespace sets the namespace of the LLMInferenceService on the inference
-// spokes. Default ai-grid-models.
+// spokes. Default ai-grid-internal-models, the namespace the grid's
+// environment set-up enables for Grid routing on every inference spoke.
 func (b *ModelsServerBuilder) SetNamespace(namespace string) *ModelsServerBuilder {
 	b.namespace = namespace
 	return b

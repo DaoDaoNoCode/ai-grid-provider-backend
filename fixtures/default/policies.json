@@ -51,7 +51,7 @@
             "history": [
               {
                 "eventName": "ai-grid-policies.ai-grid-models-status.models-ready",
-                "message": "Compliant; notification - llminferenceservices [granite-3b] found as specified in namespace ai-grid-models"
+                "message": "Compliant; notification - llminferenceservices [granite-3b] found as specified in namespace ai-grid-internal-models"
               }
             ]
           }
@@ -79,7 +79,7 @@
             "history": [
               {
                 "eventName": "ai-grid-policies.ai-grid-models-status.models-ready",
-                "message": "NonCompliant; violation - llminferenceservices [granite-3b] found but not as specified in namespace ai-grid-models"
+                "message": "NonCompliant; violation - llminferenceservices [granite-3b] found but not as specified in namespace ai-grid-internal-models"
               }
             ]
           }

@@ -37,7 +37,7 @@
 | 12 | — | Fill rollout.works (+ P13 fields) | done | works[] from ManifestWorks + RBAC; fuller P13 fields still optional follow-up |
 | 13 | — | Locations (P7/P8) | done | ListLocations RPC + placement.locations enrichment |
 | 14 | — | Subscription Delete resource_version / If-Match | done | Delete resource_version → K8s precondition; Conflict→Aborted |
-| 15 | — | Agree models namespace | done | Default `ai-grid-models`; `AI_GRID_MODELS_NAMESPACE` override kept |
+| 15 | — | Agree models namespace | done | Default `ai-grid-models`; `AI_GRID_MODELS_NAMESPACE` override kept. Later reverted to `ai-grid-internal-models`, the namespace the grid enables on the spokes (`ai-grid-models` was the console mock's name) |
 | 16 | — | resourceVersionToVersion int32 overflow→0 unlocks | later | Deferred: fail-closed or wider type; shared helper + console string-version ADR |
 | 17 | — | Fakeinfra duplicated resource-handler (P3) | done | Shared writeNamespacedUpdate + decodeTypedObject |
 | 18 | — | Retire draft Models/Subscriptions surfaces | done | Draft protos, fake, fixtures, docs retired per workflow |
