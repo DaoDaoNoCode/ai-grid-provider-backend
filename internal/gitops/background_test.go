@@ -3,13 +3,13 @@ package gitops
 import (
 	"context"
 	"errors"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
 )
 
-// A writer whose clone fails answers ErrNotReady, with the clone's error,
-// until a retry succeeds; then it reads and commits as the clone does.
+// A writer whose clone fails answers ErrNotReady until a retry succeeds; then it reads and commits as the clone does.
 func TestBackgroundWriterRetriesTheClone(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -29,8 +29,10 @@ func TestBackgroundWriterRetriesTheClone(t *testing.T) {
 	for attempts.Load() < 3 && time.Now().Before(deadline) {
 		time.Sleep(time.Millisecond)
 	}
-	if _, err := w.Head(ctx); !errors.Is(err, ErrNotReady) || !errors.Is(err, cloneErr) {
-		t.Fatalf("Head() before the clone error = %v, want ErrNotReady wrapping the clone error", err)
+	// The clone's error stays in the log: it can name the host and the
+	// credential failure, and the API passes this error's text to clients.
+	if _, err := w.Head(ctx); !errors.Is(err, ErrNotReady) || strings.Contains(err.Error(), cloneErr.Error()) {
+		t.Fatalf("Head() before the clone error = %v, want ErrNotReady without the clone error", err)
 	}
 	if _, err := w.Commit(ctx, "0", Change{Put: map[string][]byte{"b.yaml": []byte("b")}, Message: "add b"}); !errors.Is(err, ErrNotReady) {
 		t.Fatalf("Commit() before the clone error = %v, want ErrNotReady", err)

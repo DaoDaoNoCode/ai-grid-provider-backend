@@ -3,14 +3,14 @@ package gitops
 import (
 	"context"
 	"errors"
-	"fmt"
 	"log/slog"
 	"sync"
 	"time"
 )
 
 // ErrNotReady reports a call before the repository's first clone succeeded.
-// It wraps the clone's latest error.
+// The clone's error is logged, not returned: it can name the host and the
+// credential failure, and the API passes this error's text to clients.
 var ErrNotReady = errors.New("gitops: repository not cloned yet")
 
 // maxCloneRetry caps the wait between clone attempts.
@@ -21,9 +21,8 @@ const maxCloneRetry = time.Minute
 // unreachable or the token is wrong. Until a clone succeeds, Head and Commit
 // fail with ErrNotReady.
 type BackgroundWriter struct {
-	mu      sync.RWMutex
-	writer  Writer
-	lastErr error
+	mu     sync.RWMutex
+	writer Writer
 }
 
 var _ Writer = (*BackgroundWriter)(nil)
@@ -31,15 +30,15 @@ var _ Writer = (*BackgroundWriter)(nil)
 // StartBackgroundWriter calls open until it succeeds or ctx is done, waiting
 // retry after the first failure and doubling the wait up to a minute.
 func StartBackgroundWriter(ctx context.Context, open func(context.Context) (Writer, error), retry time.Duration) *BackgroundWriter {
-	w := &BackgroundWriter{lastErr: errors.New("clone in progress")}
+	w := &BackgroundWriter{}
 	go func() {
 		wait := retry
 		for {
 			writer, err := open(ctx)
-			w.mu.Lock()
-			w.writer, w.lastErr = writer, err
-			w.mu.Unlock()
 			if err == nil {
+				w.mu.Lock()
+				w.writer = writer
+				w.mu.Unlock()
 				slog.Info("git repository cloned")
 				return
 			}
@@ -59,7 +58,7 @@ func (w *BackgroundWriter) ready() (Writer, error) {
 	w.mu.RLock()
 	defer w.mu.RUnlock()
 	if w.writer == nil {
-		return nil, fmt.Errorf("%w: %w", ErrNotReady, w.lastErr)
+		return nil, ErrNotReady
 	}
 	return w.writer, nil
 }
