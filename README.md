@@ -63,7 +63,7 @@ status from the hub's ACM Policies ([Status](#status-from-the-spokes)).
 
 | Setting | Meaning |
 |---|---|
-| `AI_GRID_GIT_URL` | Repository URL, without credentials. Required: the backend doesn't start without it. A `file://` URL or local path is served in-process, so the image needs no `git`. |
+| `AI_GRID_GIT_URL` | Repository URL, without credentials. Required: the backend doesn't start without it. The backend clones it in the background and retries a failed clone, waiting up to a minute between attempts; until a clone succeeds, Models and Subscriptions answer `Unavailable` and the other APIs serve as usual. A `file://` URL or local path is served in-process, so the image needs no `git`. |
 | `AI_GRID_GIT_BRANCH` | Branch to commit to. Default `main`. It must have at least one commit. |
 | `AI_GRID_GIT_TOKEN_FILE` | File holding a GitHub personal access token with `contents: write` on that repository only, for example a mounted Secret. Sent as HTTPS basic auth; never logged. |
 | `AI_GRID_MODELS_NAMESPACE` | Namespace of each model's `LLMInferenceService` on the inference spokes. Default `ai-grid-models`. |

@@ -203,10 +203,13 @@ func getEnv(name, fallback string) string {
 	return fallback
 }
 
-// newGitWriter clones the repository Models and Subscriptions commit to. The token is
-// read from a file, a mounted Secret, so it never appears in the environment
-// or in logs.
-func newGitWriter() (*gitops.RepoWriter, error) {
+// newGitWriter clones the repository Models and Subscriptions commit to, in
+// the background: a Git host that is down, or a wrong token, makes Models and
+// Subscriptions answer Unavailable until a retry succeeds, and leaves the other
+// APIs serving. Missing or bad settings are still an error at startup. The
+// token is read from a file, a mounted Secret, so it never appears in the
+// environment or in logs.
+func newGitWriter() (gitops.Writer, error) {
 	cfg := gitops.RepoConfig{
 		URL:         os.Getenv("AI_GRID_GIT_URL"),
 		Branch:      getEnv("AI_GRID_GIT_BRANCH", "main"),
@@ -226,14 +229,12 @@ func newGitWriter() (*gitops.RepoWriter, error) {
 		}
 		cfg.Token = strings.TrimSpace(string(token))
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
-	defer cancel()
-	writer, err := gitops.NewRepoWriter(ctx, cfg)
-	if err != nil {
-		return nil, err
-	}
 	slog.Info("git write mode", "url", cfg.URL, "branch", cfg.Branch)
-	return writer, nil
+	return gitops.StartBackgroundWriter(context.Background(), func(ctx context.Context) (gitops.Writer, error) {
+		ctx, cancel := context.WithTimeout(ctx, time.Minute)
+		defer cancel()
+		return gitops.NewRepoWriter(ctx, cfg)
+	}, time.Second), nil
 }
 
 func newDynamicClient(kubeconfig string) (dynamic.Interface, error) {

@@ -2,9 +2,11 @@ package servers
 
 import (
 	"context"
+	"errors"
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	connect "connectrpc.com/connect/v2"
 	aigridv1 "github.com/osac-project/ai-grid-provider-backend/gen/ai_grid/v1"
@@ -528,4 +530,18 @@ func TestModelsGitListFilterOrderPaging(t *testing.T) {
 	negative := int32(-1)
 	_, err = srv.List(ctx, &aigridv1.ModelsListRequest{Limit: &negative})
 	assertConnectCode(t, err, connect.CodeInvalidArgument)
+}
+
+// Until the repository is cloned, Models and Subscriptions answer
+// Unavailable, so a client can retry.
+func TestGitNotClonedIsUnavailable(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	writer := gitops.StartBackgroundWriter(ctx, func(context.Context) (gitops.Writer, error) {
+		return nil, errors.New("clone: host unreachable")
+	}, time.Hour)
+	_, err := mustGitModelsServer(t, writer).List(ctx, &aigridv1.ModelsListRequest{})
+	assertConnectCode(t, err, connect.CodeUnavailable)
+	_, err = mustGitSubscriptionsServer(t, writer).Get(ctx, &aigridv1.SubscriptionsGetRequest{Id: "team-a"})
+	assertConnectCode(t, err, connect.CodeUnavailable)
 }
