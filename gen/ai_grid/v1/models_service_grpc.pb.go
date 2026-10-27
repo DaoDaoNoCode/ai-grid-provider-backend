@@ -31,13 +31,15 @@ const (
 //
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 //
-// Models manage LLMInferenceService deployments (optionally placed via ACM).
-// Create also writes a MaaSModelRef for catalog registration.
+// Models manage LLMInferenceService deployments in the backend's Git catalog,
+// placed on clusters by name. Create also writes the ExternalModel and
+// MaaSModelRef that register the model on the ingress clusters.
 type ModelsClient interface {
 	List(ctx context.Context, in *ModelsListRequest, opts ...grpc.CallOption) (*ModelsListResponse, error)
 	Get(ctx context.Context, in *ModelsGetRequest, opts ...grpc.CallOption) (*ModelsGetResponse, error)
-	// Creates (= deploys) a model: LLMInferenceService, optional Placement +
-	// ManifestWorkReplicaSet, and MaaSModelRef.
+	// Creates (= deploys) a model: commits its LLMInferenceService to the
+	// placed clusters' indexes, and its ExternalModel and MaaSModelRef to the
+	// ingress index, in the Git catalog.
 	Create(ctx context.Context, in *ModelsCreateRequest, opts ...grpc.CallOption) (*ModelsCreateResponse, error)
 	Update(ctx context.Context, in *ModelsUpdateRequest, opts ...grpc.CallOption) (*ModelsUpdateResponse, error)
 	Delete(ctx context.Context, in *ModelsDeleteRequest, opts ...grpc.CallOption) (*ModelsDeleteResponse, error)
@@ -119,13 +121,15 @@ func (c *modelsClient) ListLocations(ctx context.Context, in *ModelsListLocation
 // All implementations must embed UnimplementedModelsServer
 // for forward compatibility.
 //
-// Models manage LLMInferenceService deployments (optionally placed via ACM).
-// Create also writes a MaaSModelRef for catalog registration.
+// Models manage LLMInferenceService deployments in the backend's Git catalog,
+// placed on clusters by name. Create also writes the ExternalModel and
+// MaaSModelRef that register the model on the ingress clusters.
 type ModelsServer interface {
 	List(context.Context, *ModelsListRequest) (*ModelsListResponse, error)
 	Get(context.Context, *ModelsGetRequest) (*ModelsGetResponse, error)
-	// Creates (= deploys) a model: LLMInferenceService, optional Placement +
-	// ManifestWorkReplicaSet, and MaaSModelRef.
+	// Creates (= deploys) a model: commits its LLMInferenceService to the
+	// placed clusters' indexes, and its ExternalModel and MaaSModelRef to the
+	// ingress index, in the Git catalog.
 	Create(context.Context, *ModelsCreateRequest) (*ModelsCreateResponse, error)
 	Update(context.Context, *ModelsUpdateRequest) (*ModelsUpdateResponse, error)
 	Delete(context.Context, *ModelsDeleteRequest) (*ModelsDeleteResponse, error)

@@ -87,8 +87,9 @@ var (
 type ModelsClient interface {
 	List(context.Context, *v1.ModelsListRequest) (*v1.ModelsListResponse, error)
 	Get(context.Context, *v1.ModelsGetRequest) (*v1.ModelsGetResponse, error)
-	// Creates (= deploys) a model: LLMInferenceService, optional Placement +
-	// ManifestWorkReplicaSet, and MaaSModelRef.
+	// Creates (= deploys) a model: commits its LLMInferenceService to the
+	// placed clusters' indexes, and its ExternalModel and MaaSModelRef to the
+	// ingress index, in the Git catalog.
 	Create(context.Context, *v1.ModelsCreateRequest) (*v1.ModelsCreateResponse, error)
 	Update(context.Context, *v1.ModelsUpdateRequest) (*v1.ModelsUpdateResponse, error)
 	Delete(context.Context, *v1.ModelsDeleteRequest) (*v1.ModelsDeleteResponse, error)
@@ -108,8 +109,9 @@ func NewModelsClient(client *connect.Client) ModelsClient {
 type ModelsHandler interface {
 	List(context.Context, *v1.ModelsListRequest) (*v1.ModelsListResponse, error)
 	Get(context.Context, *v1.ModelsGetRequest) (*v1.ModelsGetResponse, error)
-	// Creates (= deploys) a model: LLMInferenceService, optional Placement +
-	// ManifestWorkReplicaSet, and MaaSModelRef.
+	// Creates (= deploys) a model: commits its LLMInferenceService to the
+	// placed clusters' indexes, and its ExternalModel and MaaSModelRef to the
+	// ingress index, in the Git catalog.
 	Create(context.Context, *v1.ModelsCreateRequest) (*v1.ModelsCreateResponse, error)
 	Update(context.Context, *v1.ModelsUpdateRequest) (*v1.ModelsUpdateResponse, error)
 	Delete(context.Context, *v1.ModelsDeleteRequest) (*v1.ModelsDeleteResponse, error)

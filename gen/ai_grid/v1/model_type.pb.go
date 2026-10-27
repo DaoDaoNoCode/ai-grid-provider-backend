@@ -130,9 +130,10 @@ func (ModelPhase) EnumDescriptor() ([]byte, []int) {
 
 // Model is a deployable LLM inference workload on the AI Grid.
 //
-// It maps to a hub LLMInferenceService (serving.kserve.io/v1alpha2) plus an
-// optional ACM Placement and ManifestWorkReplicaSet that distribute the
-// workload to managed clusters, and a MaaSModelRef for catalog registration.
+// It is committed to the backend's Git catalog: an LLMInferenceService
+// (serving.kserve.io/v1alpha2) that Argo CD delivers to the clusters the
+// placement names, and an ExternalModel and MaaSModelRef that publish it
+// through the grid on the ingress clusters.
 //
 // The `spec` contains the desired details and may be modified by the user.
 // The `status` contains the current status and is provided by the system.
@@ -222,10 +223,12 @@ type ModelSpec struct {
 	Main *ModelContainer `protobuf:"bytes,6,opt,name=main,proto3" json:"main,omitempty"`
 	// Autoscaling. Mutually exclusive with replicas.
 	Scaling *ModelScaling `protobuf:"bytes,7,opt,name=scaling,proto3" json:"scaling,omitempty"`
-	// Where to deploy. Unset: hub-only LLMInferenceService.
-	// Set: ACM Placement + ManifestWorkReplicaSet named model-<id>.
+	// Where to deploy. Required: names at least one cluster by the ACM `name`
+	// label (`name In [...]` or a `name` match label); the model is listed in
+	// each named cluster's index in the Git catalog.
 	Placement *ModelPlacement `protobuf:"bytes,8,opt,name=placement,proto3" json:"placement,omitempty"`
-	// ManifestWorkReplicaSet rollout. Only meaningful with placement; unset means All.
+	// Rollout. Only strategy All (the default) is accepted: Argo CD delivers to
+	// every placed cluster at once.
 	Rollout       *ModelRollout `protobuf:"bytes,9,opt,name=rollout,proto3" json:"rollout,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache

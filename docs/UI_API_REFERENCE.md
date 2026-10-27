@@ -497,7 +497,7 @@ Argo CD delivers it; the backend never writes to a cluster. Each model is an
 `LLMInferenceService` and a NetworkPolicy in `AI_GRID_MODELS_NAMESPACE`
 (default `ai-grid-models`) on the clusters its placement names, and an
 `ExternalModel` and `MaaSModelRef` in `AI_GRID_SUBSCRIPTION_NAMESPACE` on the
-ingress clusters. See README "Git write mode" for the repository layout.
+ingress clusters. See README "Git catalog" for the repository layout.
 
 `spec.placement` is required and names at least one cluster, by the ACM
 `name` label only (`name In [...]` or a `name` match label); cluster sets, other labels,
