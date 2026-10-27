@@ -182,7 +182,7 @@ func TestSubscriptionsGitStatus(t *testing.T) {
 			if tc.forbid {
 				forbidPolicies(client)
 			}
-			srv, err := NewSubscriptionsServer().SetWriter(gitops.NewMemoryWriter(nil)).
+			srv, err := NewSubscriptionsServer().SetWriter(gitops.NewMemoryWriter(gitModelSeed("sim-model"))).
 				SetCatalogStatus(NewCatalogStatusReader(client, "")).Build()
 			if err != nil {
 				t.Fatalf("Build() error = %v", err)

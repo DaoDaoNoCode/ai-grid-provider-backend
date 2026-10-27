@@ -488,8 +488,11 @@ func startTestClient(t *testing.T, objects []runtime.Object, orgs organizationCl
 	if err != nil {
 		t.Fatalf("build Tenants server: %v", err)
 	}
-	// Models and Subscriptions commit to a Git repository; an empty one here.
-	writer := gitops.NewMemoryWriter(nil)
+	// Models and Subscriptions commit to a Git repository: here an in-memory
+	// one holding only model sim-model's file, for subscriptions to refer to.
+	writer := gitops.NewMemoryWriter(map[string][]byte{
+		"catalog/models/sim-model/deployment/deployment.yaml": []byte("seed"),
+	})
 	modelsServer, err := servers.NewModelsServer().
 		SetWriter(writer).
 		SetDynamicClient(dynamicClient).

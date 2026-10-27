@@ -2,6 +2,7 @@ package servers
 
 import (
 	"context"
+	"path"
 	"slices"
 	"strings"
 	"testing"
@@ -18,7 +19,7 @@ const testOrgID = "0b6c2f1e-org"
 func TestSubscriptionsGitCRUD(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	writer := gitops.NewMemoryWriter(nil)
+	writer := gitops.NewMemoryWriter(gitModelSeed("sim-model"))
 	srv := mustGitSubscriptionsServer(t, writer)
 
 	created, err := srv.Create(ctx, &aigridv1.SubscriptionsCreateRequest{Object: gitSampleSubscription("team-a")})
@@ -108,7 +109,7 @@ func TestSubscriptionsGitCRUD(t *testing.T) {
 func TestSubscriptionsGitDeleteWithoutVersion(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	srv := mustGitSubscriptionsServer(t, gitops.NewMemoryWriter(nil))
+	srv := mustGitSubscriptionsServer(t, gitops.NewMemoryWriter(gitModelSeed("sim-model")))
 	if _, err := srv.Create(ctx, &aigridv1.SubscriptionsCreateRequest{Object: gitSampleSubscription("team-a")}); err != nil {
 		t.Fatalf("Create() error = %v", err)
 	}
@@ -122,7 +123,7 @@ func TestSubscriptionsGitDeleteWithoutVersion(t *testing.T) {
 func TestSubscriptionsGitUpdateMasks(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	writer := gitops.NewMemoryWriter(nil)
+	writer := gitops.NewMemoryWriter(gitModelSeed("sim-model"))
 	srv := mustGitSubscriptionsServer(t, writer)
 	if _, err := srv.Create(ctx, &aigridv1.SubscriptionsCreateRequest{Object: gitSampleSubscription("team-a")}); err != nil {
 		t.Fatalf("Create() error = %v", err)
@@ -180,7 +181,7 @@ func TestSubscriptionsGitUpdateMasks(t *testing.T) {
 func TestSubscriptionsGitValidation(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	srv := mustGitSubscriptionsServer(t, gitops.NewMemoryWriter(nil))
+	srv := mustGitSubscriptionsServer(t, gitops.NewMemoryWriter(gitModelSeed("sim-model")))
 
 	noOrg := gitSampleSubscription("team-a")
 	noOrg.Spec.Organization = nil
@@ -239,7 +240,7 @@ func TestSubscriptionsGitOwnerGroups(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			ctx := context.Background()
-			writer := gitops.NewMemoryWriter(nil)
+			writer := gitops.NewMemoryWriter(gitModelSeed("sim-model"))
 			srv := mustGitSubscriptionsServer(t, writer)
 			object := gitSampleSubscription("team-a")
 			object.Spec.Owner.Groups = tc.groups
@@ -269,7 +270,7 @@ func TestSubscriptionsGitOwnerGroups(t *testing.T) {
 func TestSubscriptionsGitUpdateRejectsForeignGroup(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	srv := mustGitSubscriptionsServer(t, gitops.NewMemoryWriter(nil))
+	srv := mustGitSubscriptionsServer(t, gitops.NewMemoryWriter(gitModelSeed("sim-model")))
 	if _, err := srv.Create(ctx, &aigridv1.SubscriptionsCreateRequest{Object: gitSampleSubscription("team-a")}); err != nil {
 		t.Fatalf("Create() error = %v", err)
 	}
@@ -286,7 +287,7 @@ func TestSubscriptionsGitUpdateRejectsForeignGroup(t *testing.T) {
 func TestSubscriptionsGitConcurrentWrite(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	writer := &racingWriter{MemoryWriter: gitops.NewMemoryWriter(nil)}
+	writer := &racingWriter{MemoryWriter: gitops.NewMemoryWriter(gitModelSeed("sim-model"))}
 	srv := mustGitSubscriptionsServer(t, writer)
 	if _, err := srv.Create(ctx, &aigridv1.SubscriptionsCreateRequest{Object: gitSampleSubscription("team-a")}); err != nil {
 		t.Fatalf("Create() error = %v", err)
@@ -311,7 +312,8 @@ func TestSubscriptionsGitListFilter(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	srv := mustGitSubscriptionsServer(t, gitops.NewMemoryWriter(map[string][]byte{
-		subscriptionsGitDir + "/README.md": []byte("not a subscription"),
+		subscriptionsGitDir + "/README.md":                               []byte("not a subscription"),
+		path.Join(modelDeploymentGitDir("sim-model"), "deployment.yaml"): []byte("seed"),
 	}))
 	for _, id := range []string{"team-a", "team-b"} {
 		if _, err := srv.Create(ctx, &aigridv1.SubscriptionsCreateRequest{Object: gitSampleSubscription(id)}); err != nil {
@@ -343,7 +345,7 @@ func TestSubscriptionsGitRejectsBrokenFile(t *testing.T) {
 // subscription's own namespace, where the Models API writes MaaSModelRefs.
 func TestSubscriptionsGitModelRefNamespaceDefault(t *testing.T) {
 	t.Parallel()
-	writer := gitops.NewMemoryWriter(nil)
+	writer := gitops.NewMemoryWriter(gitModelSeed("sim-model"))
 	srv := mustGitSubscriptionsServer(t, writer)
 
 	object := gitSampleSubscription("team-a")
@@ -359,6 +361,52 @@ func TestSubscriptionsGitModelRefNamespaceDefault(t *testing.T) {
 			t.Fatalf("file %s modelRefs = %v, want namespace models-as-a-service", obj.GetKind(), refs)
 		}
 	}
+}
+
+// A model ref in the subscription namespace must name a model in the
+// repository, on Create and on Update; a ref to another namespace isn't
+// checked, because the Models API doesn't write there.
+func TestSubscriptionsGitModelRefsMustExist(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	writer := gitops.NewMemoryWriter(gitModelSeed("sim-model"))
+	srv := mustGitSubscriptionsServer(t, writer)
+
+	missing := gitSampleSubscription("team-a")
+	missing.Spec.ModelRefs[0].Name = "no-such-model"
+	_, err := srv.Create(ctx, &aigridv1.SubscriptionsCreateRequest{Object: missing})
+	assertConnectCode(t, err, connect.CodeFailedPrecondition)
+	missing.Spec.ModelRefs[0].Namespace = "models-as-a-service"
+	_, err = srv.Create(ctx, &aigridv1.SubscriptionsCreateRequest{Object: missing})
+	assertConnectCode(t, err, connect.CodeFailedPrecondition)
+
+	if _, err := srv.Create(ctx, &aigridv1.SubscriptionsCreateRequest{Object: gitSampleSubscription("team-a")}); err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	update := gitSampleSubscription("team-a")
+	update.Spec.ModelRefs[0].Name = "no-such-model"
+	_, err = srv.Update(ctx, &aigridv1.SubscriptionsUpdateRequest{Object: update, UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.model_refs"}}})
+	assertConnectCode(t, err, connect.CodeFailedPrecondition)
+
+	other := gitSampleSubscription("team-b")
+	other.Spec.ModelRefs[0].Name = "elsewhere"
+	other.Spec.ModelRefs[0].Namespace = "other-namespace"
+	if _, err := srv.Create(ctx, &aigridv1.SubscriptionsCreateRequest{Object: other}); err != nil {
+		t.Fatalf("Create(ref in another namespace) error = %v", err)
+	}
+	if n := len(writer.Messages()); n != 2 {
+		t.Fatalf("commits = %d, want the two accepted creates", n)
+	}
+}
+
+// gitModelSeed returns repository files in which each model id exists, for
+// subscriptions to refer to.
+func gitModelSeed(ids ...string) map[string][]byte {
+	files := make(map[string][]byte, len(ids))
+	for _, id := range ids {
+		files[path.Join(modelDeploymentGitDir(id), "deployment.yaml")] = []byte("seed")
+	}
+	return files
 }
 
 // racingWriter runs race, once, between a Head and the Commit that follows it.
@@ -458,7 +506,7 @@ func groupNames(t *testing.T, obj *unstructured.Unstructured, fields ...string) 
 func TestSubscriptionsGitMetadataKeyAllowlist(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	writer := gitops.NewMemoryWriter(nil)
+	writer := gitops.NewMemoryWriter(gitModelSeed("sim-model"))
 	srv := mustGitSubscriptionsServer(t, writer)
 	allowed := gitSampleSubscription("team-a")
 	allowed.Metadata.Labels = map[string]string{"team": "a", "env": "dev"}

@@ -568,7 +568,8 @@ OSAC shape: `id` + `metadata` + `spec` + `status`. `id` equals `metadata.name`.
 (a group already prefixed with the same organization is accepted; another
 organization's prefix is `InvalidArgument`); the file holds
 `<organization>/<group>`, and reads return the bare names. A model ref without
-a namespace gets the subscription namespace. Labels and annotations take only
+a namespace gets the subscription namespace, and a ref in that namespace must
+name an existing model (`FailedPrecondition` otherwise). Labels and annotations take only
 unprefixed keys plus `openshift.io/display-name` and
 `openshift.io/description`.
 

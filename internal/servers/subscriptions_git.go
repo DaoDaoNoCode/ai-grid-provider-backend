@@ -175,6 +175,9 @@ func (s *SubscriptionsServer) gitCreate(ctx context.Context, object *aigridv1.Su
 	} else if !errors.Is(err, gitops.ErrNotFound) {
 		return nil, subscriptionGitError("create", id, err)
 	}
+	if err := s.gitEnsureModelsExist(head, "create", object); err != nil {
+		return nil, err
+	}
 	doc, err := s.gitCommit(ctx, head.Revision(), "create", object, 1)
 	if err != nil {
 		return nil, err
@@ -226,6 +229,9 @@ func (s *SubscriptionsServer) gitUpdate(ctx context.Context, req *aigridv1.Subsc
 		if _, err := qualifiedOwnerGroups(candidate.GetSpec()); err != nil {
 			return nil, err
 		}
+		if err := s.gitEnsureModelsExist(head, "update", candidate); err != nil {
+			return nil, err
+		}
 	}
 	doc, err := s.gitCommit(ctx, head.Revision(), "update", candidate, currentVersion+1)
 	if err != nil {
@@ -256,6 +262,27 @@ func (s *SubscriptionsServer) gitDelete(ctx context.Context, id string, version 
 	})
 	if err != nil {
 		return subscriptionGitError("delete", id, err)
+	}
+	return nil
+}
+
+// gitEnsureModelsExist refuses a subscription with a model ref, in the
+// subscription namespace, to a model the repository doesn't have: Argo CD
+// would apply a MaaSSubscription naming a MaaSModelRef that doesn't exist. A
+// ref to another namespace isn't checked, because the Models API doesn't
+// write there.
+func (s *SubscriptionsServer) gitEnsureModelsExist(head gitops.Snapshot, op string, object *aigridv1.Subscription) error {
+	for _, ref := range object.GetSpec().GetModelRefs() {
+		if ref.GetNamespace() != "" && ref.GetNamespace() != s.namespace {
+			continue
+		}
+		_, err := head.Read(path.Join(modelDeploymentGitDir(ref.GetName()), "deployment.yaml"))
+		if errors.Is(err, gitops.ErrNotFound) {
+			return connect.Errorf(connect.CodeFailedPrecondition, "spec.model_refs: Model %q does not exist", ref.GetName())
+		}
+		if err != nil {
+			return subscriptionGitError(op, subscriptionID(object), err)
+		}
 	}
 	return nil
 }

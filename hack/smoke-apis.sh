@@ -38,6 +38,7 @@ smoke_model_grpc="ai-grid-smk-g-${smoke_suffix}"
 smoke_model_rest="ai-grid-smk-r-${smoke_suffix}"
 smoke_sub_grpc="ai-grid-smk-g-${smoke_suffix}"
 smoke_sub_rest="ai-grid-smk-r-${smoke_suffix}"
+smoke_sub_model="ai-grid-smk-m-${smoke_suffix}"
 
 # Resources created during smoke; deleted on EXIT even if a mid-CRUD call fails.
 cleanup_cluster_ids=()
@@ -57,15 +58,16 @@ smoke_cleanup() {
     grpcurl -plaintext -d "{\"id\":\"${id}\"}" "$addr" ai_grid.v1.Tenants/Delete >/dev/null 2>&1 || true
     curl -sS -o /dev/null -X DELETE "${http_addr}/api/v1/tenants/${id}" >/dev/null 2>&1 || true
   done
-  for id in "${cleanup_model_ids[@]+"${cleanup_model_ids[@]}"}"; do
-    [[ -n "$id" ]] || continue
-    grpcurl -plaintext -d "{\"id\":\"${id}\"}" "$addr" ai_grid.v1.Models/Delete >/dev/null 2>&1 || true
-    curl -sS -o /dev/null -X DELETE "${http_addr}/api/v1/models/${id}" >/dev/null 2>&1 || true
-  done
+  # Subscriptions first: a model a subscription names can't be deleted.
   for id in "${cleanup_subscription_ids[@]+"${cleanup_subscription_ids[@]}"}"; do
     [[ -n "$id" ]] || continue
     grpcurl -plaintext -d "{\"id\":\"${id}\"}" "$addr" ai_grid.v1.Subscriptions/Delete >/dev/null 2>&1 || true
     curl -sS -o /dev/null -X DELETE "${http_addr}/api/v1/subscriptions/${id}" >/dev/null 2>&1 || true
+  done
+  for id in "${cleanup_model_ids[@]+"${cleanup_model_ids[@]}"}"; do
+    [[ -n "$id" ]] || continue
+    grpcurl -plaintext -d "{\"id\":\"${id}\"}" "$addr" ai_grid.v1.Models/Delete >/dev/null 2>&1 || true
+    curl -sS -o /dev/null -X DELETE "${http_addr}/api/v1/models/${id}" >/dev/null 2>&1 || true
   done
 }
 trap smoke_cleanup EXIT
@@ -316,6 +318,10 @@ else
   if ! grpcurl -plaintext -d '{}' "$addr" ai_grid.v1.Subscriptions/List >/dev/null 2>&1; then
     printf '\n==> skipping Subscriptions (List failed; check AI_GRID_GIT_URL)\n'
   else
+    # A subscription must name a model in the catalog.
+    grpcurl -plaintext -d "{\"object\":{\"id\":\"${smoke_sub_model}\",\"spec\":{\"model\":{\"uri\":\"hf://facebook/opt-125m\"},\"replicas\":1,\"placement\":{\"label_selector\":{\"match_expressions\":[{\"key\":\"name\",\"operator\":\"In\",\"values\":[\"site-paris-1\"]}]}}}}}" \
+      "$addr" ai_grid.v1.Models/Create >/dev/null 2>&1 || true
+    cleanup_model_ids+=("$smoke_sub_model")
     call_grpc 'Subscriptions/List' '{}' 'ai_grid.v1.Subscriptions/List'
     call_grpc 'Subscriptions/List (limit=1)' '{"limit":1}' 'ai_grid.v1.Subscriptions/List'
     grpcurl -plaintext -d "{\"id\":\"${smoke_sub_grpc}\"}" "$addr" \
@@ -323,13 +329,13 @@ else
 
     before_failed=$failed
     call_grpc 'Subscriptions/Create' \
-      "{\"object\":{\"id\":\"${smoke_sub_grpc}\",\"metadata\":{\"name\":\"${smoke_sub_grpc}\"},\"spec\":{\"organization\":{\"id\":\"smoke-org\"},\"owner\":{\"groups\":[\"smoke\"]},\"model_refs\":[{\"name\":\"tiny-llm\",\"token_rate_limits\":[{\"limit\":50,\"window\":\"1m\"}]}],\"priority\":5}}}" \
+      "{\"object\":{\"id\":\"${smoke_sub_grpc}\",\"metadata\":{\"name\":\"${smoke_sub_grpc}\"},\"spec\":{\"organization\":{\"id\":\"smoke-org\"},\"owner\":{\"groups\":[\"smoke\"]},\"model_refs\":[{\"name\":\"${smoke_sub_model}\",\"token_rate_limits\":[{\"limit\":50,\"window\":\"1m\"}]}],\"priority\":5}}}" \
       'ai_grid.v1.Subscriptions/Create'
     if (( failed == before_failed )); then
       cleanup_subscription_ids+=("$smoke_sub_grpc")
       call_grpc 'Subscriptions/Get' "{\"id\":\"${smoke_sub_grpc}\"}" 'ai_grid.v1.Subscriptions/Get'
       call_grpc 'Subscriptions/Update (update_mask=spec)' \
-        "{\"object\":{\"id\":\"${smoke_sub_grpc}\",\"metadata\":{\"name\":\"${smoke_sub_grpc}\"},\"spec\":{\"organization\":{\"id\":\"smoke-org\"},\"owner\":{\"groups\":[\"smoke-admins\"]},\"model_refs\":[{\"name\":\"tiny-llm\",\"token_rate_limits\":[{\"limit\":50,\"window\":\"1m\"}]}],\"priority\":9}},\"update_mask\":{\"paths\":[\"spec\"]}}" \
+        "{\"object\":{\"id\":\"${smoke_sub_grpc}\",\"metadata\":{\"name\":\"${smoke_sub_grpc}\"},\"spec\":{\"organization\":{\"id\":\"smoke-org\"},\"owner\":{\"groups\":[\"smoke-admins\"]},\"model_refs\":[{\"name\":\"${smoke_sub_model}\",\"token_rate_limits\":[{\"limit\":50,\"window\":\"1m\"}]}],\"priority\":9}},\"update_mask\":{\"paths\":[\"spec\"]}}" \
         'ai_grid.v1.Subscriptions/Update'
       call_grpc 'Subscriptions/Delete' "{\"id\":\"${smoke_sub_grpc}\"}" 'ai_grid.v1.Subscriptions/Delete'
     fi
@@ -340,12 +346,12 @@ else
 
     before_failed=$failed
     call_http 'POST /api/v1/subscriptions' POST '/api/v1/subscriptions' \
-      "{\"id\":\"${smoke_sub_rest}\",\"metadata\":{\"name\":\"${smoke_sub_rest}\"},\"spec\":{\"organization\":{\"id\":\"smoke-org\"},\"owner\":{\"groups\":[\"smoke\"]},\"model_refs\":[{\"name\":\"tiny-llm\",\"token_rate_limits\":[{\"limit\":50,\"window\":\"1m\"}]}],\"priority\":5}}"
+      "{\"id\":\"${smoke_sub_rest}\",\"metadata\":{\"name\":\"${smoke_sub_rest}\"},\"spec\":{\"organization\":{\"id\":\"smoke-org\"},\"owner\":{\"groups\":[\"smoke\"]},\"model_refs\":[{\"name\":\"${smoke_sub_model}\",\"token_rate_limits\":[{\"limit\":50,\"window\":\"1m\"}]}],\"priority\":5}}"
     if (( failed == before_failed )); then
       cleanup_subscription_ids+=("$smoke_sub_rest")
       call_http "GET /api/v1/subscriptions/${smoke_sub_rest}" GET "/api/v1/subscriptions/${smoke_sub_rest}"
       call_http "PATCH /api/v1/subscriptions/${smoke_sub_rest}" PATCH "/api/v1/subscriptions/${smoke_sub_rest}" \
-        "{\"id\":\"${smoke_sub_rest}\",\"metadata\":{\"name\":\"${smoke_sub_rest}\"},\"spec\":{\"organization\":{\"id\":\"smoke-org\"},\"owner\":{\"groups\":[\"smoke-admins\"]},\"model_refs\":[{\"name\":\"tiny-llm\",\"token_rate_limits\":[{\"limit\":50,\"window\":\"1m\"}]}],\"priority\":9}}"
+        "{\"id\":\"${smoke_sub_rest}\",\"metadata\":{\"name\":\"${smoke_sub_rest}\"},\"spec\":{\"organization\":{\"id\":\"smoke-org\"},\"owner\":{\"groups\":[\"smoke-admins\"]},\"model_refs\":[{\"name\":\"${smoke_sub_model}\",\"token_rate_limits\":[{\"limit\":50,\"window\":\"1m\"}]}],\"priority\":9}}"
       call_http "DELETE /api/v1/subscriptions/${smoke_sub_rest}" DELETE "/api/v1/subscriptions/${smoke_sub_rest}"
     fi
   fi

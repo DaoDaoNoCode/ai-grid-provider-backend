@@ -116,7 +116,9 @@ For subscriptions:
 - The policy lives in the subscription's file, so Argo CD prunes both
   together; it has no ownerReference.
 - A model ref without a namespace gets the subscription's namespace
-  (`models-as-a-service` by default).
+  (`models-as-a-service` by default). A ref in that namespace must name a
+  model in the repository, or Create and Update answer `FailedPrecondition`;
+  a ref to another namespace isn't checked.
 - `status.phase` comes from the spokes (see "Status from the spokes" below):
   `Active` when every ingress cluster that reports the subscription has it
   active, `Pending` when any doesn't, and empty when none reports it. `Get`
