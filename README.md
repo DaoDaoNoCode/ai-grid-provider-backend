@@ -85,19 +85,26 @@ catalog/
 An Argo CD ApplicationSet delivers `catalog/clusters/<name>` to the
 ManagedCluster `<name>`, `catalog/ingress` and `catalog/subscriptions` to the
 ingress spokes. The backend never deletes an index file, so a cluster with no
-models still has its path.
+models still has its path. The ApplicationSets must sync with `prune: true`
+and `allowEmpty: true`, so deleting the last object also removes it from the
+spokes.
 
 For both models and subscriptions:
 
 - `metadata.version` is the file's `ai-grid/version` annotation, which each
   write increments. A stale version, or a write to the same file by another
   backend since the read, answers `Aborted`. Delete's `resource_version` is
-  checked the same way; zero skips the check.
+  checked the same way; zero skips the check. A deleted and re-created id
+  starts again at version 1, so a client still holding version 1 of the old
+  object can update or delete the new one.
+- The files belong to the backend. An update rewrites them from the stored
+  object and the request, so a hand edit to a catalog file is lost on the
+  next write to that object.
 - Labels and annotations go into the files Argo CD applies, so a request may
   set only keys without a prefix, such as `team`, and the annotations
   `openshift.io/display-name` and `openshift.io/description`. Any other
   prefixed key, such as one of Argo CD's, Helm's or `ai-grid/`, is
-  `InvalidArgument`. The backend adds its own keys, and a read doesn't return
+  `InvalidArgument`, and so is a key or value Kubernetes would reject. The backend adds its own keys, and a read doesn't return
   them.
 - The backend can't see the spokes. Argo CD adopts an object with the same
   name that already exists there, so keep hand-applied `MaaSAuthPolicy`
@@ -121,8 +128,9 @@ For subscriptions:
   model in the repository, or Create and Update answer `FailedPrecondition`;
   a ref to another namespace isn't checked.
 - `status.phase` comes from the spokes (see "Status from the spokes" below):
-  `Active` when every ingress cluster that reports the subscription has it
-  active, `Pending` when any doesn't, and empty when none reports it. `Get`
+  `Active` when every ingress cluster the status Policy is placed on has it
+  active; `Pending` when any has it not active, doesn't have it yet, or hasn't
+  reported; and empty when no cluster has reported. `Get`
   returns the file's policy, and one `model_registrations` entry per model
   ref: phase `Ready` or `Pending` from the clusters' `MaaSModelRef` reports,
   or, with no report, no phase and a `Ready` condition of unknown status,
@@ -136,7 +144,8 @@ For models:
 
 - `spec.placement` is required and names at least one cluster, by the `name`
   label that ACM sets on every ManagedCluster, as `name In [...]` or a `name`
-  match label. A model with no placement answers `InvalidArgument`, because it
+  match label, but not both: a label selector ANDs its requirements. A model
+  with no placement answers `InvalidArgument`, because it
   would be published to the ingress and deployed nowhere. Cluster sets,
   other labels and `number_of_clusters` answer `InvalidArgument`, and so does a
   `spec.rollout` other than strategy `All` alone. Argo CD delivers to every
@@ -150,9 +159,9 @@ For models:
 - `status.placement` lists the clusters the file places the model on, and
   their `location` labels, read from the ManagedClusters. `status.phase` is
   `READY` when every placed cluster reports the `LLMInferenceService` ready
-  and every ingress cluster that reports its `MaaSModelRef` has it ready;
-  `PENDING`, reason `NotReady`, when any report says not ready or a placed
-  cluster hasn't reported, with a per-cluster message such as
+  and every ingress cluster the status Policy is placed on has its
+  `MaaSModelRef` ready; `PENDING`, reason `NotReady`, when any report says not
+  ready, or a placed or ingress cluster hasn't reported it, with a per-cluster message such as
   `Not ready on site-a; ready on site-b`. With no report at all, it has no
   phase and reason `SavedToGit`. It is never `FAILED`: the Policies can't tell
   a failed model from one that is starting.
@@ -176,7 +185,9 @@ deploys:
 The backend reads the root Policy's `status.status` for the clusters, then
 each cluster's copy (`<namespace>.<policy>` in the cluster's namespace) for
 the latest message of each ConfigurationPolicy, which names each object as
-found as specified (ready) or not. It reads on every request, with no cache,
+found as specified (ready), found but not as specified, or not found. The
+ConfigurationPolicies look up every object of their kind, so a cluster whose
+report doesn't name an object doesn't have it yet. It reads on every request, with no cache,
 which suits the handful of clusters a grid has. The ServiceAccount needs
 `get` on the two roots and their copies (`deploy/openshift/rbac.yaml`). A
 Policy that is missing or forbidden means no report, not an error, so the
@@ -646,6 +657,9 @@ optional embedded Keycloak + Postgres (Tenants API), RHACM when needed
 authentication of its own, and anyone who reaches it can commit a model (any
 image, onto the spokes) or a subscription to the catalog. Reach it with
 `oc port-forward`, or put an authenticating proxy in front of the Service.
+Earlier versions created two public Routes, and `oc apply` doesn't prune, so
+`make openshift-up` deletes `ai-grid-provider-backend-grpc` and
+`ai-grid-provider-backend-http` if they exist.
 
 Default image: [`ghcr.io/ai-grid-cloud/ai-grid-provider-backend`](https://github.com/ai-grid-cloud/ai-grid-provider-backend/pkgs/container/ai-grid-provider-backend).
 
