@@ -184,6 +184,10 @@ kustomize_build \
   | sed -e "s#${DEFAULT_IMAGE}#${IMAGE}#g" \
   | oc apply -f -
 
+# oc apply doesn't prune: remove the public Routes an install made before they
+# were dropped, because the API has no authentication of its own.
+oc -n "${NAMESPACE}" delete route ai-grid-provider-backend-grpc ai-grid-provider-backend-http --ignore-not-found
+
 if [[ "$EXTERNAL_KEYCLOAK" != "1" ]]; then
   if [[ "$GRANT_ANYUID" == "1" ]]; then
     echo "==> granting anyuid SCC to system:serviceaccount:${NAMESPACE}:default (Keycloak/Postgres)"
