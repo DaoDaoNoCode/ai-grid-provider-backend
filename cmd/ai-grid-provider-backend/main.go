@@ -74,27 +74,29 @@ func main() {
 		fmt.Fprintf(os.Stderr, "build Tenants server: %v\n", err)
 		os.Exit(1)
 	}
-	modelsServer, err := servers.NewModelsServer().
+	modelsBuilder := servers.NewModelsServer().
 		SetDynamicClient(kubeClient).
 		SetNamespace(getEnv("AI_GRID_MODELS_NAMESPACE", "ai-grid-models")).
 		SetSubscriptionNamespace(getEnv("AI_GRID_SUBSCRIPTION_NAMESPACE", "models-as-a-service")).
-		Build()
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "build Models server: %v\n", err)
-		os.Exit(1)
-	}
+		SetGridNamespace(getEnv("AI_GRID_GRID_NAMESPACE", "redhat-ai-grid"))
 	subscriptionsBuilder := servers.NewSubscriptionsServer().
 		SetDynamicClient(kubeClient).
 		SetNamespace(getEnv("AI_GRID_SUBSCRIPTION_NAMESPACE", "models-as-a-service"))
-	// Git mode: with AI_GRID_GIT_URL set, Subscriptions commit to that
-	// repository and Argo CD delivers them.
+	// Git mode: with AI_GRID_GIT_URL set, Models and Subscriptions commit to
+	// that repository and Argo CD delivers them.
 	if os.Getenv("AI_GRID_GIT_URL") != "" {
 		writer, err := newGitWriter()
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "git write mode: %v\n", err)
 			os.Exit(1)
 		}
+		modelsBuilder.SetWriter(writer)
 		subscriptionsBuilder.SetWriter(writer)
+	}
+	modelsServer, err := modelsBuilder.Build()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "build Models server: %v\n", err)
+		os.Exit(1)
 	}
 	subscriptionsServer, err := subscriptionsBuilder.Build()
 	if err != nil {

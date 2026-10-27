@@ -88,11 +88,9 @@ named `<subscription-id>-policy` when managed by this service.
 
 ### Git write mode
 
-With `AI_GRID_GIT_URL` set, the Subscriptions RPCs read from and commit to a
-Git repository instead of the cluster, and Argo CD delivers the files. Each
-subscription is one file, `catalog/subscriptions/<id>.yaml`, holding its
-`MaaSSubscription` and its `<id>-policy` `MaaSAuthPolicy`; each create, update
-or delete is one commit to the branch.
+With `AI_GRID_GIT_URL` set, the Models and Subscriptions RPCs read from and
+commit to a Git repository instead of the cluster, and Argo CD delivers the
+files. Each create, update or delete is one commit to the branch.
 
 | Setting | Meaning |
 |---|---|
@@ -100,12 +98,45 @@ or delete is one commit to the branch.
 | `AI_GRID_GIT_BRANCH` | Branch to commit to. Default `main`. It must have at least one commit. |
 | `AI_GRID_GIT_TOKEN_FILE` | File holding a GitHub personal access token with `contents: write` on that repository only, for example a mounted Secret. Sent as HTTPS basic auth; never logged. |
 
-In git mode:
+| `AI_GRID_GRID_NAMESPACE` | Namespace of the grid on the inference spokes, which each model's NetworkPolicy admits. Default `redhat-ai-grid`. |
+
+The repository holds:
+
+```text
+catalog/
+  subscriptions/<id>.yaml                 # MaaSSubscription <id> and MaaSAuthPolicy <id>-policy (AI_GRID_SUBSCRIPTION_NAMESPACE)
+  models/<id>/deployment/                 # LLMInferenceService <id> and NetworkPolicy <id>-grid (AI_GRID_MODELS_NAMESPACE)
+  models/<id>/catalog/                    # ExternalModel <id> (to grid-provider) and MaaSModelRef <id> (AI_GRID_SUBSCRIPTION_NAMESPACE)
+  clusters/<name>/kustomization.yaml      # the deployments placed on ManagedCluster <name>
+  ingress/kustomization.yaml              # every model's catalog entry
+```
+
+An Argo CD ApplicationSet delivers `catalog/clusters/<name>` to the
+ManagedCluster `<name>`, `catalog/ingress` and `catalog/subscriptions` to the
+ingress spokes. The backend never deletes an index file, so a cluster with no
+models still has its path.
+
+In git mode, for both:
 
 - `metadata.version` is the file's `ai-grid/version` annotation, which each
   write increments. A stale version, or a write to the same file by another
   backend since the read, answers `Aborted`. Delete's `resource_version` is
   checked the same way; zero skips the check.
+- Labels and annotations go into the files Argo CD applies, so a request may
+  set only keys without a prefix, such as `team`, and the annotations
+  `openshift.io/display-name` and `openshift.io/description`. Any other
+  prefixed key, such as one of Argo CD's, Helm's or `ai-grid/`, is
+  `InvalidArgument`. The backend adds its own keys, and a read doesn't return
+  them.
+- The backend can't see the spokes. Argo CD adopts an object with the same
+  name that already exists there, so keep hand-applied `MaaSAuthPolicy`
+  objects off the `<subscription id>-policy` names: cluster mode refused to
+  create over an unmanaged policy, git mode can't. Argo CD's
+  `FailOnSharedResource=true` sync option on the catalog apps catches objects
+  another Argo CD app manages, but not hand-applied ones.
+
+For subscriptions:
+
 - `spec.organization.id` is required. The file holds each owner group as
   `<organization id>/<group>`, the tenant-qualified form, in both the
   subscription and its policy, and reads return the bare names. A group sent
@@ -122,6 +153,25 @@ In git mode:
   `catalog/subscriptions/`. Git drops an empty directory, so without it
   deleting the last subscription removes the path, and Argo CD reports an error
   instead of pruning. List reads only `*.yaml` files.
+
+For models:
+
+- `spec.placement` names clusters by the `name` label that ACM sets on every
+  ManagedCluster, as `name In [...]` or a `name` match label. Cluster sets,
+  other labels and `number_of_clusters` answer `InvalidArgument`, and so does a
+  `spec.rollout` other than strategy `All` alone. Argo CD delivers to every
+  cluster at once, which is `All`, so that rollout is accepted and not stored.
+- The model namespace must exist on the inference spokes with the label
+  `grid.opendatahub.io/allowed: "true"`, so the platform creates the grid's
+  `InferenceProvider`. The NetworkPolicy admits the grid namespace on ports
+  8000 and 9090.
+- The version is an `ai-grid/version` annotation on the `LLMInferenceService`,
+  and `ai-grid/clusters` records the placement. Neither shows in the API.
+- `status` has no phase: reason `SavedToGit`. `status.placement` lists the
+  clusters the file places the model on, and their `location` labels, read
+  from the ManagedClusters.
+- Delete answers `FailedPrecondition` while a subscription in the repository
+  names the model.
 
 The service runs in-cluster using its Kubernetes ServiceAccount. Its RBAC role
 allows `get`, `list`, `watch`, `create`, `update`, `patch`, and `delete` on

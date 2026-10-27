@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -15,6 +16,7 @@ import (
 	aigridv1 "github.com/osac-project/ai-grid-provider-backend/gen/ai_grid/v1"
 	"github.com/osac-project/ai-grid-provider-backend/gen/ai_grid/v1/aigridv1connect"
 	"github.com/osac-project/ai-grid-provider-backend/internal/celfilter"
+	"github.com/osac-project/ai-grid-provider-backend/internal/gitops"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -29,17 +31,24 @@ import (
 type ModelsServerBuilder struct {
 	logger                *slog.Logger
 	client                dynamic.Interface
+	writer                gitops.Writer
+	gridNamespace         string
 	namespace             string
 	subscriptionNamespace string
 	mwrsEnabled           *bool
 }
 
 // ModelsServer implements ai_grid.v1.Models against LLMInferenceService CRs
-// (and optional Placement + ManifestWorkReplicaSet + MaaSModelRef).
+// (and optional Placement + ManifestWorkReplicaSet + MaaSModelRef). With a
+// Writer (git mode) it reads and commits model files to a Git repository
+// instead (models_git.go), and reads the cluster only for ManagedCluster
+// locations.
 type ModelsServer struct {
 	aigridv1connect.UnimplementedModelsHandler
 	logger                *slog.Logger
 	client                dynamic.Interface
+	writer                gitops.Writer
+	gridNamespace         string
 	namespace             string
 	subscriptionNamespace string
 	mwrsEnabled           *bool
@@ -58,9 +67,24 @@ func (b *ModelsServerBuilder) SetLogger(logger *slog.Logger) *ModelsServerBuilde
 	return b
 }
 
-// SetDynamicClient sets the Kubernetes dynamic client. Mandatory.
+// SetDynamicClient sets the Kubernetes dynamic client. Mandatory unless a
+// Writer is set.
 func (b *ModelsServerBuilder) SetDynamicClient(client dynamic.Interface) *ModelsServerBuilder {
 	b.client = client
+	return b
+}
+
+// SetWriter switches the server to git mode: models are read from and
+// committed to the Writer's branch. Optional.
+func (b *ModelsServerBuilder) SetWriter(writer gitops.Writer) *ModelsServerBuilder {
+	b.writer = writer
+	return b
+}
+
+// SetGridNamespace sets the namespace of the grid on the inference spokes,
+// which git mode's NetworkPolicy lets reach the model. Default redhat-ai-grid.
+func (b *ModelsServerBuilder) SetGridNamespace(namespace string) *ModelsServerBuilder {
+	b.gridNamespace = namespace
 	return b
 }
 
@@ -84,8 +108,8 @@ func (b *ModelsServerBuilder) SetManifestWorkReplicaSetEnabled(enabled bool) *Mo
 
 // Build creates the ModelsServer.
 func (b *ModelsServerBuilder) Build() (*ModelsServer, error) {
-	if b.client == nil {
-		return nil, errors.New("kubernetes dynamic client is mandatory")
+	if b.client == nil && b.writer == nil {
+		return nil, errors.New("kubernetes dynamic client or git writer is mandatory")
 	}
 	logger := b.logger
 	if logger == nil {
@@ -99,9 +123,15 @@ func (b *ModelsServerBuilder) Build() (*ModelsServer, error) {
 	if subNS == "" {
 		subNS = defaultSubscriptionNamespace
 	}
+	gridNS := b.gridNamespace
+	if gridNS == "" {
+		gridNS = defaultGridNamespace
+	}
 	return &ModelsServer{
 		logger:                logger,
 		client:                b.client,
+		writer:                b.writer,
+		gridNamespace:         gridNS,
 		namespace:             namespace,
 		subscriptionNamespace: subNS,
 		mwrsEnabled:           b.mwrsEnabled,
@@ -112,6 +142,14 @@ func (b *ModelsServerBuilder) Build() (*ModelsServer, error) {
 func (s *ModelsServer) List(ctx context.Context, req *aigridv1.ModelsListRequest) (*aigridv1.ModelsListResponse, error) {
 	if err := validateListLimit(req.Limit); err != nil {
 		return nil, err
+	}
+	if s.writer != nil {
+		items, err := s.gitList(ctx)
+		if err != nil {
+			return nil, err
+		}
+		s.enrichGitLocations(ctx, items...)
+		return listModelItems(ctx, req, items)
 	}
 	list, err := s.client.Resource(llmInferenceServicesResource).Namespace(s.namespace).List(ctx, metav1.ListOptions{})
 	if err != nil {
@@ -126,7 +164,11 @@ func (s *ModelsServer) List(ctx context.Context, req *aigridv1.ModelsListRequest
 		s.enrichPlacement(ctx, m)
 		items = append(items, m)
 	}
+	return listModelItems(ctx, req, items)
+}
 
+// listModelItems applies the request's filter, order and window to items.
+func listModelItems(ctx context.Context, req *aigridv1.ModelsListRequest, items []*aigridv1.Model) (*aigridv1.ModelsListResponse, error) {
 	filter, err := celfilter.Compile(req.GetFilter(), &aigridv1.Model{})
 	if err != nil {
 		return nil, err
@@ -163,6 +205,14 @@ func (s *ModelsServer) Get(ctx context.Context, req *aigridv1.ModelsGetRequest) 
 	if err := validateModelID(id); err != nil {
 		return nil, err
 	}
+	if s.writer != nil {
+		m, err := s.gitGet(ctx, id)
+		if err != nil {
+			return nil, err
+		}
+		s.enrichGitLocations(ctx, m)
+		return &aigridv1.ModelsGetResponse{Object: m}, nil
+	}
 	obj, err := s.client.Resource(llmInferenceServicesResource).Namespace(s.namespace).Get(ctx, id, metav1.GetOptions{})
 	if err != nil {
 		return nil, mapModelAPIError("get", id, err)
@@ -191,6 +241,14 @@ func (s *ModelsServer) Create(ctx context.Context, req *aigridv1.ModelsCreateReq
 
 	if err := validateModelSpec(object.GetSpec()); err != nil {
 		return nil, err
+	}
+	if s.writer != nil {
+		m, err := s.gitCreate(ctx, object)
+		if err != nil {
+			return nil, err
+		}
+		s.enrichGitLocations(ctx, m)
+		return &aigridv1.ModelsCreateResponse{Object: m}, nil
 	}
 	hasPlacement := object.GetSpec() != nil && object.GetSpec().GetPlacement() != nil
 	if hasPlacement {
@@ -253,6 +311,14 @@ func (s *ModelsServer) Update(ctx context.Context, req *aigridv1.ModelsUpdateReq
 	id := modelID(object)
 	if err := validateModelID(id); err != nil {
 		return nil, err
+	}
+	if s.writer != nil {
+		m, err := s.gitUpdate(ctx, req)
+		if err != nil {
+			return nil, err
+		}
+		s.enrichGitLocations(ctx, m)
+		return &aigridv1.ModelsUpdateResponse{Object: m}, nil
 	}
 
 	current, err := s.client.Resource(llmInferenceServicesResource).Namespace(s.namespace).Get(ctx, id, metav1.GetOptions{})
@@ -375,6 +441,12 @@ func (s *ModelsServer) Delete(ctx context.Context, req *aigridv1.ModelsDeleteReq
 	if err := validateModelID(id); err != nil {
 		return nil, err
 	}
+	if s.writer != nil {
+		if err := s.gitDelete(ctx, id, req.GetResourceVersion()); err != nil {
+			return nil, err
+		}
+		return &aigridv1.ModelsDeleteResponse{}, nil
+	}
 	current, err := s.client.Resource(llmInferenceServicesResource).Namespace(s.namespace).Get(ctx, id, metav1.GetOptions{})
 	if err != nil {
 		if apierrors.IsNotFound(err) {
@@ -460,6 +532,9 @@ func (s *ModelsServer) enrichPlacement(ctx context.Context, m *aigridv1.Model) {
 
 // ListLocations returns unique sorted location labels of Available AI Grid member clusters.
 func (s *ModelsServer) ListLocations(ctx context.Context, _ *aigridv1.ModelsListLocationsRequest) (*aigridv1.ModelsListLocationsResponse, error) {
+	if s.client == nil {
+		return &aigridv1.ModelsListLocationsResponse{}, nil
+	}
 	list, err := s.client.Resource(managedClustersResource).List(ctx, metav1.ListOptions{})
 	if err != nil {
 		if apierrors.IsNotFound(err) {
@@ -495,6 +570,40 @@ func isAIGridMemberCluster(item unstructured.Unstructured) bool {
 	}
 	status := managedClusterStatusFromUnstructured(item)
 	return status != nil && status.GetAvailable()
+}
+
+// enrichGitLocations fills status.placement.locations of git-mode models from
+// the clusters their files place them on. Without a dynamic client it leaves
+// them empty.
+func (s *ModelsServer) enrichGitLocations(ctx context.Context, models ...*aigridv1.Model) {
+	if s.client == nil || len(models) == 0 {
+		return
+	}
+	list, err := s.client.Resource(managedClustersResource).List(ctx, metav1.ListOptions{})
+	if err != nil {
+		s.logger.Warn("list ManagedClusters for model locations", "error", err)
+		return
+	}
+	byName := map[string]string{}
+	for i := range list.Items {
+		if loc := list.Items[i].GetLabels()["location"]; loc != "" {
+			byName[list.Items[i].GetName()] = loc
+		}
+	}
+	for _, m := range models {
+		placement := m.GetStatus().GetPlacement()
+		if placement == nil {
+			continue
+		}
+		var locs []string
+		for _, cluster := range placement.GetSelectedClusters() {
+			if loc := byName[cluster]; loc != "" && !slices.Contains(locs, loc) {
+				locs = append(locs, loc)
+			}
+		}
+		sort.Strings(locs)
+		placement.Locations = locs
+	}
 }
 
 // enrichPlacementLocations fills status.placement.locations from decided clusters.

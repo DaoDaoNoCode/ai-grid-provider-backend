@@ -13,6 +13,7 @@ import (
 
 const (
 	defaultModelsNamespace = "ai-grid-models"
+	defaultGridNamespace   = "redhat-ai-grid"
 
 	modelLabelKey = "ai-grid/model"
 
