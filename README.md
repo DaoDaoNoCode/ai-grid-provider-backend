@@ -46,6 +46,16 @@ Regenerate protobuf, RPC stubs and OpenAPI with `make generate` (requires [buf](
 without it, `make generate BUF='go run github.com/bufbuild/buf/cmd/buf@v1.50.0'`). It also
 generates the console's draft API (see [The console's draft API](#the-consoles-draft-api-ai_griddraftv1)).
 
+Before changing an existing message, field, enum or RPC in `proto/ai_grid/v1`,
+read [`docs/API_CONTRACT.md`](docs/API_CONTRACT.md): the console and other
+clients are generated from it, so CI runs `buf lint` and, on pull requests,
+`buf breaking` against the base branch, and a break follows expand, migrate,
+contract. Run the same check locally:
+
+```sh
+buf breaking proto --against '.git#branch=main,subdir=proto'
+```
+
 ManagedCluster RPCs use the Kubernetes dynamic client against:
 
 ```text
@@ -789,6 +799,7 @@ client/                          reusable gRPC client (GetSubscription returns o
 proto/                           protobuf + buf config
 proto/ai_grid/v1/                per-resource *_type.proto / *_service.proto + metadata
 gen/ai_grid/v1/                  generated protobuf, gRPC, and Connect code
+docs/API_CONTRACT.md             who consumes the proto, what CI checks, how to change it
 docs/UI_API_REFERENCE.md         REST payloads for UI/BFF consumers
 docs/openapi/                    generated OpenAPI (Swagger 2.0) JSON
 internal/servers/                Per-resource connect-go handlers (OSAC-style builders)

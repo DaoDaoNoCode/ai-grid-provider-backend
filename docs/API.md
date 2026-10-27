@@ -51,6 +51,7 @@ ai-grid-provider-backend/
 ├── Containerfile
 ├── Makefile
 ├── AGENTS.md                       # Agent entrypoint
+├── docs/API_CONTRACT.md            # Who consumes the proto, what CI checks, how to change it
 └── docs/API.md                     # This file
 ```
 
@@ -175,6 +176,12 @@ The server binary (`cmd/fulfillment-service`) provides these subcommands via Cob
 ## 2. API Design (Proto Conventions)
 
 > Full reference: `docs/API.md` in the fulfillment service codebase.
+
+This section covers how to design an API. To change one that already has
+clients (an existing message, field, enum or RPC in `proto/ai_grid/v1`), follow
+[`API_CONTRACT.md`](API_CONTRACT.md): CI runs `buf lint` and, on pull requests,
+`buf breaking` against the base branch, and a breaking change goes through
+expand, migrate, contract.
 
 ### Object Shape
 

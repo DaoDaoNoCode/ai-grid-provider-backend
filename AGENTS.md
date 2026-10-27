@@ -11,6 +11,7 @@ supported.
 
 1. Follow this file for repository-wide invariants and validation.
 2. For API, protobuf, REST, resource-shape, server-layer, error, logging, testing, and security work, read and follow [`docs/API.md`](docs/API.md).
+   For any change to an existing message, field, enum or RPC in `proto/ai_grid/v1`, also read [`docs/API_CONTRACT.md`](docs/API_CONTRACT.md): who consumes the contract, what CI checks, and the procedure for breaking changes.
 3. For UI-facing REST payloads and examples, read [`docs/UI_API_REFERENCE.md`](docs/UI_API_REFERENCE.md).
 4. Use [`README.md`](README.md) for supported setup and operational workflows.
 5. If documentation and executable configuration disagree, stop and report the mismatch; do not silently choose one.
@@ -21,6 +22,7 @@ The OSAC fulfillment-service standards are the reference architecture. Apply the
 
 - Protobuf is the API contract. Edit sources under `proto/`; never hand-edit generated files under `gen/`, `docs/openapi/`, or `internal/restgateway/openapi/`.
 - After any protobuf change, run `make generate`, commit all generated outputs, and verify regeneration leaves the worktree clean.
+- `buf breaking` must pass for `ai_grid.v1`. Never remove, renumber, rename or retype a field, enum value, message or RPC in one step: expand (add the replacement, deprecate the old), let consumers migrate, then contract (remove, and `reserved` both the number and the name) as an approved break. Never reuse a field number. A changed meaning is a new field, not an edited comment. See [`docs/API_CONTRACT.md`](docs/API_CONTRACT.md).
 - Managed resources use the OSAC shape: `id`, `metadata`, `spec`, and `status`.
   - `spec` is caller-controlled desired state.
   - `status` is service-controlled observed state.
@@ -40,7 +42,8 @@ The OSAC fulfillment-service standards are the reference architecture. Apply the
 
 - `ai_grid.draft.v1` (`proto/ai_grid/draft/v1`, `gen/ai_grid/draft/v1`) is the console's proposal for APIs this backend does not implement yet, and `internal/fakeinfra/draft` is its in-memory fake, served by `make dev-fake` on `:9094`. See [`docs/draft/README.md`](docs/draft/README.md).
 - The draft is not this backend's API: never import `gen/ai_grid/draft/v1` from `cmd/ai-grid-provider-backend`, `internal/servers`, `internal/restgateway` or `client`, and never give it HTTP annotations or OpenAPI output.
-- The draft is gRPC only, on purpose: no Connect, gRPC-Web or REST. Its one client is the console's BFF, which calls it with grpc-go; a browser reaches it only through the BFF. Each area moves to `ai_grid.v1` (gRPC, Connect and REST) when it is implemented for real, so until then the console has two paths: the real API for implemented areas, the draft through the BFF for the rest.
+- The draft is gRPC only, on purpose: no Connect, gRPC-Web or REST. Each area moves to `ai_grid.v1` (gRPC, Connect and REST) when it is implemented for real. The console is moving every page to generated clients of `ai_grid.v1` and keeps no proto or fake of its own; once no page needs the draft, the draft package and `internal/fakeinfra/draft` are deleted. Don't add new areas to the draft: add what the console needs to `ai_grid.v1`.
+- The draft is excluded from `buf breaking` (`proto/buf.yaml`); `ai_grid.v1` is not.
 - When an area is implemented for real in `ai_grid.v1`, delete that area's draft proto, generated code, fake code and tests, fixtures and `docs/draft/areas` page (`docs/draft/README.md`, "When an area moves to the real backend").
 - For real services, fake only infrastructure (`internal/fakeinfra/hub`, `internal/fakeinfra/keycloak`); never fake a real server.
 - The draft proto keeps the console's messages, fields, numbers and types; only its package, `go_package`, imports and the comments that described the console's setup (the file headers) differ. Keep it passing `buf lint`. The API invariants above govern `ai_grid.v1`; the draft keeps the console's shapes (for example the flat `ManagedCluster`) until an area is implemented for real.
@@ -55,6 +58,7 @@ client/                         reusable gRPC client
 proto/                          protobuf sources and buf configuration
 gen/ai_grid/v1/                 generated protobuf, gRPC, and Connect code
 docs/API.md                     authoritative API/service standards for this repo
+docs/API_CONTRACT.md            who consumes proto/ai_grid/v1, what CI checks, how to change it
 docs/UI_API_REFERENCE.md        UI-facing REST payload handout
 docs/openapi/                   generated OpenAPI snapshot
 internal/servers/               per-resource connect-go handlers
@@ -155,7 +159,8 @@ make acm-hub-down     # tear down ACM hub Helm release
 ### Required for protobuf or API changes
 
 ```bash
-cd proto && buf lint
+buf lint proto
+buf breaking proto --against '.git#branch=main,subdir=proto'   # docs/API_CONTRACT.md
 make generate
 git status --porcelain   # must print nothing
 make check-generated     # also catches output the protobuf no longer produces
@@ -230,8 +235,10 @@ make acm-hub-down     # tear down ACM hub Helm release
 
 [`.github/workflows/ci.yaml`](.github/workflows/ci.yaml) runs Check on pull
 requests and on pushes to `main` and `v*` tags (`make build`, `fmt-check`,
-`vet`, pinned golangci-lint + `.golangci.yml`, `unit`, `make generate` dirty
-diff). After Check passes, pushes, tags and manual runs publish the image to
+`vet`, pinned golangci-lint + `.golangci.yml`, `unit`, `buf lint`, `buf
+breaking` against the base branch on pull requests (skipped by the `buf skip
+breaking` label for an approved break, docs/API_CONTRACT.md), `make generate`
+dirty diff). After Check passes, pushes, tags and manual runs publish the image to
 `ghcr.io/ai-grid-cloud/ai-grid-provider-backend` (never on PRs).
 
 Tags: `sha-<full sha>` on every publish (deploy this one), `latest` on `main`,
@@ -249,7 +256,8 @@ every Monday.
 ## Security and tenancy
 
 - Treat tenant identity and authorization as server-side concerns; never trust caller-supplied ownership fields without validation.
-- API request authn/authz is out of scope for this MVP; gRPC/REST endpoints are open. Keycloak is used only as the Tenants Organizations Admin API backend. `KEYCLOAK_REALM` is the shared platform realm name, not a per-tenant id.
+- API request authn/authz is out of scope for this MVP; gRPC/REST endpoints are open. Keycloak is used only as the Tenants Organizations Admin API backend.
+- Because the endpoints are open, never make them reachable except through a proxy that authenticates and authorizes the caller. On a hub the backend runs inside the provider console's pod, bound to loopback (`--listen-address=127.0.0.1:9090`, `--http-listen-address=127.0.0.1:8081`), reachable only through the console's kube-auth-proxy and its BFF, which allows provider admins only; the console's kind test and ai-grid-env-setup's `verify/07-console.sh` check that. Every caller acts with the backend's ServiceAccount and its Git token: it may create, delete and label any ManagedCluster, read the status Policies, read ACM Search's index of every managed cluster (`searches/allManagedData`: everything Search indexes, not only the GPU nodes the backend asks for; see `deploy/openshift/rbac.yaml`), and commit Models and Subscriptions to the catalog repository, which Argo CD delivers to the spokes. `deploy/openshift` has no Route on purpose (`hack/openshift-up.sh` deletes the ones earlier installs created); reach a development install with `oc port-forward`, and never add a Route, Ingress or LoadBalancer Service for it. A CLI, GitOps tool or other UI that calls the backend directly needs authentication in the backend first. `KEYCLOAK_REALM` is the shared platform realm name, not a per-tenant id.
 - Use least-privilege Kubernetes RBAC and Keycloak roles. Any new API operation that touches Kubernetes or Keycloak must include a review of required permissions.
 - Do not expose internal credentials or administrative APIs through generated REST routes.
 - Validate authentication and authorization behavior for every new externally reachable method once auth is in scope.
@@ -273,4 +281,4 @@ every Monday.
 
 ## Documentation
 
-Update documentation in the same change when behavior, API contracts, configuration, permissions, deployment steps, or developer commands change. Keep `README.md`, `docs/API.md`, `docs/UI_API_REFERENCE.md`, generated OpenAPI, manifests, and this file consistent with executable behavior.
+Update documentation in the same change when behavior, API contracts, configuration, permissions, deployment steps, or developer commands change. Keep `README.md`, `docs/API.md`, `docs/API_CONTRACT.md`, `docs/UI_API_REFERENCE.md`, generated OpenAPI, manifests, and this file consistent with executable behavior.

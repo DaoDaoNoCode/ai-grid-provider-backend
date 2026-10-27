@@ -13,6 +13,7 @@ on:
     tags: ['v*']
   pull_request:
     branches: [main]
+    types: [opened, synchronize, reopened, labeled, unlabeled]
   workflow_dispatch:
 
 concurrency:
@@ -71,6 +72,25 @@ jobs:
         uses: bufbuild/buf-setup-action@a47c93e0b1648d5651a065437926377d060baa99 # v1
         with:
           version: ${{ env.BUF_VERSION }}
+          # The action asks GitHub's API for the download URL. Anonymously that
+          # counts against the runner IP's shared limit and fails at random;
+          # the job's own read-only token has its own limit.
+          github_token: ${{ github.token }}
+
+      - name: Lint protobuf
+        run: buf lint proto
+
+      # The contract's clients (the console pins a commit of proto/) must never
+      # meet a surprise break: docs/API_CONTRACT.md. An approved break (expand,
+      # migrate, contract) skips this step with the "buf skip breaking" label.
+      - name: Check for breaking API changes
+        if: >-
+          github.event_name == 'pull_request' &&
+          !contains(github.event.pull_request.labels.*.name, 'buf skip breaking')
+        env:
+          REPO: ${{ github.repository }}
+          BASE_REF: ${{ github.base_ref }}
+        run: buf breaking proto --against "https://github.com/${REPO}.git#branch=${BASE_REF},subdir=proto"
 
       - name: Verify generated files are up to date
         # check-generated generates into a temporary directory and compares, so
