@@ -17,9 +17,19 @@ import (
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/object"
 	"github.com/go-git/go-git/v5/plumbing/transport"
+	"github.com/go-git/go-git/v5/plumbing/transport/client"
 	githttp "github.com/go-git/go-git/v5/plumbing/transport/http"
+	"github.com/go-git/go-git/v5/plumbing/transport/server"
 	"github.com/go-git/go-git/v5/storage/memory"
 )
+
+// go-git's file transport runs the git-upload-pack and git-receive-pack
+// binaries, which the backend's image doesn't have. Serve file:// URLs and
+// local paths in-process instead, with go-git's own server, so the backend can
+// use a repository on a volume (Kind, make dev-fake) without git installed.
+func init() {
+	client.InstallProtocol("file", server.NewClient(server.DefaultLoader))
+}
 
 // RepoConfig names the repository and branch a RepoWriter commits to.
 type RepoConfig struct {

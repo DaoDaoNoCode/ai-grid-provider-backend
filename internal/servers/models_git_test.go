@@ -403,3 +403,36 @@ func TestModelsGitMetadataKeyAllowlist(t *testing.T) {
 		t.Fatalf("commits = %d, want the create and the metadata update", n)
 	}
 }
+
+// List applies the CEL filter, the order and the window to the repository's
+// models, and rejects a negative limit.
+func TestModelsGitListFilterOrderPaging(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	srv := mustGitModelsServer(t, gitops.NewMemoryWriter(nil))
+	for _, id := range []string{"bravo", "alpha", "charlie"} {
+		if _, err := srv.Create(ctx, &aigridv1.ModelsCreateRequest{Object: gitSampleModel(id, "site-a")}); err != nil {
+			t.Fatalf("Create(%s) error = %v", id, err)
+		}
+	}
+	order := "-id"
+	limit, offset := int32(1), int32(1)
+	list, err := srv.List(ctx, &aigridv1.ModelsListRequest{Order: &order, Limit: &limit, Offset: &offset})
+	if err != nil {
+		t.Fatalf("List() error = %v", err)
+	}
+	if got := idsOf(list.GetItems()); list.GetTotal() != 3 || !slices.Equal(got, []string{"bravo"}) {
+		t.Fatalf("List(-id, offset 1, limit 1) = %v, total %d", got, list.GetTotal())
+	}
+	filter := `this.id.startsWith("a") || this.id == "charlie"`
+	list, err = srv.List(ctx, &aigridv1.ModelsListRequest{Filter: &filter})
+	if err != nil {
+		t.Fatalf("List(filter) error = %v", err)
+	}
+	if got := idsOf(list.GetItems()); !slices.Equal(got, []string{"alpha", "charlie"}) {
+		t.Fatalf("List(filter) = %v", got)
+	}
+	negative := int32(-1)
+	_, err = srv.List(ctx, &aigridv1.ModelsListRequest{Limit: &negative})
+	assertConnectCode(t, err, connect.CodeInvalidArgument)
+}

@@ -13,6 +13,7 @@ import (
 
 	connect "connectrpc.com/connect/v2"
 	"github.com/osac-project/ai-grid-provider-backend/gen/ai_grid/v1/aigridv1connect"
+	"github.com/osac-project/ai-grid-provider-backend/internal/gitops"
 	"github.com/osac-project/ai-grid-provider-backend/internal/keycloak"
 	"github.com/osac-project/ai-grid-provider-backend/internal/restgateway"
 	"github.com/osac-project/ai-grid-provider-backend/internal/servers"
@@ -24,31 +25,6 @@ import (
 
 var managedClustersResource = schema.GroupVersionResource{
 	Group: "cluster.open-cluster-management.io", Version: "v1", Resource: "managedclusters",
-}
-
-var maasSubscriptionsResource = schema.GroupVersionResource{
-	Group: "maas.opendatahub.io", Version: "v1alpha1", Resource: "maassubscriptions",
-}
-
-var maasAuthPoliciesResource = schema.GroupVersionResource{
-	Group: "maas.opendatahub.io", Version: "v1alpha1", Resource: "maasauthpolicies",
-}
-
-var maasModelRefsResource = schema.GroupVersionResource{
-	Group: "maas.opendatahub.io", Version: "v1alpha1", Resource: "maasmodelrefs",
-}
-
-var llmInferenceServicesResource = schema.GroupVersionResource{
-	Group: "serving.kserve.io", Version: "v1alpha2", Resource: "llminferenceservices",
-}
-var placementsResource = schema.GroupVersionResource{
-	Group: "cluster.open-cluster-management.io", Version: "v1beta1", Resource: "placements",
-}
-var placementDecisionsResource = schema.GroupVersionResource{
-	Group: "cluster.open-cluster-management.io", Version: "v1beta1", Resource: "placementdecisions",
-}
-var manifestWorkReplicaSetsResource = schema.GroupVersionResource{
-	Group: "work.open-cluster-management.io", Version: "v1alpha1", Resource: "manifestworkreplicasets",
 }
 
 func TestRESTGatewayRoutes(t *testing.T) {
@@ -395,14 +371,7 @@ func startGateway(t *testing.T, objects []runtime.Object, orgs organizationClien
 	dynamicClient := fake.NewSimpleDynamicClientWithCustomListKinds(
 		runtime.NewScheme(),
 		map[schema.GroupVersionResource]string{
-			managedClustersResource:         "ManagedClusterList",
-			maasSubscriptionsResource:       "MaaSSubscriptionList",
-			maasModelRefsResource:           "MaaSModelRefList",
-			maasAuthPoliciesResource:        "MaaSAuthPolicyList",
-			llmInferenceServicesResource:    "LLMInferenceServiceList",
-			placementsResource:              "PlacementList",
-			placementDecisionsResource:      "PlacementDecisionList",
-			manifestWorkReplicaSetsResource: "ManifestWorkReplicaSetList",
+			managedClustersResource: "ManagedClusterList",
 		},
 		objects...,
 	)
@@ -423,15 +392,17 @@ func startGateway(t *testing.T, objects []runtime.Object, orgs organizationClien
 	if err != nil {
 		t.Fatalf("build Tenants server: %v", err)
 	}
+	// Models and Subscriptions commit to a Git repository; an empty one here.
+	writer := gitops.NewMemoryWriter(nil)
 	modelsServer, err := servers.NewModelsServer().
+		SetWriter(writer).
 		SetDynamicClient(dynamicClient).
-		SetManifestWorkReplicaSetEnabled(true).
 		Build()
 	if err != nil {
 		t.Fatalf("build Models server: %v", err)
 	}
 	subscriptionsServer, err := servers.NewSubscriptionsServer().
-		SetDynamicClient(dynamicClient).
+		SetWriter(writer).
 		Build()
 	if err != nil {
 		t.Fatalf("build Subscriptions server: %v", err)

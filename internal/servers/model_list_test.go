@@ -33,3 +33,11 @@ func TestApplyModelOrder(t *testing.T) {
 		t.Fatal("expected invalid order error")
 	}
 }
+
+func idsOf(items []*aigridv1.Model) []string {
+	out := make([]string, 0, len(items))
+	for _, m := range items {
+		out = append(out, m.GetId())
+	}
+	return out
+}

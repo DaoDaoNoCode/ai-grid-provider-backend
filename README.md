@@ -22,14 +22,14 @@ The current API includes:
 - `ai_grid.v1.Tenants/Delete`
 - `ai_grid.v1.Models/List`
 - `ai_grid.v1.Models/Get`
-- `ai_grid.v1.Models/Create` (deploys: LLMInferenceService + MaaSModelRef; optional Placement + ManifestWorkReplicaSet)
+- `ai_grid.v1.Models/Create` (commits the model to the Git catalog; see [Git catalog](#git-catalog))
 - `ai_grid.v1.Models/Update`
 - `ai_grid.v1.Models/Delete`
 - `ai_grid.v1.Subscriptions/List`
-- `ai_grid.v1.Subscriptions/Get` (gRPC/REST join covering AuthPolicies + ModelRegistrations; the Go `client.GetSubscription` helper returns the Subscription object only)
-- `ai_grid.v1.Subscriptions/Create` (managed `MaaSAuthPolicy` `<id>-policy`; returned in response)
-- `ai_grid.v1.Subscriptions/Update` (syncs managed AuthPolicy when present)
-- `ai_grid.v1.Subscriptions/Delete` (deletes managed AuthPolicy when present)
+- `ai_grid.v1.Subscriptions/Get` (gRPC/REST join with the managed AuthPolicy + ModelRegistrations; the Go `client.GetSubscription` helper returns the Subscription object only)
+- `ai_grid.v1.Subscriptions/Create` (commits the subscription and its managed `MaaSAuthPolicy` `<id>-policy`; returned in response)
+- `ai_grid.v1.Subscriptions/Update` (rewrites both)
+- `ai_grid.v1.Subscriptions/Delete` (removes both)
 
 REST and Swagger UI are also exposed on HTTP `:8081`:
 
@@ -53,52 +53,22 @@ cluster.open-cluster-management.io/v1/managedclusters
 ```
 
 
-Models RPCs use the same dynamic client against LLMInferenceService (and
-optional ACM Placement / ManifestWorkReplicaSet) plus a MaaSModelRef for
-catalog registration. Default namespace `ai-grid-models` (override
-with `AI_GRID_MODELS_NAMESPACE`):
+### Git catalog
 
-```text
-serving.kserve.io/v1alpha2/llminferenceservices
-cluster.open-cluster-management.io/v1beta1/placements          # when placement set
-work.open-cluster-management.io/v1alpha1/manifestworkreplicasets
-maas.opendatahub.io/v1alpha1/maasmodelrefs
-```
-
-Create is deploy: it applies those objects to the hub. Without `spec.placement`
-the workload stays hub-only; with placement, Create fails with
-`FailedPrecondition` when ManifestWorkReplicaSet is unavailable on the hub.
-
-Point `--kubeconfig` at a cluster that has those CRDs (for example an RHOAI
-spoke with MaaS). Delete refuses while a MaaSSubscription or MaaSAuthPolicy in
-`AI_GRID_SUBSCRIPTION_NAMESPACE` still references the model.
-
-Subscriptions RPCs use the same dynamic client against namespaced MaaS CRs
-(default namespace `models-as-a-service`, override with
-`AI_GRID_SUBSCRIPTION_NAMESPACE`):
-
-```text
-maas.opendatahub.io/v1alpha1/maassubscriptions
-maas.opendatahub.io/v1alpha1/maasauthpolicies   # managed <id>-policy side-effect
-```
-
-Point `--kubeconfig` at a cluster that has those CRDs (for example an RHOAI
-spoke with MaaS). Create/Update/Delete always maintain a paired AuthPolicy
-named `<subscription-id>-policy` when managed by this service.
-
-### Git write mode
-
-With `AI_GRID_GIT_URL` set, the Models and Subscriptions RPCs read from and
-commit to a Git repository instead of the cluster, and Argo CD delivers the
-files. Each create, update or delete is one commit to the branch.
+The Models and Subscriptions RPCs write only to a Git repository, and Argo CD
+delivers the files to the clusters; the backend never creates, updates or
+deletes a model or subscription object on a cluster. Each create, update or
+delete is one commit to the branch. Reads come from the repository too, and
+status from the hub's ACM Policies ([Status](#status-from-the-spokes)).
 
 | Setting | Meaning |
 |---|---|
-| `AI_GRID_GIT_URL` | Repository URL, without credentials. |
+| `AI_GRID_GIT_URL` | Repository URL, without credentials. Required: the backend doesn't start without it. A `file://` URL or local path is served in-process, so the image needs no `git`. |
 | `AI_GRID_GIT_BRANCH` | Branch to commit to. Default `main`. It must have at least one commit. |
 | `AI_GRID_GIT_TOKEN_FILE` | File holding a GitHub personal access token with `contents: write` on that repository only, for example a mounted Secret. Sent as HTTPS basic auth; never logged. |
-
-| `AI_GRID_POLICY_NAMESPACE` | Hub namespace of the ACM Policies that git mode reads status from. Default `ai-grid-policies`. |
+| `AI_GRID_MODELS_NAMESPACE` | Namespace of each model's `LLMInferenceService` on the inference spokes. Default `ai-grid-models`. |
+| `AI_GRID_SUBSCRIPTION_NAMESPACE` | Namespace of the subscriptions, their policies and the models' catalog entries on the ingress spokes. Default `models-as-a-service`. |
+| `AI_GRID_POLICY_NAMESPACE` | Hub namespace of the ACM Policies that status is read from. Default `ai-grid-policies`. |
 | `AI_GRID_GRID_NAMESPACE` | Namespace of the grid on the inference spokes, which each model's NetworkPolicy admits. Default `redhat-ai-grid`. |
 
 The repository holds:
@@ -117,7 +87,7 @@ ManagedCluster `<name>`, `catalog/ingress` and `catalog/subscriptions` to the
 ingress spokes. The backend never deletes an index file, so a cluster with no
 models still has its path.
 
-In git mode, for both:
+For both models and subscriptions:
 
 - `metadata.version` is the file's `ai-grid/version` annotation, which each
   write increments. A stale version, or a write to the same file by another
@@ -131,8 +101,8 @@ In git mode, for both:
   them.
 - The backend can't see the spokes. Argo CD adopts an object with the same
   name that already exists there, so keep hand-applied `MaaSAuthPolicy`
-  objects off the `<subscription id>-policy` names: cluster mode refused to
-  create over an unmanaged policy, git mode can't. Argo CD's
+  objects off the `<subscription id>-policy` names; the backend can't refuse
+  to create over an unmanaged policy as it did when it wrote to the cluster. Argo CD's
   `FailOnSharedResource=true` sync option on the catalog apps catches objects
   another Argo CD app manages, but not hand-applied ones.
 
@@ -147,7 +117,7 @@ For subscriptions:
   together; it has no ownerReference.
 - A model ref without a namespace gets the subscription's namespace
   (`models-as-a-service` by default).
-- `status.phase` comes from the spokes (see "Status in git mode" below):
+- `status.phase` comes from the spokes (see "Status from the spokes" below):
   `Active` when every ingress cluster that reports the subscription has it
   active, `Pending` when any doesn't, and empty when none reports it. `Get`
   returns the file's policy, and one `model_registrations` entry per model
@@ -184,9 +154,9 @@ For models:
 - Delete answers `FailedPrecondition` while a subscription in the repository
   names the model.
 
-#### Status in git mode
+#### Status from the spokes
 
-Git mode reads status back from two inform-only ACM Policies on the hub, in
+The backend reads status back from two inform-only ACM Policies on the hub, in
 `AI_GRID_POLICY_NAMESPACE` (default `ai-grid-policies`), which the environment
 deploys:
 
@@ -202,8 +172,8 @@ the latest message of each ConfigurationPolicy, which names each object as
 found as specified (ready) or not. It reads on every request, with no cache,
 which suits the handful of clusters a grid has. The ServiceAccount needs
 `get` on the two roots and their copies (`deploy/openshift/rbac.yaml`). A
-Policy that is missing or forbidden means no report, not an error, so git mode
-works before the Policies are deployed.
+Policy that is missing or forbidden means no report, not an error, so the
+backend works before the Policies are deployed.
 
 The service runs in-cluster using its Kubernetes ServiceAccount. Its RBAC role
 allows `get`, `list`, `watch`, `create`, `update`, `patch`, and `delete` on
@@ -290,7 +260,10 @@ The script:
 
 1. Creates or reuses a Kind cluster named `ai-grid-hub`.
 2. Builds `ai-grid-provider-backend` with Podman and loads it into Kind.
-3. Deploys the backend, Keycloak, and PostgreSQL.
+3. Deploys the backend, Keycloak, and PostgreSQL. Kind runs the backend
+   against an in-pod Git repository: an init container creates a bare
+   repository with one seed commit on an emptyDir, so Models and
+   Subscriptions commits are lost with the pod.
 4. Installs the OCM hub control plane with `clusteradm init`.
 5. Creates two real `ManagedCluster` custom resources.
 6. Creates the `ai-grid` Keycloak realm and two sample Organizations.
@@ -437,7 +410,9 @@ make dev-fake-poc     # the same on the PoC fixtures
 
 Requires a kubeconfig that can reach a hub with the ManagedCluster CRD (Kind or
 OpenShift after `oc login`). gRPC listens on `:8080`; REST and Swagger UI on
-`:8081`. For Tenants, start a local Keycloak first (Podman):
+`:8081`. Models and Subscriptions commit to `bin/dev-catalog.git` unless
+`AI_GRID_GIT_URL` is set ([Developing](#developing)). For Tenants, start a
+local Keycloak first (Podman):
 
 ```sh
 make keycloak-up      # :8180, seeds realm ai-grid + tenant-a / tenant-b

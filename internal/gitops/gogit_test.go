@@ -178,3 +178,29 @@ func TestNewRepoWriterRequiresConfig(t *testing.T) {
 		}
 	}
 }
+
+// A file:// repository is served in-process: no git binary on PATH.
+func TestRepoWriterFileURLWithoutGitBinary(t *testing.T) {
+	url := "file://" + newBareRepo(t, map[string]string{"catalog/subscriptions/README": "keep"})
+	t.Setenv("PATH", "")
+	ctx := context.Background()
+	w, err := NewRepoWriter(ctx, RepoConfig{URL: url, Branch: "main", AuthorName: "t", AuthorEmail: "t@example.com"})
+	if err != nil {
+		t.Fatalf("NewRepoWriter() error = %v", err)
+	}
+	head, err := w.Head(ctx)
+	if err != nil {
+		t.Fatalf("Head() error = %v", err)
+	}
+	if _, err := w.Commit(ctx, head.Revision(), Change{Put: map[string][]byte{"catalog/subscriptions/a.yaml": []byte("a")}, Message: "m"}); err != nil {
+		t.Fatalf("Commit() error = %v", err)
+	}
+	other, err := NewRepoWriter(ctx, RepoConfig{URL: url, Branch: "main", AuthorName: "t", AuthorEmail: "t@example.com"})
+	if err != nil {
+		t.Fatalf("second NewRepoWriter() error = %v", err)
+	}
+	head, _ = other.Head(ctx)
+	if data, err := head.Read("catalog/subscriptions/a.yaml"); err != nil || string(data) != "a" {
+		t.Fatalf("Read(a) = %q, %v", data, err)
+	}
+}

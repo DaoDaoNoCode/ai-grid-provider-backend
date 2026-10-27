@@ -80,6 +80,36 @@ spec:
         app: ai-grid-provider-backend
     spec:
       serviceAccountName: ai-grid-provider-backend
+      # Models and Subscriptions commit to a Git repository. On Kind it is a
+      # bare repository on an emptyDir, created with one seed commit (a README
+      # in catalog/subscriptions/) and lost with the pod. The backend serves
+      # file:// in-process, so its image needs no git.
+      initContainers:
+        - name: catalog-repo
+          image: docker.io/alpine/git:v2.52.0@sha256:4a0e72d49596a1f5d3701aeedafdadc5c0da4062be4657c7bdc4017387f591cc
+          command:
+            - sh
+            - -ec
+            - |
+              repo=/catalog/repo.git
+              if [ ! -d "$repo" ]; then
+                git init --bare -b main "$repo"
+                seed="$(mktemp -d)"
+                git -C "$seed" init -b main
+                mkdir -p "$seed/catalog/subscriptions"
+                echo "Subscriptions the backend commits. Keep this file: Git drops an empty directory." > "$seed/catalog/subscriptions/README"
+                git -C "$seed" add .
+                git -C "$seed" -c user.name=ai-grid-provider-backend -c user.email=ai-grid-provider-backend@noreply.invalid commit -q -m "catalog: seed"
+                git -C "$seed" push -q "$repo" main
+              fi
+              # The backend runs as UID 1001.
+              chmod -R a+rwX /catalog
+          volumeMounts:
+            - name: catalog
+              mountPath: /catalog
+      volumes:
+        - name: catalog
+          emptyDir: {}
       containers:
         - name: ai-grid-provider-backend
           image: localhost/ai-grid-provider-backend:dev
@@ -95,6 +125,11 @@ spec:
               value: admin
             - name: KEYCLOAK_ADMIN_PASSWORD
               value: admin
+            - name: AI_GRID_GIT_URL
+              value: file:///catalog/repo.git
+          volumeMounts:
+            - name: catalog
+              mountPath: /catalog
           ports:
             - name: grpc
               containerPort: 8080

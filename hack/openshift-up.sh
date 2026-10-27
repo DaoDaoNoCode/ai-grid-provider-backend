@@ -33,6 +33,11 @@
 #   ACM_NAMESPACE         RHACM operator namespace (default open-cluster-management)
 #   GRANT_ANYUID          1 to grant anyuid SCC to default SA (Keycloak/Postgres)
 #   CHANNEL               ACM Subscription channel (passed through to acm-hub-up)
+#   AI_GRID_GIT_URL       required: the repository Models and Subscriptions commit to
+#                         (HTTPS, no credentials in the URL)
+#   AI_GRID_GIT_BRANCH    branch to commit to (default main)
+#   AI_GRID_GIT_TOKEN_FILE local file holding a token with contents:write on that
+#                         repository only; stored in Secret ai-grid-provider-backend-git
 #
 # Needs oc logged in. helm required when ACM is installed. Idempotent.
 set -euo pipefail
@@ -56,6 +61,13 @@ KEYCLOAK_ADMIN_REALM="${KEYCLOAK_ADMIN_REALM:-master}"
 DEFAULT_API_IMAGE="quay.io/rh-ee-rjjohnso/ai-grid-provider-backend:latest"
 MANAGED_CLUSTER_CRD="managedclusters.cluster.open-cluster-management.io"
 DEFAULT_IMAGE="ghcr.io/ai-grid-cloud/ai-grid-provider-backend:latest"
+AI_GRID_GIT_URL="${AI_GRID_GIT_URL:-}"
+AI_GRID_GIT_BRANCH="${AI_GRID_GIT_BRANCH:-main}"
+AI_GRID_GIT_TOKEN_FILE="${AI_GRID_GIT_TOKEN_FILE:-}"
+if [[ -z "$AI_GRID_GIT_URL" ]]; then
+  echo "AI_GRID_GIT_URL is required: the Git repository Models and Subscriptions commit to" >&2
+  exit 1
+fi
 
 for arg in "$@"; do
   case "$arg" in
@@ -198,6 +210,17 @@ oc create secret generic ai-grid-provider-backend-keycloak -n "${NAMESPACE}" \
   --from-literal=admin-realm="${KEYCLOAK_ADMIN_REALM}" \
   --from-literal=username="${KEYCLOAK_ADMIN_USERNAME}" \
   --from-literal=password="${KEYCLOAK_ADMIN_PASSWORD}" \
+  --dry-run=client -o yaml | oc apply -f -
+
+echo "==> creating secret ai-grid-provider-backend-git for ${AI_GRID_GIT_URL} (branch ${AI_GRID_GIT_BRANCH})"
+git_token_args=(--from-literal=token=)
+if [[ -n "$AI_GRID_GIT_TOKEN_FILE" ]]; then
+  git_token_args=(--from-file=token="${AI_GRID_GIT_TOKEN_FILE}")
+fi
+oc create secret generic ai-grid-provider-backend-git -n "${NAMESPACE}" \
+  --from-literal=url="${AI_GRID_GIT_URL}" \
+  --from-literal=branch="${AI_GRID_GIT_BRANCH}" \
+  "${git_token_args[@]}" \
   --dry-run=client -o yaml | oc apply -f -
 
 # Ensure the deployment picks up a newly created/rotated secret.

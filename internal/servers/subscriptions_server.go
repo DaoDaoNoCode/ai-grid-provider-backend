@@ -2,10 +2,8 @@ package servers
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"log/slog"
-	"strconv"
 	"strings"
 	"time"
 
@@ -16,31 +14,24 @@ import (
 	"github.com/osac-project/ai-grid-provider-backend/internal/gitops"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
-	apierrors "k8s.io/apimachinery/pkg/api/errors"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
-	"k8s.io/apimachinery/pkg/types"
-	"k8s.io/client-go/dynamic"
 )
 
 // SubscriptionsServerBuilder configures a SubscriptionsServer.
 type SubscriptionsServerBuilder struct {
 	logger    *slog.Logger
-	client    dynamic.Interface
 	writer    gitops.Writer
 	status    *CatalogStatusReader
 	namespace string
 }
 
-// SubscriptionsServer implements ai_grid.v1.Subscriptions against namespaced
-// MaaSSubscription CRs. Create/Update/Delete also maintain a managed
-// MaaSAuthPolicy named <id>-policy in the same namespace. With a Writer (git
-// mode) it reads and commits both to a Git repository instead, and never
-// calls the cluster (subscriptions_git.go).
+// SubscriptionsServer implements ai_grid.v1.Subscriptions over a Git
+// repository: each subscription is a MaaSSubscription and its managed
+// MaaSAuthPolicy <id>-policy, committed to one file that Argo CD delivers to
+// the ingress clusters (subscriptions_git.go). It never writes to the cluster;
+// it reads status from the hub through its CatalogStatusReader.
 type SubscriptionsServer struct {
 	aigridv1connect.UnimplementedSubscriptionsHandler
 	logger    *slog.Logger
-	client    dynamic.Interface
 	writer    gitops.Writer
 	status    *CatalogStatusReader
 	namespace string
@@ -59,29 +50,24 @@ func (b *SubscriptionsServerBuilder) SetLogger(logger *slog.Logger) *Subscriptio
 	return b
 }
 
-// SetDynamicClient sets the Kubernetes dynamic client. Mandatory unless a
-// Writer is set.
-func (b *SubscriptionsServerBuilder) SetDynamicClient(client dynamic.Interface) *SubscriptionsServerBuilder {
-	b.client = client
-	return b
-}
-
-// SetCatalogStatus sets where git mode reads status from the spokes.
-// Optional; without it git mode reports everything as saved to Git.
-func (b *SubscriptionsServerBuilder) SetCatalogStatus(status *CatalogStatusReader) *SubscriptionsServerBuilder {
-	b.status = status
-	return b
-}
-
-// SetWriter switches the server to git mode: subscriptions are read from and
-// committed to the Writer's branch. Optional.
+// SetWriter sets the Git repository subscriptions are read from and committed
+// to. Mandatory.
 func (b *SubscriptionsServerBuilder) SetWriter(writer gitops.Writer) *SubscriptionsServerBuilder {
 	b.writer = writer
 	return b
 }
 
-// SetNamespace sets the namespace for MaaSSubscription and MaaSAuthPolicy CRs.
-// Optional; defaults to models-as-a-service.
+// SetCatalogStatus sets where status is read from the spokes. Optional;
+// without it every subscription has no phase and every model ref is saved to
+// Git.
+func (b *SubscriptionsServerBuilder) SetCatalogStatus(status *CatalogStatusReader) *SubscriptionsServerBuilder {
+	b.status = status
+	return b
+}
+
+// SetNamespace sets the namespace of the MaaSSubscription and MaaSAuthPolicy
+// objects, and the default namespace of model refs. Optional; defaults to
+// models-as-a-service.
 func (b *SubscriptionsServerBuilder) SetNamespace(namespace string) *SubscriptionsServerBuilder {
 	b.namespace = namespace
 	return b
@@ -89,8 +75,8 @@ func (b *SubscriptionsServerBuilder) SetNamespace(namespace string) *Subscriptio
 
 // Build creates the SubscriptionsServer.
 func (b *SubscriptionsServerBuilder) Build() (*SubscriptionsServer, error) {
-	if b.client == nil && b.writer == nil {
-		return nil, errors.New("kubernetes dynamic client or git writer is mandatory")
+	if b.writer == nil {
+		return nil, errors.New("git writer is mandatory")
 	}
 	logger := b.logger
 	if logger == nil {
@@ -100,16 +86,16 @@ func (b *SubscriptionsServerBuilder) Build() (*SubscriptionsServer, error) {
 	if namespace == "" {
 		namespace = defaultSubscriptionNamespace
 	}
-	return &SubscriptionsServer{logger: logger, client: b.client, writer: b.writer, status: b.status, namespace: namespace}, nil
+	return &SubscriptionsServer{logger: logger, writer: b.writer, status: b.status, namespace: namespace}, nil
 }
 
-// List returns MaaSSubscription objects from the configured namespace.
-// Pipeline: map CRs → CEL filter → allowlisted order → offset/limit → enrich page.
+// List returns the repository's subscriptions.
+// Pipeline: read files → CEL filter → allowlisted order → offset/limit.
 func (s *SubscriptionsServer) List(ctx context.Context, req *aigridv1.SubscriptionsListRequest) (*aigridv1.SubscriptionsListResponse, error) {
 	if err := validateListLimit(req.Limit); err != nil {
 		return nil, err
 	}
-	items, err := s.listItems(ctx)
+	items, err := s.gitList(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -138,11 +124,6 @@ func (s *SubscriptionsServer) List(ctx context.Context, req *aigridv1.Subscripti
 	}
 
 	page, total := applyListWindow(items, req.Offset, req.Limit)
-	if s.writer == nil {
-		for _, sub := range page {
-			enrichModelRefsFromAnnotations(sub, s.loadModelRefs(ctx, sub))
-		}
-	}
 	return &aigridv1.SubscriptionsListResponse{
 		Size:  int32(len(page)),
 		Total: total,
@@ -150,62 +131,17 @@ func (s *SubscriptionsServer) List(ctx context.Context, req *aigridv1.Subscripti
 	}, nil
 }
 
-func (s *SubscriptionsServer) listItems(ctx context.Context) ([]*aigridv1.Subscription, error) {
-	if s.writer != nil {
-		return s.gitList(ctx)
-	}
-	list, err := s.client.Resource(maasSubscriptionsResource).Namespace(s.namespace).List(ctx, metav1.ListOptions{})
-	if err != nil {
-		if apierrors.IsNotFound(err) {
-			return nil, nil
-		}
-		return nil, mapSubscriptionAPIError("list", "", err)
-	}
-	items := make([]*aigridv1.Subscription, 0, len(list.Items))
-	for _, item := range list.Items {
-		items = append(items, subscriptionFromUnstructured(item))
-	}
-	return items, nil
-}
-
-// Get returns a MaaSSubscription plus covering AuthPolicies and ModelRegistrations.
+// Get returns a subscription, its managed AuthPolicy and one ModelRegistration
+// per model ref.
 func (s *SubscriptionsServer) Get(ctx context.Context, req *aigridv1.SubscriptionsGetRequest) (*aigridv1.SubscriptionsGetResponse, error) {
 	id := req.GetId()
 	if err := validateSubscriptionID(id); err != nil {
 		return nil, err
 	}
-	if s.writer != nil {
-		return s.gitGet(ctx, id)
-	}
-	obj, err := s.client.Resource(maasSubscriptionsResource).Namespace(s.namespace).Get(ctx, id, metav1.GetOptions{})
-	if err != nil {
-		return nil, mapSubscriptionAPIError("get", id, err)
-	}
-	sub := subscriptionFromUnstructured(*obj)
-	modelObjs := s.loadModelRefs(ctx, sub)
-	enrichModelRefsFromAnnotations(sub, modelObjs)
-
-	policies, err := s.coveringAuthPolicies(ctx, sub)
-	if err != nil {
-		return nil, err
-	}
-	regs := make([]*aigridv1.ModelRegistration, 0, len(modelObjs))
-	for _, ref := range sub.GetSpec().GetModelRefs() {
-		if ref == nil {
-			continue
-		}
-		if obj := modelObjs[modelRefKey(ref.GetName(), ref.GetNamespace())]; obj != nil {
-			regs = append(regs, modelRegistrationFromUnstructured(*obj))
-		}
-	}
-	return &aigridv1.SubscriptionsGetResponse{
-		Object:             sub,
-		AuthPolicies:       policies,
-		ModelRegistrations: regs,
-	}, nil
+	return s.gitGet(ctx, id)
 }
 
-// Create creates a MaaSSubscription and a managed MaaSAuthPolicy <id>-policy.
+// Create commits a subscription and its managed AuthPolicy <id>-policy.
 func (s *SubscriptionsServer) Create(ctx context.Context, req *aigridv1.SubscriptionsCreateRequest) (*aigridv1.SubscriptionsCreateResponse, error) {
 	object := req.GetObject()
 	if object == nil {
@@ -218,276 +154,34 @@ func (s *SubscriptionsServer) Create(ctx context.Context, req *aigridv1.Subscrip
 	if err := validateSubscriptionSpec(object.GetSpec()); err != nil {
 		return nil, err
 	}
-	if s.writer != nil {
-		return s.gitCreate(ctx, object)
-	}
-
-	policyName := authPolicyNameForSubscription(id)
-	if existing, err := s.client.Resource(maasAuthPoliciesResource).Namespace(s.namespace).Get(ctx, policyName, metav1.GetOptions{}); err == nil {
-		if !isManagedAuthPolicy(existing) {
-			return nil, connect.Errorf(connect.CodeFailedPrecondition, "auth policy %q already exists and is not managed by ai-grid-provider-backend", policyName)
-		}
-		return nil, connect.Errorf(connect.CodeAlreadyExists, "auth policy %q already exists", policyName)
-	} else if !apierrors.IsNotFound(err) {
-		return nil, mapSubscriptionAPIError("get auth policy", id, err)
-	}
-
-	created, err := s.client.Resource(maasSubscriptionsResource).Namespace(s.namespace).Create(
-		ctx, subscriptionToUnstructured(object, s.namespace), metav1.CreateOptions{},
-	)
-	if err != nil {
-		return nil, mapSubscriptionAPIError("create", id, err)
-	}
-
-	policy := authPolicyFromSubscription(object, s.namespace)
-	createdPolicy, err := s.client.Resource(maasAuthPoliciesResource).Namespace(s.namespace).Create(ctx, policy, metav1.CreateOptions{})
-	if err != nil {
-		if delErr := s.client.Resource(maasSubscriptionsResource).Namespace(s.namespace).Delete(ctx, id, metav1.DeleteOptions{}); delErr != nil && !apierrors.IsNotFound(delErr) {
-			s.logger.Warn("compensate: delete subscription after auth policy create failed", "id", id, "error", delErr)
-		}
-		return nil, mapSubscriptionAPIError("create auth policy", id, err)
-	}
-
-	return &aigridv1.SubscriptionsCreateResponse{
-		Object:     subscriptionFromUnstructured(*created),
-		AuthPolicy: authPolicyFromUnstructured(*createdPolicy),
-	}, nil
+	return s.gitCreate(ctx, object)
 }
 
-// Update merge-patches the subscription and syncs a managed <id>-policy when present.
+// Update commits the fields the mask selects, to the subscription and its
+// managed AuthPolicy.
 func (s *SubscriptionsServer) Update(ctx context.Context, req *aigridv1.SubscriptionsUpdateRequest) (*aigridv1.SubscriptionsUpdateResponse, error) {
 	object := req.GetObject()
 	if object == nil {
 		return nil, connect.NewError(connect.CodeInvalidArgument, "object is required")
 	}
-	id := subscriptionID(object)
-	if err := validateSubscriptionID(id); err != nil {
+	if err := validateSubscriptionID(subscriptionID(object)); err != nil {
 		return nil, err
 	}
-	if s.writer != nil {
-		return s.gitUpdate(ctx, req)
-	}
-
-	current, err := s.client.Resource(maasSubscriptionsResource).Namespace(s.namespace).Get(ctx, id, metav1.GetOptions{})
-	if err != nil {
-		return nil, mapSubscriptionAPIError("get", id, err)
-	}
-
-	var version int32
-	if object.GetMetadata() != nil {
-		version = object.GetMetadata().GetVersion()
-	}
-	if req.GetLock() && version == 0 {
-		return nil, connect.NewError(connect.CodeInvalidArgument, "lock requires metadata.version")
-	}
-	if version != 0 && strconv.FormatInt(int64(version), 10) != current.GetResourceVersion() {
-		return nil, staleSubscriptionError("update", id)
-	}
-
-	paths, err := subscriptionUpdatePaths(req.GetUpdateMask(), object)
-	if err != nil {
-		return nil, err
-	}
-
-	currentSub := subscriptionFromUnstructured(*current)
-	candidate := mergeSubscriptionUpdate(currentSub, object, paths)
-	if paths.anySpec() {
-		if err := validateSubscriptionSpec(candidate.GetSpec()); err != nil {
-			return nil, err
-		}
-		if err := validateOrganizationImmutable(currentSub.GetSpec(), candidate.GetSpec()); err != nil {
-			return nil, err
-		}
-	}
-
-	patchBody := subscriptionUpdatePatch(currentSub, candidate, object, paths)
-	if len(patchBody) == 0 {
-		return &aigridv1.SubscriptionsUpdateResponse{Object: currentSub}, nil
-	}
-	if version != 0 {
-		meta, _ := patchBody["metadata"].(map[string]interface{})
-		if meta == nil {
-			meta = map[string]interface{}{}
-			patchBody["metadata"] = meta
-		}
-		meta["resourceVersion"] = strconv.FormatInt(int64(version), 10)
-	}
-
-	patchBytes, err := json.Marshal(patchBody)
-	if err != nil {
-		return nil, connect.Errorf(connect.CodeInternal, "marshal MaaSSubscription patch: %v", err).WithCause(err)
-	}
-	updated, err := s.client.Resource(maasSubscriptionsResource).Namespace(s.namespace).Patch(
-		ctx, id, types.MergePatchType, patchBytes, metav1.PatchOptions{},
-	)
-	if err != nil {
-		return nil, mapSubscriptionAPIError("update", id, err)
-	}
-
-	if paths.anySpec() {
-		if err := s.syncManagedAuthPolicy(ctx, candidate); err != nil {
-			return nil, err
-		}
-	}
-
-	return &aigridv1.SubscriptionsUpdateResponse{Object: subscriptionFromUnstructured(*updated)}, nil
+	return s.gitUpdate(ctx, req)
 }
 
-// Delete deletes a managed <id>-policy first (when present), then the
-// MaaSSubscription. Policy-first ordering keeps Delete retryable: a failure
-// after the subscription is gone would otherwise leave a leaked policy that a
-// NotFound retry never reaches. Unmanaged same-named policies are left alone.
-//
-// When resource_version is nonzero, the live subscription is compared first so
-// a stale delete changes nothing (Aborted before policy removal). The same
-// version is then passed as a K8s Delete precondition. A missing subscription
-// still attempts managed-policy cleanup so a prior partial delete can finish,
-// then returns NotFound.
+// Delete removes the subscription's file, and with it the managed AuthPolicy.
+// A nonzero resource_version must equal the stored metadata.version, or the
+// delete is Aborted; zero skips the check.
 func (s *SubscriptionsServer) Delete(ctx context.Context, req *aigridv1.SubscriptionsDeleteRequest) (*aigridv1.SubscriptionsDeleteResponse, error) {
 	id := req.GetId()
 	if err := validateSubscriptionID(id); err != nil {
 		return nil, err
 	}
-	if s.writer != nil {
-		if err := s.gitDelete(ctx, id, req.GetResourceVersion()); err != nil {
-			return nil, err
-		}
-		return &aigridv1.SubscriptionsDeleteResponse{}, nil
-	}
-
-	current, getErr := s.client.Resource(maasSubscriptionsResource).Namespace(s.namespace).Get(ctx, id, metav1.GetOptions{})
-	if getErr != nil {
-		if apierrors.IsNotFound(getErr) {
-			if err := s.deleteManagedAuthPolicy(ctx, id); err != nil {
-				return nil, err
-			}
-			return nil, mapSubscriptionAPIError("delete", id, getErr)
-		}
-		return nil, mapSubscriptionAPIError("get", id, getErr)
-	}
-	if rv := req.GetResourceVersion(); rv != 0 {
-		// Compare only when the hub reported a resourceVersion; empty means
-		// fall through to the Delete precondition (fake clients often omit it).
-		if currentRV := current.GetResourceVersion(); currentRV != "" &&
-			strconv.FormatInt(int64(rv), 10) != currentRV {
-			return nil, staleSubscriptionError("delete", id)
-		}
-	}
-
-	if err := s.deleteManagedAuthPolicy(ctx, id); err != nil {
+	if err := s.gitDelete(ctx, id, req.GetResourceVersion()); err != nil {
 		return nil, err
 	}
-
-	delOpts := metav1.DeleteOptions{}
-	if rv := req.GetResourceVersion(); rv != 0 {
-		rvStr := strconv.FormatInt(int64(rv), 10)
-		delOpts.Preconditions = &metav1.Preconditions{ResourceVersion: &rvStr}
-	}
-	err := s.client.Resource(maasSubscriptionsResource).Namespace(s.namespace).Delete(ctx, id, delOpts)
-	if err != nil {
-		return nil, mapSubscriptionAPIError("delete", id, err)
-	}
 	return &aigridv1.SubscriptionsDeleteResponse{}, nil
-}
-
-// deleteManagedAuthPolicy removes <id>-policy when it is owned by this backend.
-// Missing or unmanaged policies are no-ops; get/delete failures are returned.
-func (s *SubscriptionsServer) deleteManagedAuthPolicy(ctx context.Context, id string) error {
-	policyName := authPolicyNameForSubscription(id)
-	existing, getErr := s.client.Resource(maasAuthPoliciesResource).Namespace(s.namespace).Get(ctx, policyName, metav1.GetOptions{})
-	if getErr != nil {
-		if apierrors.IsNotFound(getErr) {
-			return nil
-		}
-		return mapSubscriptionAPIError("get auth policy", id, getErr)
-	}
-	if !isManagedAuthPolicy(existing) {
-		return nil
-	}
-	if delErr := s.client.Resource(maasAuthPoliciesResource).Namespace(s.namespace).Delete(ctx, policyName, metav1.DeleteOptions{}); delErr != nil && !apierrors.IsNotFound(delErr) {
-		return mapSubscriptionAPIError("delete auth policy", id, delErr)
-	}
-	return nil
-}
-
-func (s *SubscriptionsServer) loadModelRefs(ctx context.Context, sub *aigridv1.Subscription) map[string]*unstructured.Unstructured {
-	out := map[string]*unstructured.Unstructured{}
-	if sub == nil || sub.GetSpec() == nil {
-		return out
-	}
-	for _, ref := range sub.GetSpec().GetModelRefs() {
-		if ref == nil || ref.GetName() == "" {
-			continue
-		}
-		ns := ref.GetNamespace()
-		if ns == "" {
-			ns = defaultModelNamespace
-		}
-		key := modelRefKey(ref.GetName(), ns)
-		if _, ok := out[key]; ok {
-			continue
-		}
-		obj, err := s.client.Resource(maasModelRefsResource).Namespace(ns).Get(ctx, ref.GetName(), metav1.GetOptions{})
-		if err != nil {
-			if !apierrors.IsNotFound(err) {
-				s.logger.Warn("get MaaSModelRef", "name", ref.GetName(), "namespace", ns, "error", err)
-			}
-			continue
-		}
-		out[key] = obj
-	}
-	return out
-}
-
-func (s *SubscriptionsServer) coveringAuthPolicies(ctx context.Context, sub *aigridv1.Subscription) ([]*aigridv1.AuthPolicy, error) {
-	modelKeys := map[string]struct{}{}
-	for _, ref := range sub.GetSpec().GetModelRefs() {
-		if ref == nil {
-			continue
-		}
-		modelKeys[modelRefKey(ref.GetName(), ref.GetNamespace())] = struct{}{}
-	}
-	list, err := s.client.Resource(maasAuthPoliciesResource).Namespace(s.namespace).List(ctx, metav1.ListOptions{})
-	if err != nil {
-		if apierrors.IsNotFound(err) {
-			return nil, nil
-		}
-		return nil, mapSubscriptionAPIError("list auth policies", subscriptionID(sub), err)
-	}
-	out := make([]*aigridv1.AuthPolicy, 0)
-	for i := range list.Items {
-		item := &list.Items[i]
-		if !authPolicyCoversModels(item, modelKeys) {
-			continue
-		}
-		out = append(out, authPolicyFromUnstructured(*item))
-	}
-	return out, nil
-}
-
-func (s *SubscriptionsServer) syncManagedAuthPolicy(ctx context.Context, object *aigridv1.Subscription) error {
-	id := subscriptionID(object)
-	policyName := authPolicyNameForSubscription(id)
-	existing, err := s.client.Resource(maasAuthPoliciesResource).Namespace(s.namespace).Get(ctx, policyName, metav1.GetOptions{})
-	if err != nil {
-		if apierrors.IsNotFound(err) {
-			return nil
-		}
-		return mapSubscriptionAPIError("get auth policy", id, err)
-	}
-	if !isManagedAuthPolicy(existing) {
-		return nil
-	}
-	patchBytes, err := json.Marshal(authPolicySpecPatch(object))
-	if err != nil {
-		return connect.Errorf(connect.CodeInternal, "marshal MaaSAuthPolicy patch: %v", err).WithCause(err)
-	}
-	if _, err := s.client.Resource(maasAuthPoliciesResource).Namespace(s.namespace).Patch(
-		ctx, policyName, types.MergePatchType, patchBytes, metav1.PatchOptions{},
-	); err != nil {
-		return mapSubscriptionAPIError("update auth policy", id, err)
-	}
-	return nil
 }
 
 type subUpdatePaths struct {
@@ -640,93 +334,6 @@ func mergeSubscriptionUpdate(stored, incoming *aigridv1.Subscription, paths subU
 	return out
 }
 
-// subscriptionUpdatePatch builds a merge-patch body with only the selected fields.
-// Metadata maps are replaced as a whole (nulls for removed keys). Spec fields
-// come from the merged candidate so partial updates never write zeros for
-// unmasked siblings.
-func subscriptionUpdatePatch(stored, candidate, incoming *aigridv1.Subscription, paths subUpdatePaths) map[string]interface{} {
-	patchBody := map[string]interface{}{}
-	patchMeta := map[string]interface{}{}
-	if paths.labels {
-		var next, current map[string]string
-		if incoming.GetMetadata() != nil {
-			next = incoming.GetMetadata().GetLabels()
-		}
-		if stored.GetMetadata() != nil {
-			current = stored.GetMetadata().GetLabels()
-		}
-		patchMeta["labels"] = replaceStringMapPatch(current, next, nil)
-	}
-	if paths.annotations {
-		var next, current map[string]string
-		if incoming.GetMetadata() != nil {
-			next = incoming.GetMetadata().GetAnnotations()
-		}
-		if stored.GetMetadata() != nil {
-			current = stored.GetMetadata().GetAnnotations()
-		}
-		patchMeta["annotations"] = replaceStringMapPatch(current, next, nil)
-	}
-	if len(patchMeta) > 0 {
-		patchBody["metadata"] = patchMeta
-	}
-	if !paths.anySpec() {
-		return patchBody
-	}
-	if paths.wholeSpec {
-		patchBody["spec"] = subscriptionSpecUpdateMap(candidate.GetSpec(), stored.GetSpec())
-		return patchBody
-	}
-	specPatch := map[string]interface{}{}
-	full := subscriptionSpecMap(candidate.GetSpec())
-	if paths.owner {
-		specPatch["owner"] = full["owner"]
-	}
-	if paths.modelRefs {
-		specPatch["modelRefs"] = full["modelRefs"]
-	}
-	if paths.priority {
-		specPatch["priority"] = full["priority"]
-	}
-	if paths.organization {
-		if org, ok := full["organization"]; ok {
-			specPatch["organization"] = org
-		} else {
-			specPatch["organization"] = nil
-		}
-	}
-	if paths.tokenMetadata {
-		next := tokenMetadataToUnstructured(candidate.GetSpec().GetTokenMetadata())
-		var prev map[string]interface{}
-		if stored != nil && stored.GetSpec() != nil {
-			prev = tokenMetadataToUnstructured(stored.GetSpec().GetTokenMetadata())
-		}
-		if next == nil {
-			specPatch["tokenMetadata"] = nil
-		} else {
-			specPatch["tokenMetadata"] = replaceTokenMetadataPatch(prev, next)
-		}
-	}
-	if paths.inferencePriority {
-		if ip, ok := full["inferencePriority"]; ok {
-			specPatch["inferencePriority"] = ip
-		} else {
-			specPatch["inferencePriority"] = nil
-		}
-	}
-	if paths.guardrails {
-		if g, ok := full["guardrails"]; ok {
-			specPatch["guardrails"] = g
-		} else {
-			specPatch["guardrails"] = []interface{}{}
-		}
-	}
-	if len(specPatch) > 0 {
-		patchBody["spec"] = specPatch
-	}
-	return patchBody
-}
-
 func validateSubscriptionID(id string) error {
 	if id == "" {
 		return connect.NewError(connect.CodeInvalidArgument, "id is required")
@@ -813,21 +420,4 @@ func validateOrganizationImmutable(current, next *aigridv1.SubscriptionSpec) err
 
 func staleSubscriptionError(op, id string) *connect.Error {
 	return connect.Errorf(connect.CodeAborted, "%s Subscription %q: the subscription changed since it was read; reload and retry", op, id)
-}
-
-func mapSubscriptionAPIError(op, id string, err error) error {
-	switch {
-	case apierrors.IsNotFound(err):
-		return connect.Errorf(connect.CodeNotFound, "Subscription %q not found", id).WithCause(err)
-	case apierrors.IsAlreadyExists(err):
-		return connect.Errorf(connect.CodeAlreadyExists, "Subscription %q already exists", id).WithCause(err)
-	case apierrors.IsInvalid(err), apierrors.IsBadRequest(err):
-		return connect.Errorf(connect.CodeInvalidArgument, "%s Subscription %q: %v", op, id, err).WithCause(err)
-	case apierrors.IsConflict(err):
-		return staleSubscriptionError(op, id).WithCause(err)
-	case apierrors.IsForbidden(err), apierrors.IsUnauthorized(err):
-		return connect.Errorf(connect.CodePermissionDenied, "%s Subscription %q: %v", op, id, err).WithCause(err)
-	default:
-		return connect.Errorf(connect.CodeInternal, "%s Subscription %q: %v", op, id, err).WithCause(err)
-	}
 }

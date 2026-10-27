@@ -39,6 +39,10 @@ them through the real Kubernetes and Keycloak clients.
 | `llminferenceservices.json` | fake hub | An `LLMInferenceServiceList` (`serving.kserve.io/v1alpha2`) in `ai-grid-models` for Models List/Get. Optional; missing means empty Models List until Create. | hand-authored |
 | `policies.json` | fake hub | A `PolicyList` (`policy.open-cluster-management.io/v1`) of ACM Policies served as is by namespace and name: the status Policies `ai-grid-models-status` and `ai-grid-catalog-status` in `ai-grid-policies` and each cluster's copy, which the backend reads models' and subscriptions' status from. Optional; missing means no reports, so everything shows Saved to Git. The `ai-grid-ready` Policy is computed from the clusters instead and must not be listed. | hand-authored |
 
+The backend no longer reads `maassubscriptions.json`, `maasauthpolicies.json`,
+`maasmodelrefs.json` or `llminferenceservices.json`: Models and Subscriptions
+live in Git (README, "Git catalog"). The fake hub still serves them.
+
 Every file is decoded strictly: a misspelled key stops the fake with an error.
 A missing file leaves its part empty or at its default (no `access.json`
 allows every token).

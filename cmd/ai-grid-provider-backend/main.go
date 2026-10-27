@@ -74,34 +74,33 @@ func main() {
 		fmt.Fprintf(os.Stderr, "build Tenants server: %v\n", err)
 		os.Exit(1)
 	}
-	modelsBuilder := servers.NewModelsServer().
+	// Models and Subscriptions are committed to the AI_GRID_GIT_URL
+	// repository, and Argo CD delivers them. The status of what came up on
+	// the spokes is read back from inform-only ACM Policies on this hub.
+	writer, err := newGitWriter()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "git writer: %v\n", err)
+		os.Exit(1)
+	}
+	status := servers.NewCatalogStatusReader(kubeClient, getEnv("AI_GRID_POLICY_NAMESPACE", servers.DefaultPolicyNamespace))
+	subscriptionNamespace := getEnv("AI_GRID_SUBSCRIPTION_NAMESPACE", "models-as-a-service")
+	modelsServer, err := servers.NewModelsServer().
+		SetWriter(writer).
+		SetCatalogStatus(status).
 		SetDynamicClient(kubeClient).
 		SetNamespace(getEnv("AI_GRID_MODELS_NAMESPACE", "ai-grid-models")).
-		SetSubscriptionNamespace(getEnv("AI_GRID_SUBSCRIPTION_NAMESPACE", "models-as-a-service")).
-		SetGridNamespace(getEnv("AI_GRID_GRID_NAMESPACE", "redhat-ai-grid"))
-	subscriptionsBuilder := servers.NewSubscriptionsServer().
-		SetDynamicClient(kubeClient).
-		SetNamespace(getEnv("AI_GRID_SUBSCRIPTION_NAMESPACE", "models-as-a-service"))
-	// Git mode: with AI_GRID_GIT_URL set, Models and Subscriptions commit to
-	// that repository and Argo CD delivers them.
-	if os.Getenv("AI_GRID_GIT_URL") != "" {
-		writer, err := newGitWriter()
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "git write mode: %v\n", err)
-			os.Exit(1)
-		}
-		// Argo CD delivers what git mode commits; the status of what came up
-		// on the spokes is read back from inform-only ACM Policies on this hub.
-		status := servers.NewCatalogStatusReader(kubeClient, getEnv("AI_GRID_POLICY_NAMESPACE", servers.DefaultPolicyNamespace))
-		modelsBuilder.SetWriter(writer).SetCatalogStatus(status)
-		subscriptionsBuilder.SetWriter(writer).SetCatalogStatus(status)
-	}
-	modelsServer, err := modelsBuilder.Build()
+		SetSubscriptionNamespace(subscriptionNamespace).
+		SetGridNamespace(getEnv("AI_GRID_GRID_NAMESPACE", "redhat-ai-grid")).
+		Build()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "build Models server: %v\n", err)
 		os.Exit(1)
 	}
-	subscriptionsServer, err := subscriptionsBuilder.Build()
+	subscriptionsServer, err := servers.NewSubscriptionsServer().
+		SetWriter(writer).
+		SetCatalogStatus(status).
+		SetNamespace(subscriptionNamespace).
+		Build()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "build Subscriptions server: %v\n", err)
 		os.Exit(1)
@@ -203,7 +202,7 @@ func getEnv(name, fallback string) string {
 	return fallback
 }
 
-// newGitWriter clones the repository that git mode commits to. The token is
+// newGitWriter clones the repository Models and Subscriptions commit to. The token is
 // read from a file, a mounted Secret, so it never appears in the environment
 // or in logs.
 func newGitWriter() (*gitops.RepoWriter, error) {
