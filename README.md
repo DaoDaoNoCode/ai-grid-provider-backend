@@ -86,6 +86,43 @@ Point `--kubeconfig` at a cluster that has those CRDs (for example an RHOAI
 spoke with MaaS). Create/Update/Delete always maintain a paired AuthPolicy
 named `<subscription-id>-policy` when managed by this service.
 
+### Git write mode
+
+With `AI_GRID_GIT_URL` set, the Subscriptions RPCs read from and commit to a
+Git repository instead of the cluster, and Argo CD delivers the files. Each
+subscription is one file, `catalog/subscriptions/<id>.yaml`, holding its
+`MaaSSubscription` and its `<id>-policy` `MaaSAuthPolicy`; each create, update
+or delete is one commit to the branch.
+
+| Setting | Meaning |
+|---|---|
+| `AI_GRID_GIT_URL` | Repository URL, without credentials. |
+| `AI_GRID_GIT_BRANCH` | Branch to commit to. Default `main`. It must have at least one commit. |
+| `AI_GRID_GIT_TOKEN_FILE` | File holding a GitHub personal access token with `contents: write` on that repository only, for example a mounted Secret. Sent as HTTPS basic auth; never logged. |
+
+In git mode:
+
+- `metadata.version` is the file's `ai-grid/version` annotation, which each
+  write increments. A stale version, or a write to the same file by another
+  backend since the read, answers `Aborted`. Delete's `resource_version` is
+  checked the same way; zero skips the check.
+- `spec.organization.id` is required. The file holds each owner group as
+  `<organization id>/<group>`, the tenant-qualified form, in both the
+  subscription and its policy, and reads return the bare names. A group sent
+  already qualified with the same organization is accepted; one qualified with
+  another organization is `InvalidArgument`; repeats are dropped.
+- The policy lives in the subscription's file, so Argo CD prunes both
+  together; it has no ownerReference.
+- A model ref without a namespace gets the subscription's namespace
+  (`models-as-a-service` by default).
+- `Get` returns the file's policy, and one `model_registrations` entry per
+  model ref with no phase and a `Ready` condition of unknown status, reason
+  `SavedToGit`.
+- Keep a file that isn't `*.yaml`, such as a `README`, in
+  `catalog/subscriptions/`. Git drops an empty directory, so without it
+  deleting the last subscription removes the path, and Argo CD reports an error
+  instead of pruning. List reads only `*.yaml` files.
+
 The service runs in-cluster using its Kubernetes ServiceAccount. Its RBAC role
 allows `get`, `list`, `watch`, `create`, `update`, `patch`, and `delete` on
 `ManagedCluster` resources.
