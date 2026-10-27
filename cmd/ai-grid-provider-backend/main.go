@@ -239,11 +239,17 @@ func newGitWriter() (gitops.Writer, error) {
 		AuthorEmail: "ai-grid-provider-backend@noreply.invalid",
 	}
 	if cfg.URL == "" {
-		// Without a repository, Models and Subscriptions answer
+		// A token file without a URL is a half-configured deployment, most
+		// likely a Secret missing its url key: stop at startup, as before,
+		// rather than refuse Models and Subscriptions later.
+		if os.Getenv("AI_GRID_GIT_TOKEN_FILE") != "" {
+			return nil, errors.New("AI_GRID_GIT_TOKEN_FILE is set but AI_GRID_GIT_URL is not; set the repository URL, or neither")
+		}
+		// With no git settings at all, Models and Subscriptions answer
 		// FailedPrecondition and the other APIs serve as usual, so a
 		// deployment that hasn't set it up yet (the console's chart test, an
 		// older install) still serves Clusters and Tenants.
-		slog.Warn("AI_GRID_GIT_URL is not set: Models and Subscriptions are unavailable until it is")
+		slog.Warn("AI_GRID_GIT_URL is not set: Models and Subscriptions answer FailedPrecondition until it is")
 		return gitops.Unconfigured{}, nil
 	}
 	if u, err := neturl.Parse(cfg.URL); err != nil || u.User != nil {
