@@ -81,6 +81,7 @@ func TestNewGPUInventoryCredentials(t *testing.T) {
 // that refuses every call instead of an error that stops the process.
 func TestNewGitWriterWithoutURL(t *testing.T) {
 	t.Setenv("AI_GRID_GIT_URL", "")
+	t.Setenv("AI_GRID_GIT_TOKEN_FILE", "")
 	writer, err := newGitWriter()
 	if err != nil {
 		t.Fatalf("newGitWriter() error = %v, want none", err)
@@ -90,6 +91,16 @@ func TestNewGitWriterWithoutURL(t *testing.T) {
 	}
 	if _, err := writer.Head(context.Background()); !errors.Is(err, gitops.ErrNotConfigured) {
 		t.Errorf("Head() error = %v, want ErrNotConfigured", err)
+	}
+}
+
+// A token file without a URL is most likely a Secret missing its url key, so
+// it still stops the process at startup.
+func TestNewGitWriterRefusesTokenFileWithoutURL(t *testing.T) {
+	t.Setenv("AI_GRID_GIT_URL", "")
+	t.Setenv("AI_GRID_GIT_TOKEN_FILE", "/var/run/secrets/ai-grid-git/token")
+	if _, err := newGitWriter(); err == nil {
+		t.Fatal("newGitWriter() succeeded with a token file and no URL")
 	}
 }
 
