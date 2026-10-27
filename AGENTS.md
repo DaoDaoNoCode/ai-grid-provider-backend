@@ -58,6 +58,7 @@ client/                         reusable gRPC client
 proto/                          protobuf sources and buf configuration
 gen/ai_grid/v1/                 generated protobuf, gRPC, and Connect code
 docs/API.md                     authoritative API/service standards for this repo
+docs/API_CONTRACT.md            who consumes proto/ai_grid/v1, what CI checks, how to change it
 docs/UI_API_REFERENCE.md        UI-facing REST payload handout
 docs/openapi/                   generated OpenAPI snapshot
 internal/servers/               per-resource connect-go handlers
