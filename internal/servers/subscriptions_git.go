@@ -13,7 +13,10 @@ import (
 	aigridv1 "github.com/osac-project/ai-grid-provider-backend/gen/ai_grid/v1"
 	"github.com/osac-project/ai-grid-provider-backend/internal/gitops"
 	"google.golang.org/protobuf/proto"
+	apivalidation "k8s.io/apimachinery/pkg/api/validation"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/util/validation"
+	"k8s.io/apimachinery/pkg/util/validation/field"
 	"sigs.k8s.io/yaml"
 )
 
@@ -332,6 +335,19 @@ func validateGitMetadata(meta *aigridv1.Metadata) error {
 		if strings.Contains(key, "/") && key != annotationDisplayName && key != annotationDescription {
 			return connect.Errorf(connect.CodeInvalidArgument, "metadata.annotations key %q is not allowed: only keys without a prefix, %s and %s", key, annotationDisplayName, annotationDescription)
 		}
+	}
+	// Argo CD applies the file as is, so the keys and values must be ones
+	// Kubernetes accepts, as cluster mode's API server checked.
+	for key, value := range meta.GetLabels() {
+		if errs := validation.IsQualifiedName(key); len(errs) > 0 {
+			return connect.Errorf(connect.CodeInvalidArgument, "metadata.labels key %q: %s", key, strings.Join(errs, "; "))
+		}
+		if errs := validation.IsValidLabelValue(value); len(errs) > 0 {
+			return connect.Errorf(connect.CodeInvalidArgument, "metadata.labels[%s] value %q: %s", key, value, strings.Join(errs, "; "))
+		}
+	}
+	if errs := apivalidation.ValidateAnnotations(meta.GetAnnotations(), field.NewPath("metadata", "annotations")); len(errs) > 0 {
+		return connect.Errorf(connect.CodeInvalidArgument, "%v", errs.ToAggregate())
 	}
 	return nil
 }

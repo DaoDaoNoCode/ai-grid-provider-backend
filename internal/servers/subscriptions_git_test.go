@@ -552,3 +552,43 @@ func TestSubscriptionsGitMetadataKeyAllowlist(t *testing.T) {
 		t.Fatalf("commits = %d, want the create and the update", n)
 	}
 }
+
+// Label and annotation keys and values must be ones Kubernetes accepts, or
+// Argo CD can't apply the file: the API answers InvalidArgument and commits
+// nothing, as cluster mode did.
+func TestSubscriptionsGitMetadataValues(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	writer := gitops.NewMemoryWriter(gitModelSeed("sim-model"))
+	srv := mustGitSubscriptionsServer(t, writer)
+	models := mustGitModelsServer(t, writer)
+	for name, meta := range map[string]*aigridv1.Metadata{
+		"label value with a space":  {Labels: map[string]string{"team": "two words"}},
+		"label value too long":      {Labels: map[string]string{"team": strings.Repeat("a", 64)}},
+		"label key not a name":      {Labels: map[string]string{"bad key!": "a"}},
+		"label key too long":        {Labels: map[string]string{strings.Repeat("k", 64): "a"}},
+		"annotation key not a name": {Annotations: map[string]string{"bad key": "a"}},
+		"annotations too large":     {Annotations: map[string]string{"note": strings.Repeat("a", 256*1024)}},
+	} {
+		sub := gitSampleSubscription("team-a")
+		for k, v := range meta.GetLabels() {
+			sub.Metadata.Labels = map[string]string{k: v}
+		}
+		for k, v := range meta.GetAnnotations() {
+			sub.Metadata.Annotations[k] = v
+		}
+		_, err := srv.Create(ctx, &aigridv1.SubscriptionsCreateRequest{Object: sub})
+		if connect.CodeOf(err) != connect.CodeInvalidArgument {
+			t.Errorf("subscription Create(%s) error = %v, want InvalidArgument", name, err)
+		}
+		model := gitSampleModel("other-model", "site-a")
+		model.Metadata = meta
+		_, err = models.Create(ctx, &aigridv1.ModelsCreateRequest{Object: model})
+		if connect.CodeOf(err) != connect.CodeInvalidArgument {
+			t.Errorf("model Create(%s) error = %v, want InvalidArgument", name, err)
+		}
+	}
+	if n := len(writer.Messages()); n != 0 {
+		t.Fatalf("commits = %d, want none", n)
+	}
+}
