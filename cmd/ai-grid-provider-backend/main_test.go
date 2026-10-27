@@ -1,10 +1,13 @@
 package main
 
 import (
+	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
 
+	"github.com/osac-project/ai-grid-provider-backend/internal/gitops"
 	"k8s.io/client-go/rest"
 )
 
@@ -71,5 +74,29 @@ func TestNewGPUInventoryCredentials(t *testing.T) {
 		if inv, err := newGPUInventory(config, search); err != nil || inv == nil {
 			t.Errorf("%s: inventory %v, error %v", name, inv, err)
 		}
+	}
+}
+
+// Without AI_GRID_GIT_URL the backend starts: newGitWriter answers a writer
+// that refuses every call instead of an error that stops the process.
+func TestNewGitWriterWithoutURL(t *testing.T) {
+	t.Setenv("AI_GRID_GIT_URL", "")
+	writer, err := newGitWriter()
+	if err != nil {
+		t.Fatalf("newGitWriter() error = %v, want none", err)
+	}
+	if writer == nil {
+		t.Fatal("newGitWriter() = nil writer")
+	}
+	if _, err := writer.Head(context.Background()); !errors.Is(err, gitops.ErrNotConfigured) {
+		t.Errorf("Head() error = %v, want ErrNotConfigured", err)
+	}
+}
+
+// A URL with credentials is still refused at startup.
+func TestNewGitWriterRefusesCredentialsInURL(t *testing.T) {
+	t.Setenv("AI_GRID_GIT_URL", "https://user:token@example.com/catalog.git")
+	if _, err := newGitWriter(); err == nil {
+		t.Fatal("newGitWriter() succeeded with credentials in the URL")
 	}
 }

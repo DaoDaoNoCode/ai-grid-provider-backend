@@ -605,6 +605,9 @@ func modelGitError(op, id string, err error) error {
 		return connect.Errorf(connect.CodeNotFound, "Model %q not found", id).WithCause(err)
 	case errors.Is(err, gitops.ErrConflict):
 		return staleModelError(op, id).WithCause(err)
+	case errors.Is(err, gitops.ErrNotConfigured):
+		// Not one model's problem, so the message names the API, not the id.
+		return connect.Errorf(connect.CodeFailedPrecondition, "Models: %v", err).WithCause(err)
 	default:
 		return connect.Errorf(connect.CodeUnavailable, "%s Model %q: git: %v", op, id, err).WithCause(err)
 	}

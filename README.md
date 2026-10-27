@@ -63,7 +63,7 @@ status from the hub's ACM Policies ([Status](#status-from-the-spokes)).
 
 | Setting | Meaning |
 |---|---|
-| `AI_GRID_GIT_URL` | Repository URL, without credentials. Required: the backend doesn't start without it. The backend clones it in the background and retries a failed clone, waiting up to a minute between attempts; until a clone succeeds, Models and Subscriptions answer `Unavailable` and the other APIs serve as usual. A `file://` URL or local path is served in-process, so the image needs no `git`. |
+| `AI_GRID_GIT_URL` | Repository URL, without credentials. Without it the backend still starts: Models' and Subscriptions' list, get, create, update and delete answer `FailedPrecondition`, naming this setting, and `Models/ListLocations` (which reads the cluster) and the other APIs serve as usual. The backend clones it in the background and retries a failed clone, waiting up to a minute between attempts; until a clone succeeds, Models and Subscriptions answer `Unavailable` and the other APIs serve as usual. A `file://` URL or local path is served in-process, so the image needs no `git`. |
 | `AI_GRID_GIT_BRANCH` | Branch to commit to. Default `main`. It must have at least one commit. |
 | `AI_GRID_GIT_TOKEN_FILE` | File holding a GitHub personal access token with `contents: write` on that repository only, for example a mounted Secret. Sent as HTTPS basic auth, so `AI_GRID_GIT_URL` must be `https://` when it is set; never logged. |
 | `AI_GRID_MODELS_NAMESPACE` | Namespace of each model's `LLMInferenceService` on the inference spokes. Default `ai-grid-models`. |
@@ -700,7 +700,7 @@ Then deploy:
 
 ```sh
 # Embedded Keycloak + ACM (if ManagedCluster CRD missing) + sample clusters.
-# AI_GRID_GIT_URL is required: the repository Models and Subscriptions commit to.
+# hack/openshift-up.sh requires AI_GRID_GIT_URL, the repository Models and Subscriptions commit to.
 AI_GRID_GIT_URL=https://github.com/<you>/<catalog>.git \
   AI_GRID_GIT_TOKEN_FILE=$HOME/.config/ai-grid/catalog-token \
   make openshift-up
