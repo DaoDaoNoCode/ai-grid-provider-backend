@@ -232,7 +232,7 @@ func (w *RepoWriter) snapshot(h plumbing.Hash) (Snapshot, error) {
 	if err != nil {
 		return nil, err
 	}
-	return treeSnapshot{rev: h.String(), tree: tree}, nil
+	return treeSnapshot{rev: h.String(), tree: tree, mu: &w.mu}, nil
 }
 
 // blobHash returns the hash of the file or directory at p, or the zero hash
@@ -246,15 +246,20 @@ func blobHash(tree *object.Tree, p string) plumbing.Hash {
 }
 
 // treeSnapshot reads one commit's tree. Git objects are immutable, so it
-// stays valid after later fetches and commits.
+// stays valid after later fetches and commits. Reading them goes through the
+// clone's in-memory storage, which fetches and commits write to, so each read
+// holds the writer's lock.
 type treeSnapshot struct {
 	rev  string
 	tree *object.Tree
+	mu   *sync.Mutex
 }
 
 func (s treeSnapshot) Revision() string { return s.rev }
 
 func (s treeSnapshot) Read(p string) ([]byte, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	file, err := s.tree.File(p)
 	if err != nil {
 		if errors.Is(err, object.ErrFileNotFound) || errors.Is(err, object.ErrDirectoryNotFound) || errors.Is(err, object.ErrEntryNotFound) {
@@ -271,6 +276,8 @@ func (s treeSnapshot) Read(p string) ([]byte, error) {
 }
 
 func (s treeSnapshot) List(dir string) ([]string, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	sub, err := s.tree.Tree(path.Clean(dir))
 	if err != nil {
 		if errors.Is(err, object.ErrDirectoryNotFound) || errors.Is(err, object.ErrEntryNotFound) {

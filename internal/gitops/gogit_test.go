@@ -3,9 +3,11 @@ package gitops
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
+	"sync"
 	"testing"
 	"time"
 
@@ -242,5 +244,63 @@ func TestRepoWriterFileURLWithoutGitBinary(t *testing.T) {
 	head, _ = other.Head(ctx)
 	if data, err := head.Read("catalog/subscriptions/a.yaml"); err != nil || string(data) != "a" {
 		t.Fatalf("Read(a) = %q, %v", data, err)
+	}
+}
+
+// TestRepoWriterConcurrentReadsAndCommits reads snapshots while other requests
+// fetch and commit. Run it under -race: a snapshot read must not race with the
+// writes to the in-memory clone.
+func TestRepoWriterConcurrentReadsAndCommits(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	url := newBareRepo(t, map[string]string{"catalog/subscriptions/a.yaml": "a"})
+	w := newTestRepoWriter(t, url)
+
+	errs := make(chan error, 64)
+	var wg sync.WaitGroup
+	for i := range 4 {
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			for j := range 3 {
+				head, err := w.Head(ctx)
+				if err != nil {
+					errs <- err
+					return
+				}
+				p := fmt.Sprintf("catalog/subscriptions/w%d-%d.yaml", i, j)
+				_, err = w.Commit(ctx, head.Revision(), Change{Put: map[string][]byte{p: []byte("x")}, Message: "add " + p})
+				if err != nil && !errors.Is(err, ErrConflict) {
+					errs <- err
+					return
+				}
+			}
+		}()
+		go func() {
+			defer wg.Done()
+			for range 10 {
+				head, err := w.Head(ctx)
+				if err != nil {
+					errs <- err
+					return
+				}
+				names, err := head.List("catalog/subscriptions")
+				if err != nil {
+					errs <- err
+					return
+				}
+				for _, name := range names {
+					if _, err := head.Read("catalog/subscriptions/" + name); err != nil {
+						errs <- err
+						return
+					}
+				}
+			}
+		}()
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		t.Error(err)
 	}
 }
