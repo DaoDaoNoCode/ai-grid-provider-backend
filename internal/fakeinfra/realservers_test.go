@@ -524,6 +524,9 @@ func TestRealCatalogStatusOnFakeHub(t *testing.T) {
 	if phase := sub.GetObject().GetStatus().GetPhase(); phase != "Active" {
 		t.Fatalf("subscription phase = %q, want Active", phase)
 	}
+	if phase := sub.GetAuthPolicy().GetPhase(); phase != "Active" {
+		t.Fatalf("auth policy %q phase = %q, want Active", sub.GetAuthPolicy().GetId(), phase)
+	}
 }
 
 // The backend's own ACM Search client against the fake Search: List and Get

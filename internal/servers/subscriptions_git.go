@@ -82,7 +82,7 @@ func (s *SubscriptionsServer) gitGet(ctx context.Context, id string) (*aigridv1.
 		ModelRegistrations: gitModelRegistrations(doc.sub, s.namespace, s.readReports(ctx, modelRefsReadyCheck)),
 	}
 	if doc.policy != nil {
-		resp.AuthPolicies = []*aigridv1.AuthPolicy{doc.policy}
+		resp.AuthPolicies = []*aigridv1.AuthPolicy{withAuthPolicyStatus(doc.policy, s.readReports(ctx, authPoliciesActiveCheck))}
 	}
 	return resp, nil
 }
@@ -120,6 +120,45 @@ func withSubscriptionPhase(sub *aigridv1.Subscription, active ObjectReports) *ai
 	return sub
 }
 
+// withAuthPolicyStatus sets the subscription's MaaSAuthPolicy's phase and
+// Ready condition from the ingress clusters' auth-policies-active reports, as
+// gitModelRegistrations does for MaaSModelRefs: phase Active when every
+// cluster the Policy is placed on has the policy as specified (phase Active
+// there), Pending when any has it not as specified, doesn't have it yet or
+// hasn't reported, and the condition's message says which cluster is which.
+// With no report at all the policy has no phase and no condition, as the file
+// has none.
+func withAuthPolicyStatus(policy *aigridv1.AuthPolicy, active ObjectReports) *aigridv1.AuthPolicy {
+	if policy == nil || !active.any() {
+		return policy
+	}
+	condition := clustersReadyCondition(objectClusters(active, policy.GetId()))
+	policy.Phase = "Active"
+	if condition.GetStatus() != aigridv1.ConditionStatus_CONDITION_STATUS_TRUE {
+		policy.Phase = "Pending"
+	}
+	policy.Conditions = []*aigridv1.Condition{condition}
+	return policy
+}
+
+// clustersReadyCondition is a Ready condition from the clusters that report
+// an object ready, not ready, or not at all: True, reason Ready, when only
+// ready ones do, and False, reason NotReady, otherwise. Its message says
+// which cluster is which.
+func clustersReadyCondition(ready, notReady, missing []string) *aigridv1.Condition {
+	condition := &aigridv1.Condition{
+		Type:    "Ready",
+		Status:  aigridv1.ConditionStatus_CONDITION_STATUS_TRUE,
+		Reason:  proto.String("Ready"),
+		Message: proto.String(clusterSummary(notReady, ready, missing)),
+	}
+	if len(notReady)+len(missing) > 0 {
+		condition.Status = aigridv1.ConditionStatus_CONDITION_STATUS_FALSE
+		condition.Reason = proto.String("NotReady")
+	}
+	return condition
+}
+
 // gitModelRegistrations stands in for the MaaSModelRef status a cluster
 // reports, from the ingress clusters' model-refs-ready reports: phase Ready
 // when every cluster the Policy is placed on has the MaaSModelRef ready, and
@@ -136,16 +175,9 @@ func gitModelRegistrations(sub *aigridv1.Subscription, namespace string, modelRe
 		}
 		if len(ready)+len(notReady)+len(missing) > 0 {
 			reg := &aigridv1.ModelRegistration{Name: ref.GetName(), Namespace: ref.GetNamespace(), Phase: "Ready"}
-			condition := &aigridv1.Condition{
-				Type:    "Ready",
-				Status:  aigridv1.ConditionStatus_CONDITION_STATUS_TRUE,
-				Reason:  proto.String("Ready"),
-				Message: proto.String(clusterSummary(notReady, ready, missing)),
-			}
-			if len(notReady)+len(missing) > 0 {
+			condition := clustersReadyCondition(ready, notReady, missing)
+			if condition.GetStatus() != aigridv1.ConditionStatus_CONDITION_STATUS_TRUE {
 				reg.Phase = "Pending"
-				condition.Status = aigridv1.ConditionStatus_CONDITION_STATUS_FALSE
-				condition.Reason = proto.String("NotReady")
 			}
 			reg.Conditions = []*aigridv1.Condition{condition}
 			out = append(out, reg)
@@ -190,7 +222,10 @@ func (s *SubscriptionsServer) gitCreate(ctx context.Context, object *aigridv1.Su
 	if err != nil {
 		return nil, err
 	}
-	return &aigridv1.SubscriptionsCreateResponse{Object: withSubscriptionPhase(doc.sub, s.readReports(ctx, subscriptionsActiveCheck)), AuthPolicy: doc.policy}, nil
+	return &aigridv1.SubscriptionsCreateResponse{
+		Object:     withSubscriptionPhase(doc.sub, s.readReports(ctx, subscriptionsActiveCheck)),
+		AuthPolicy: withAuthPolicyStatus(doc.policy, s.readReports(ctx, authPoliciesActiveCheck)),
+	}, nil
 }
 
 func (s *SubscriptionsServer) gitUpdate(ctx context.Context, req *aigridv1.SubscriptionsUpdateRequest) (*aigridv1.SubscriptionsUpdateResponse, error) {

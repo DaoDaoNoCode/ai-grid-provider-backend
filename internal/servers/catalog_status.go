@@ -127,8 +127,13 @@ func latestMessage(replica unstructured.Unstructured, check string) string {
 
 // complianceClauseRE matches one clause of a ConfigurationPolicy message,
 // such as "violation - llminferenceservices [a, b] found but not as specified
-// in namespace models" or "violation - maassubscriptions [c] not found in
-// namespace maas".
+// in namespace models", "violation - maassubscriptions [c] not found in
+// namespace maas" or "notification - maasauthpolicies [d] found as specified
+// in namespace maas". The controller writes "<resource> [<names>] found as
+// specified", "... found but not as specified" and "... not found" for a
+// musthave object template (createStatus and generateMessageWithReason in
+// open-cluster-management-io/config-policy-controller,
+// controllers/configurationpolicy_utils.go, at 9aeeb71).
 var complianceClauseRE = regexp.MustCompile(`^(?:(?:notification|violation) - )?[a-z0-9.]+ \[([^\]]*)\] (?:found (but not )?as specified|(not found))\b`)
 
 // parseCompliance reads the objects a ConfigurationPolicy message names. It
@@ -175,6 +180,7 @@ const (
 	modelsReadyCheck         = "models-ready"         // LLMInferenceService Ready=True
 	modelRefsReadyCheck      = "model-refs-ready"     // MaaSModelRef phase Ready
 	subscriptionsActiveCheck = "subscriptions-active" // MaaSSubscription phase Active
+	authPoliciesActiveCheck  = "auth-policies-active" // MaaSAuthPolicy phase Active
 )
 
 // readReports reads one ConfigurationPolicy's reports for a git-mode request.
