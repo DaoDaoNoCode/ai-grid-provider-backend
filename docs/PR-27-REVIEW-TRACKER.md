@@ -37,7 +37,7 @@
 | 12 | — | Fill rollout.works (+ P13 fields) | done | works[] from ManifestWorks + RBAC; fuller P13 fields still optional follow-up |
 | 13 | — | Locations (P7/P8) | done | ListLocations RPC + placement.locations enrichment |
 | 14 | — | Subscription Delete resource_version / If-Match | done | Delete resource_version → K8s precondition; Conflict→Aborted |
-| 15 | — | Agree models namespace | done | Default `ai-grid-models`; `AI_GRID_MODELS_NAMESPACE` override kept. Changed to `ai-grid-internal-models` by #38 |
+| 15 | — | Agree models namespace | done | Default `ai-grid-internal-models` (since #38; #27 landed `ai-grid-models`); `AI_GRID_MODELS_NAMESPACE` override kept |
 | 16 | — | resourceVersionToVersion int32 overflow→0 unlocks | later | Deferred: fail-closed or wider type; shared helper + console string-version ADR |
 | 17 | — | Fakeinfra duplicated resource-handler (P3) | done | Shared writeNamespacedUpdate + decodeTypedObject |
 | 18 | — | Retire draft Models/Subscriptions surfaces | done | Draft protos, fake, fixtures, docs retired per workflow |
@@ -201,9 +201,9 @@
 - **Description:** Pick one default / env alignment between `ai-grid-internal-models` and `ai-grid-models` with console.
 - **Pros:** Delete guard and refs work correctly.
 - **Cons:** Cross-repo; renaming default can surprise deploys.
-- **Decision:** Accepted — default `ai-grid-models` to match console; keep env override.
-- **Implementation notes:** Changed `defaultModelsNamespace`, main.go getEnv default, OpenShift deploy env, docs, fixtures, and tests to `ai-grid-models`. `AI_GRID_MODELS_NAMESPACE` still overrides.
-- **Superseded by #38:** the default is now `ai-grid-internal-models`. In git mode this variable is the spokes' namespace for each model's `LLMInferenceService`, not the console's: the console lists models in the subscription namespace (`models-as-a-service`). The AI Grid reference environment (`kahowell/ai-grid-tenant`) creates `ai-grid-internal-models` on its spokes and deploys its models there, and our clusters use it too.
+- **Decision:** Accepted — default `ai-grid-internal-models`, the namespace the AI Grid reference environment (`kahowell/ai-grid-tenant`) creates on its spokes and deploys its models to, and that our clusters use; keep the env override.
+- **Implementation notes:** `defaultModelsNamespace`, the main.go getEnv default, the OpenShift deploy env, docs, fixtures, and tests use `ai-grid-internal-models`. `AI_GRID_MODELS_NAMESPACE` still overrides. In git mode this variable is the spokes' namespace for each model's `LLMInferenceService`, not the console's: the console lists models in the subscription namespace (`models-as-a-service`).
+- **History:** #27 first landed `ai-grid-models`, to match the console's models namespace at the time. #38 changed it to `ai-grid-internal-models`.
 
 ### 16. resourceVersionToVersion int32 overflow→0 unlocks — Status: `later`
 
