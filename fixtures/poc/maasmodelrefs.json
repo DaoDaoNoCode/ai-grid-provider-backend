@@ -1,5 +1,5 @@
 {
-  "_comment": "MaaSModelRef catalog: llm/ entries for Subscriptions enrichment; ai-grid-models/fixture-cpu-llm pairs with llminferenceservices.json for Models.",
+  "_comment": "MaaSModelRef catalog: llm/ entries for Subscriptions enrichment; ai-grid-internal-models/fixture-cpu-llm pairs with llminferenceservices.json for Models.",
   "apiVersion": "maas.opendatahub.io/v1alpha1",
   "kind": "MaaSModelRefList",
   "metadata": {},
@@ -61,7 +61,7 @@
       "kind": "MaaSModelRef",
       "metadata": {
         "name": "fixture-cpu-llm",
-        "namespace": "ai-grid-models",
+        "namespace": "ai-grid-internal-models",
         "uid": "a1000003-0000-4000-8000-000000000003",
         "resourceVersion": "1",
         "generation": 1,

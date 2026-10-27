@@ -524,7 +524,7 @@ gRPC: `ai_grid.v1.Tenants/ListMembers` with `{"id":"<org-uuid>"}`.
 Every write commits to the backend's Git repository (`AI_GRID_GIT_URL`), and
 Argo CD delivers it; the backend never writes to a cluster. Each model is an
 `LLMInferenceService` and a NetworkPolicy in `AI_GRID_MODELS_NAMESPACE`
-(default `ai-grid-models`) on the clusters its placement names, and an
+(default `ai-grid-internal-models`) on the clusters its placement names, and an
 `ExternalModel` and `MaaSModelRef` in `AI_GRID_SUBSCRIPTION_NAMESPACE` on the
 ingress clusters. See README "Git catalog" for the repository layout.
 

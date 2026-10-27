@@ -66,7 +66,7 @@ status from the hub's ACM Policies ([Status](#status-from-the-spokes)).
 | `AI_GRID_GIT_URL` | Repository URL, without credentials. Required: the backend doesn't start without it. The backend clones it in the background and retries a failed clone, waiting up to a minute between attempts; until a clone succeeds, Models and Subscriptions answer `Unavailable` and the other APIs serve as usual. A `file://` URL or local path is served in-process, so the image needs no `git`. |
 | `AI_GRID_GIT_BRANCH` | Branch to commit to. Default `main`. It must have at least one commit. |
 | `AI_GRID_GIT_TOKEN_FILE` | File holding a GitHub personal access token with `contents: write` on that repository only, for example a mounted Secret. Sent as HTTPS basic auth, so `AI_GRID_GIT_URL` must be `https://` when it is set; never logged. |
-| `AI_GRID_MODELS_NAMESPACE` | Namespace of each model's `LLMInferenceService` on the inference spokes. Default `ai-grid-models`. |
+| `AI_GRID_MODELS_NAMESPACE` | Namespace of each model's `LLMInferenceService` on the inference spokes. Default `ai-grid-internal-models`. |
 | `AI_GRID_SUBSCRIPTION_NAMESPACE` | Namespace of the subscriptions, their policies and the models' catalog entries on the ingress spokes. Default `models-as-a-service`. |
 | `AI_GRID_POLICY_NAMESPACE` | Hub namespace of the ACM Policies that status is read from. Default `ai-grid-policies`. |
 | `AI_GRID_GRID_NAMESPACE` | Namespace of the grid on the inference spokes, which each model's NetworkPolicy admits. Default `redhat-ai-grid`. |

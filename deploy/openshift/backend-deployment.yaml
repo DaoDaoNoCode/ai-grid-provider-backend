@@ -70,7 +70,7 @@ spec:
               value: /var/run/secrets/ai-grid-git/token
             # Match Kind / binary defaults (cmd/ai-grid-provider-backend).
             - name: AI_GRID_MODELS_NAMESPACE
-              value: ai-grid-models
+              value: ai-grid-internal-models
             - name: AI_GRID_SUBSCRIPTION_NAMESPACE
               value: models-as-a-service
           volumeMounts:
