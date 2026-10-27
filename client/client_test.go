@@ -242,6 +242,9 @@ func TestClientModelsCRUD(t *testing.T) {
 				Requests: map[string]string{"cpu": "100m", "memory": "1Gi"},
 				Limits:   map[string]string{"cpu": "1", "memory": "2Gi"},
 			},
+			Placement: &aigridv1.ModelPlacement{LabelSelector: &aigridv1.ModelLabelSelector{
+				MatchExpressions: []*aigridv1.ModelLabelSelectorRequirement{{Key: "name", Operator: "In", Values: []string{"site-a"}}},
+			}},
 		},
 	})
 	if err != nil {

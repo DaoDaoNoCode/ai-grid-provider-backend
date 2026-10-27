@@ -131,8 +131,10 @@ For subscriptions:
 
 For models:
 
-- `spec.placement` names clusters by the `name` label that ACM sets on every
-  ManagedCluster, as `name In [...]` or a `name` match label. Cluster sets,
+- `spec.placement` is required and names at least one cluster, by the `name`
+  label that ACM sets on every ManagedCluster, as `name In [...]` or a `name`
+  match label. A model with no placement answers `InvalidArgument`, because it
+  would be published to the ingress and deployed nowhere. Cluster sets,
   other labels and `number_of_clusters` answer `InvalidArgument`, and so does a
   `spec.rollout` other than strategy `All` alone. Argo CD delivers to every
   cluster at once, which is `All`, so that rollout is accepted and not stored.

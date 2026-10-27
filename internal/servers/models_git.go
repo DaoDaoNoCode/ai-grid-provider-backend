@@ -465,14 +465,15 @@ func (s *ModelsServer) gitEnsureNotReferenced(head gitops.Snapshot, id string) e
 // places by cluster name only (the name label ACM sets on every
 // ManagedCluster): Argo CD delivers a cluster's index to that cluster, so
 // cluster sets, other labels, a cluster count and rollouts have nothing to
-// map to.
+// map to. A placement is required: without one the model would be published
+// to the ingress and deployed nowhere.
 func gitPlacementClusters(spec *aigridv1.ModelSpec) ([]string, error) {
 	if !defaultRollout(spec.GetRollout()) {
 		return nil, connect.NewError(connect.CodeInvalidArgument, "spec.rollout supports only strategy All in git mode")
 	}
 	placement := spec.GetPlacement()
 	if placement == nil {
-		return nil, nil
+		return nil, connect.NewError(connect.CodeInvalidArgument, "spec.placement must name at least one cluster in git mode")
 	}
 	if len(placement.GetClusterSets()) > 0 || placement.NumberOfClusters != nil {
 		return nil, connect.NewError(connect.CodeInvalidArgument, "spec.placement supports only the cluster name label in git mode")

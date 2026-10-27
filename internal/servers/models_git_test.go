@@ -202,9 +202,14 @@ func TestModelsGitValidation(t *testing.T) {
 	noCluster := gitSampleModel("f")
 	emptyPlacement := gitSampleModel("g", "site-a")
 	emptyPlacement.Spec.Placement = &aigridv1.ModelPlacement{}
+	// Without a placement the model would be published to the ingress and
+	// deployed nowhere.
+	noPlacement := gitSampleModel("i", "site-a")
+	noPlacement.Spec.Placement = nil
 	for name, object := range map[string]*aigridv1.Model{
 		"cluster sets": clusterSets, "other label": otherLabel, "NotIn": notIn, "rollout": rollout, "bad cluster name": badCluster,
 		"In with no values": noCluster, "empty placement": emptyPlacement, "All with a deadline": allWithFields,
+		"no placement": noPlacement,
 	} {
 		_, err := srv.Create(ctx, &aigridv1.ModelsCreateRequest{Object: object})
 		if err == nil {
@@ -218,6 +223,11 @@ func TestModelsGitValidation(t *testing.T) {
 	}
 	_, err := srv.Create(ctx, &aigridv1.ModelsCreateRequest{Object: gitSampleModel("sim", "site-a")})
 	assertConnectCode(t, err, connect.CodeAlreadyExists)
+	// An update can't clear the placement either.
+	unplace := gitSampleModel("sim")
+	unplace.Spec.Placement = nil
+	_, err = srv.Update(ctx, &aigridv1.ModelsUpdateRequest{Object: unplace, UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.placement"}}})
+	assertConnectCode(t, err, connect.CodeInvalidArgument)
 
 	// Strategy All alone is what git mode does anyway: accepted, not stored.
 	all := gitSampleModel("all", "site-a")

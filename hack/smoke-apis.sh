@@ -280,7 +280,7 @@ else
 
     before_failed=$failed
     call_grpc 'Models/Create' \
-      "{\"object\":{\"id\":\"${smoke_model_grpc}\",\"metadata\":{\"name\":\"${smoke_model_grpc}\",\"annotations\":{\"openshift.io/display-name\":\"Smoke OPT\"}},\"spec\":{\"model\":{\"uri\":\"hf://facebook/opt-125m\",\"name\":\"facebook/opt-125m\"},\"replicas\":1,\"main\":{\"image\":\"quay.io/example/vllm:smoke\",\"requests\":{\"cpu\":\"100m\",\"memory\":\"1Gi\"},\"limits\":{\"cpu\":\"1\",\"memory\":\"2Gi\"}}}}}" \
+      "{\"object\":{\"id\":\"${smoke_model_grpc}\",\"metadata\":{\"name\":\"${smoke_model_grpc}\",\"annotations\":{\"openshift.io/display-name\":\"Smoke OPT\"}},\"spec\":{\"model\":{\"uri\":\"hf://facebook/opt-125m\",\"name\":\"facebook/opt-125m\"},\"replicas\":1,\"main\":{\"image\":\"quay.io/example/vllm:smoke\",\"requests\":{\"cpu\":\"100m\",\"memory\":\"1Gi\"},\"limits\":{\"cpu\":\"1\",\"memory\":\"2Gi\"}},\"placement\":{\"label_selector\":{\"match_expressions\":[{\"key\":\"name\",\"operator\":\"In\",\"values\":[\"site-paris-1\"]}]}}}}}" \
       'ai_grid.v1.Models/Create'
     if (( failed == before_failed )); then
       cleanup_model_ids+=("$smoke_model_grpc")
@@ -297,7 +297,7 @@ else
 
     before_failed=$failed
     call_http 'POST /api/v1/models' POST '/api/v1/models' \
-      "{\"id\":\"${smoke_model_rest}\",\"metadata\":{\"name\":\"${smoke_model_rest}\",\"annotations\":{\"openshift.io/display-name\":\"Smoke OPT REST\"}},\"spec\":{\"model\":{\"uri\":\"hf://facebook/opt-125m\",\"name\":\"facebook/opt-125m\"},\"replicas\":1,\"main\":{\"image\":\"quay.io/example/vllm:smoke\",\"requests\":{\"cpu\":\"100m\",\"memory\":\"1Gi\"},\"limits\":{\"cpu\":\"1\",\"memory\":\"2Gi\"}}}}"
+      "{\"id\":\"${smoke_model_rest}\",\"metadata\":{\"name\":\"${smoke_model_rest}\",\"annotations\":{\"openshift.io/display-name\":\"Smoke OPT REST\"}},\"spec\":{\"model\":{\"uri\":\"hf://facebook/opt-125m\",\"name\":\"facebook/opt-125m\"},\"replicas\":1,\"main\":{\"image\":\"quay.io/example/vllm:smoke\",\"requests\":{\"cpu\":\"100m\",\"memory\":\"1Gi\"},\"limits\":{\"cpu\":\"1\",\"memory\":\"2Gi\"}},\"placement\":{\"label_selector\":{\"match_expressions\":[{\"key\":\"name\",\"operator\":\"In\",\"values\":[\"site-paris-1\"]}]}}}}"
     if (( failed == before_failed )); then
       cleanup_model_ids+=("$smoke_model_rest")
       call_http "GET /api/v1/models/${smoke_model_rest}" GET "/api/v1/models/${smoke_model_rest}"

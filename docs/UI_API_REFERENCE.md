@@ -499,8 +499,8 @@ Argo CD delivers it; the backend never writes to a cluster. Each model is an
 `ExternalModel` and `MaaSModelRef` in `AI_GRID_SUBSCRIPTION_NAMESPACE` on the
 ingress clusters. See README "Git write mode" for the repository layout.
 
-`spec.placement` names clusters by the ACM `name` label only
-(`name In [...]` or a `name` match label); cluster sets, other labels,
+`spec.placement` is required and names at least one cluster, by the ACM
+`name` label only (`name In [...]` or a `name` match label); cluster sets, other labels,
 `number_of_clusters` and any rollout other than strategy `All` alone are
 `InvalidArgument`. Status comes from the hub's status Policies, or reason
 `SavedToGit` with no phase when no cluster has reported. Labels and
