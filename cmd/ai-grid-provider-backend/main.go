@@ -90,8 +90,11 @@ func main() {
 			fmt.Fprintf(os.Stderr, "git write mode: %v\n", err)
 			os.Exit(1)
 		}
-		modelsBuilder.SetWriter(writer)
-		subscriptionsBuilder.SetWriter(writer)
+		// Argo CD delivers what git mode commits; the status of what came up
+		// on the spokes is read back from inform-only ACM Policies on this hub.
+		status := servers.NewCatalogStatusReader(kubeClient, getEnv("AI_GRID_POLICY_NAMESPACE", servers.DefaultPolicyNamespace))
+		modelsBuilder.SetWriter(writer).SetCatalogStatus(status)
+		subscriptionsBuilder.SetWriter(writer).SetCatalogStatus(status)
 	}
 	modelsServer, err := modelsBuilder.Build()
 	if err != nil {

@@ -98,6 +98,7 @@ files. Each create, update or delete is one commit to the branch.
 | `AI_GRID_GIT_BRANCH` | Branch to commit to. Default `main`. It must have at least one commit. |
 | `AI_GRID_GIT_TOKEN_FILE` | File holding a GitHub personal access token with `contents: write` on that repository only, for example a mounted Secret. Sent as HTTPS basic auth; never logged. |
 
+| `AI_GRID_POLICY_NAMESPACE` | Hub namespace of the ACM Policies that git mode reads status from. Default `ai-grid-policies`. |
 | `AI_GRID_GRID_NAMESPACE` | Namespace of the grid on the inference spokes, which each model's NetworkPolicy admits. Default `redhat-ai-grid`. |
 
 The repository holds:
@@ -146,9 +147,13 @@ For subscriptions:
   together; it has no ownerReference.
 - A model ref without a namespace gets the subscription's namespace
   (`models-as-a-service` by default).
-- `Get` returns the file's policy, and one `model_registrations` entry per
-  model ref with no phase and a `Ready` condition of unknown status, reason
-  `SavedToGit`.
+- `status.phase` comes from the spokes (see "Status in git mode" below):
+  `Active` when every ingress cluster that reports the subscription has it
+  active, `Pending` when any doesn't, and empty when none reports it. `Get`
+  returns the file's policy, and one `model_registrations` entry per model
+  ref: phase `Ready` or `Pending` from the clusters' `MaaSModelRef` reports,
+  or, with no report, no phase and a `Ready` condition of unknown status,
+  reason `SavedToGit`, so a client doesn't take the models as missing.
 - Keep a file that isn't `*.yaml`, such as a `README`, in
   `catalog/subscriptions/`. Git drops an empty directory, so without it
   deleting the last subscription removes the path, and Argo CD reports an error
@@ -167,11 +172,38 @@ For models:
   8000 and 9090.
 - The version is an `ai-grid/version` annotation on the `LLMInferenceService`,
   and `ai-grid/clusters` records the placement. Neither shows in the API.
-- `status` has no phase: reason `SavedToGit`. `status.placement` lists the
-  clusters the file places the model on, and their `location` labels, read
-  from the ManagedClusters.
+- `status.placement` lists the clusters the file places the model on, and
+  their `location` labels, read from the ManagedClusters. `status.phase` is
+  `READY` when every placed cluster reports the `LLMInferenceService` ready
+  and every ingress cluster that reports its `MaaSModelRef` has it ready;
+  `PENDING`, reason `NotReady`, when any report says not ready or a placed
+  cluster hasn't reported, with a per-cluster message such as
+  `Not ready on site-a; ready on site-b`. With no report at all, it has no
+  phase and reason `SavedToGit`. It is never `FAILED`: the Policies can't tell
+  a failed model from one that is starting.
 - Delete answers `FailedPrecondition` while a subscription in the repository
   names the model.
+
+#### Status in git mode
+
+Git mode reads status back from two inform-only ACM Policies on the hub, in
+`AI_GRID_POLICY_NAMESPACE` (default `ai-grid-policies`), which the environment
+deploys:
+
+| Policy | Spokes | ConfigurationPolicy | Checks |
+|---|---|---|---|
+| `ai-grid-models-status` | inference, combined | `models-ready` | each `LLMInferenceService` has `Ready=True` |
+| `ai-grid-catalog-status` | ingress, combined | `model-refs-ready` | each `MaaSModelRef` has phase `Ready` |
+| | | `subscriptions-active` | each `MaaSSubscription` has phase `Active` |
+
+The backend reads the root Policy's `status.status` for the clusters, then
+each cluster's copy (`<namespace>.<policy>` in the cluster's namespace) for
+the latest message of each ConfigurationPolicy, which names each object as
+found as specified (ready) or not. It reads on every request, with no cache,
+which suits the handful of clusters a grid has. The ServiceAccount needs
+`get` on the two roots and their copies (`deploy/openshift/rbac.yaml`). A
+Policy that is missing or forbidden means no report, not an error, so git mode
+works before the Policies are deployed.
 
 The service runs in-cluster using its Kubernetes ServiceAccount. Its RBAC role
 allows `get`, `list`, `watch`, `create`, `update`, `patch`, and `delete` on

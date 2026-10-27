@@ -28,6 +28,7 @@ type SubscriptionsServerBuilder struct {
 	logger    *slog.Logger
 	client    dynamic.Interface
 	writer    gitops.Writer
+	status    *CatalogStatusReader
 	namespace string
 }
 
@@ -41,6 +42,7 @@ type SubscriptionsServer struct {
 	logger    *slog.Logger
 	client    dynamic.Interface
 	writer    gitops.Writer
+	status    *CatalogStatusReader
 	namespace string
 }
 
@@ -61,6 +63,13 @@ func (b *SubscriptionsServerBuilder) SetLogger(logger *slog.Logger) *Subscriptio
 // Writer is set.
 func (b *SubscriptionsServerBuilder) SetDynamicClient(client dynamic.Interface) *SubscriptionsServerBuilder {
 	b.client = client
+	return b
+}
+
+// SetCatalogStatus sets where git mode reads status from the spokes.
+// Optional; without it git mode reports everything as saved to Git.
+func (b *SubscriptionsServerBuilder) SetCatalogStatus(status *CatalogStatusReader) *SubscriptionsServerBuilder {
+	b.status = status
 	return b
 }
 
@@ -91,7 +100,7 @@ func (b *SubscriptionsServerBuilder) Build() (*SubscriptionsServer, error) {
 	if namespace == "" {
 		namespace = defaultSubscriptionNamespace
 	}
-	return &SubscriptionsServer{logger: logger, client: b.client, writer: b.writer, namespace: namespace}, nil
+	return &SubscriptionsServer{logger: logger, client: b.client, writer: b.writer, status: b.status, namespace: namespace}, nil
 }
 
 // List returns MaaSSubscription objects from the configured namespace.

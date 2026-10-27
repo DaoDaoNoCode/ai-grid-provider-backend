@@ -27,9 +27,19 @@ rules:
   # Role in ai-grid-policies would be narrower, but this kustomization's
   # namespace: ai-grid would move it. Change the name here if you change
   # AI_GRID_READY_POLICY.
+  # Git mode reads model and subscription status from the inform-only
+  # ai-grid-models-status and ai-grid-catalog-status Policies: the roots, and
+  # each cluster's copy (<AI_GRID_POLICY_NAMESPACE>.<policy> in the cluster's
+  # namespace). Without these names git mode reports models as saved to Git
+  # and subscriptions with no phase.
   - apiGroups: ["policy.open-cluster-management.io"]
     resources: ["policies"]
-    resourceNames: ["ai-grid-ready"]
+    resourceNames:
+      - ai-grid-ready
+      - ai-grid-models-status
+      - ai-grid-catalog-status
+      - ai-grid-policies.ai-grid-models-status
+      - ai-grid-policies.ai-grid-catalog-status
     verbs: ["get"]
   # Subscriptions CRUD (+ managed AuthPolicy) and Models Delete guards against MaaS CRs.
   # Objects live in AI_GRID_SUBSCRIPTION_NAMESPACE (default models-as-a-service).

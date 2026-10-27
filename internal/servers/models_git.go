@@ -69,6 +69,7 @@ func (s *ModelsServer) gitList(ctx context.Context) ([]*aigridv1.Model, error) {
 		return nil, err
 	}
 	items := make([]*aigridv1.Model, 0, len(resources))
+	reports := s.readModelReports(ctx)
 	for _, resource := range resources {
 		// ../models/<id>/catalog
 		id := path.Base(path.Dir(resource))
@@ -76,6 +77,7 @@ func (s *ModelsServer) gitList(ctx context.Context) ([]*aigridv1.Model, error) {
 		if err != nil {
 			return nil, err
 		}
+		reports.apply(current)
 		items = append(items, current.model)
 	}
 	return items, nil
@@ -90,6 +92,7 @@ func (s *ModelsServer) gitGet(ctx context.Context, id string) (*aigridv1.Model, 
 	if err != nil {
 		return nil, err
 	}
+	s.readModelReports(ctx).apply(current)
 	return current.model, nil
 }
 
@@ -222,7 +225,74 @@ func (s *ModelsServer) gitCommitModel(ctx context.Context, head gitops.Snapshot,
 	if err != nil {
 		return nil, connect.Errorf(connect.CodeInternal, "read back model %q: %v", id, err).WithCause(err)
 	}
+	s.readModelReports(ctx).apply(written)
 	return written.model, nil
+}
+
+// modelReports is what the status Policies report about models: inference
+// holds each cluster's LLMInferenceServices (models-ready), ingress each
+// cluster's MaaSModelRefs (model-refs-ready). Both are named by model id.
+type modelReports struct {
+	inference, ingress ObjectReports
+}
+
+func (s *ModelsServer) readModelReports(ctx context.Context) modelReports {
+	if s.status == nil {
+		return modelReports{}
+	}
+	return modelReports{
+		inference: readReports(ctx, s.logger, s.status, modelsStatusPolicy, modelsReadyCheck),
+		ingress:   readReports(ctx, s.logger, s.status, catalogStatusPolicy, modelRefsReadyCheck),
+	}
+}
+
+// apply sets the model's phase from the reports. Each cluster the file places
+// the model on should report its LLMInferenceService, and each ingress
+// cluster that reports its MaaSModelRef counts too. The model is READY when
+// every placed cluster reports it ready and no report says not ready, and
+// PENDING (reason NotReady) when any report says not ready or a placed
+// cluster hasn't reported yet. With no report at all it stays saved to Git.
+// It is never FAILED: the Policies can't tell a failed model from one that is
+// still starting.
+func (r modelReports) apply(current *gitModel) {
+	id := current.model.GetId()
+	placed := current.clusters
+	clusters := slices.Clone(placed)
+	for cluster := range r.ingress {
+		clusters = append(clusters, cluster)
+	}
+	slices.Sort(clusters)
+	clusters = slices.Compact(clusters)
+
+	var ready, notReady, noReport []string
+	reported := false
+	for _, cluster := range clusters {
+		isPlaced := slices.Contains(placed, cluster)
+		inference, hasInference := r.inference[cluster][id]
+		ingress, hasIngress := r.ingress[cluster][id]
+		hasInference = hasInference && isPlaced
+		reported = reported || hasInference || hasIngress
+		switch {
+		case (hasInference && !inference) || (hasIngress && !ingress):
+			notReady = append(notReady, cluster)
+		case isPlaced && !hasInference:
+			noReport = append(noReport, cluster)
+		case hasInference || hasIngress:
+			ready = append(ready, cluster)
+		}
+	}
+	if !reported {
+		return
+	}
+	status := current.model.Status
+	status.Message = clusterSummary(notReady, ready, noReport)
+	if len(notReady) > 0 || len(noReport) > 0 {
+		status.Phase = aigridv1.ModelPhase_MODEL_PHASE_PENDING
+		status.Reason = "NotReady"
+		return
+	}
+	status.Phase = aigridv1.ModelPhase_MODEL_PHASE_READY
+	status.Reason = "Ready"
 }
 
 // renderModelDeployment renders the inference side: the LLMInferenceService,
@@ -317,9 +387,9 @@ func (s *ModelsServer) readGitModel(head gitops.Snapshot, id string) (*gitModel,
 }
 
 // parseGitModel reads the model from its deployment file: the annotations
-// become metadata.version and spec.placement. Git mode never reads the
-// clusters, so status says only that the model is saved to Git (no phase,
-// reason SavedToGit) and lists the clusters the file places it on.
+// become metadata.version and spec.placement. The status says the model is
+// saved to Git (no phase, reason SavedToGit) and lists the clusters the file
+// places it on; modelReports.apply replaces the phase when the clusters report.
 func parseGitModel(data []byte) (*gitModel, error) {
 	docs := bytes.SplitN(data, []byte("\n---\n"), 2)
 	llm := map[string]interface{}{}
@@ -355,7 +425,7 @@ func parseGitModel(data []byte) (*gitModel, error) {
 	model.Metadata.Version = int32(version)
 	model.Status = &aigridv1.ModelStatus{
 		Reason:  "SavedToGit",
-		Message: "Saved to Git; the model's status isn't read from the clusters",
+		Message: "Saved to Git; no cluster has reported the model's status",
 	}
 	if len(clusters) > 0 {
 		model.Status.Placement = &aigridv1.ModelPlacementStatus{NumberOfSelectedClusters: int32(len(clusters)), SelectedClusters: clusters}

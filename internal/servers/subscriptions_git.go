@@ -50,6 +50,7 @@ func (s *SubscriptionsServer) gitList(ctx context.Context) ([]*aigridv1.Subscrip
 		return nil, subscriptionGitError("list", "", err)
 	}
 	items := make([]*aigridv1.Subscription, 0, len(names))
+	active := s.readReports(ctx, subscriptionsActiveCheck)
 	for _, name := range names {
 		id, ok := strings.CutSuffix(name, ".yaml")
 		if !ok {
@@ -59,7 +60,7 @@ func (s *SubscriptionsServer) gitList(ctx context.Context) ([]*aigridv1.Subscrip
 		if err != nil {
 			return nil, err
 		}
-		items = append(items, doc.sub)
+		items = append(items, withSubscriptionPhase(doc.sub, active))
 	}
 	return items, nil
 }
@@ -73,20 +74,76 @@ func (s *SubscriptionsServer) gitGet(ctx context.Context, id string) (*aigridv1.
 	if err != nil {
 		return nil, err
 	}
-	resp := &aigridv1.SubscriptionsGetResponse{Object: doc.sub, ModelRegistrations: gitModelRegistrations(doc.sub)}
+	resp := &aigridv1.SubscriptionsGetResponse{
+		Object:             withSubscriptionPhase(doc.sub, s.readReports(ctx, subscriptionsActiveCheck)),
+		ModelRegistrations: gitModelRegistrations(doc.sub, s.namespace, s.readReports(ctx, modelRefsReadyCheck)),
+	}
 	if doc.policy != nil {
 		resp.AuthPolicies = []*aigridv1.AuthPolicy{doc.policy}
 	}
 	return resp, nil
 }
 
-// gitModelRegistrations stands in for the MaaSModelRef status a cluster would
-// report: each model the file names is listed with no phase and a Ready
-// condition of unknown status, saying it was saved to Git. Without an entry, a
-// client takes every model as missing.
-func gitModelRegistrations(sub *aigridv1.Subscription) []*aigridv1.ModelRegistration {
+func (s *SubscriptionsServer) readReports(ctx context.Context, check string) ObjectReports {
+	if s.status == nil {
+		return nil
+	}
+	return readReports(ctx, s.logger, s.status, catalogStatusPolicy, check)
+}
+
+// withSubscriptionPhase sets status.phase from the ingress clusters'
+// subscriptions-active reports: Active when every cluster that reports the
+// subscription has it as specified, Pending when any has it not as specified,
+// and empty when none reports it.
+func withSubscriptionPhase(sub *aigridv1.Subscription, active ObjectReports) *aigridv1.Subscription {
+	ready, notReady := objectClusters(active, sub.GetId())
+	phase := ""
+	switch {
+	case len(notReady) > 0:
+		phase = "Pending"
+	case len(ready) > 0:
+		phase = "Active"
+	default:
+		return sub
+	}
+	if sub.Status == nil {
+		sub.Status = &aigridv1.SubscriptionStatus{}
+	}
+	sub.Status.Phase = phase
+	return sub
+}
+
+// gitModelRegistrations stands in for the MaaSModelRef status a cluster
+// reports, from the ingress clusters' model-refs-ready reports: phase Ready
+// when every cluster that reports the MaaSModelRef has it ready, and Pending
+// when any has it not ready. A model with no report, or in another namespace
+// than the one the Models API writes MaaSModelRefs to, has no phase and a
+// Ready condition of unknown status, saying it was saved to Git. Without an
+// entry, a client takes the model as missing.
+func gitModelRegistrations(sub *aigridv1.Subscription, namespace string, modelRefs ObjectReports) []*aigridv1.ModelRegistration {
 	var out []*aigridv1.ModelRegistration
 	for _, ref := range sub.GetSpec().GetModelRefs() {
+		var ready, notReady []string
+		if ref.GetNamespace() == namespace {
+			ready, notReady = objectClusters(modelRefs, ref.GetName())
+		}
+		if len(ready)+len(notReady) > 0 {
+			reg := &aigridv1.ModelRegistration{Name: ref.GetName(), Namespace: ref.GetNamespace(), Phase: "Ready"}
+			condition := &aigridv1.Condition{
+				Type:    "Ready",
+				Status:  aigridv1.ConditionStatus_CONDITION_STATUS_TRUE,
+				Reason:  proto.String("Ready"),
+				Message: proto.String(clusterSummary(notReady, ready, nil)),
+			}
+			if len(notReady) > 0 {
+				reg.Phase = "Pending"
+				condition.Status = aigridv1.ConditionStatus_CONDITION_STATUS_FALSE
+				condition.Reason = proto.String("NotReady")
+			}
+			reg.Conditions = []*aigridv1.Condition{condition}
+			out = append(out, reg)
+			continue
+		}
 		out = append(out, &aigridv1.ModelRegistration{
 			Name:      ref.GetName(),
 			Namespace: ref.GetNamespace(),
@@ -94,7 +151,7 @@ func gitModelRegistrations(sub *aigridv1.Subscription) []*aigridv1.ModelRegistra
 				Type:    "Ready",
 				Status:  aigridv1.ConditionStatus_CONDITION_STATUS_UNSPECIFIED,
 				Reason:  proto.String("SavedToGit"),
-				Message: proto.String("Saved to Git; the model's status isn't read from the clusters"),
+				Message: proto.String("Saved to Git; no cluster has reported the model's status"),
 			}},
 		})
 	}
@@ -122,7 +179,7 @@ func (s *SubscriptionsServer) gitCreate(ctx context.Context, object *aigridv1.Su
 	if err != nil {
 		return nil, err
 	}
-	return &aigridv1.SubscriptionsCreateResponse{Object: doc.sub, AuthPolicy: doc.policy}, nil
+	return &aigridv1.SubscriptionsCreateResponse{Object: withSubscriptionPhase(doc.sub, s.readReports(ctx, subscriptionsActiveCheck)), AuthPolicy: doc.policy}, nil
 }
 
 func (s *SubscriptionsServer) gitUpdate(ctx context.Context, req *aigridv1.SubscriptionsUpdateRequest) (*aigridv1.SubscriptionsUpdateResponse, error) {
@@ -151,7 +208,7 @@ func (s *SubscriptionsServer) gitUpdate(ctx context.Context, req *aigridv1.Subsc
 	// A mask that names nothing the file stores changes nothing and commits
 	// nothing.
 	if !paths.labels && !paths.annotations && !paths.anySpec() {
-		return &aigridv1.SubscriptionsUpdateResponse{Object: current.sub}, nil
+		return &aigridv1.SubscriptionsUpdateResponse{Object: withSubscriptionPhase(current.sub, s.readReports(ctx, subscriptionsActiveCheck))}, nil
 	}
 
 	candidate := mergeSubscriptionUpdate(current.sub, object, paths)
@@ -174,7 +231,7 @@ func (s *SubscriptionsServer) gitUpdate(ctx context.Context, req *aigridv1.Subsc
 	if err != nil {
 		return nil, err
 	}
-	return &aigridv1.SubscriptionsUpdateResponse{Object: doc.sub}, nil
+	return &aigridv1.SubscriptionsUpdateResponse{Object: withSubscriptionPhase(doc.sub, s.readReports(ctx, subscriptionsActiveCheck))}, nil
 }
 
 // gitDelete removes the subscription's file, and with it the managed policy.

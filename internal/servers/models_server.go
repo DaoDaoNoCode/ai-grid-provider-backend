@@ -32,6 +32,7 @@ type ModelsServerBuilder struct {
 	logger                *slog.Logger
 	client                dynamic.Interface
 	writer                gitops.Writer
+	status                *CatalogStatusReader
 	gridNamespace         string
 	namespace             string
 	subscriptionNamespace string
@@ -48,6 +49,7 @@ type ModelsServer struct {
 	logger                *slog.Logger
 	client                dynamic.Interface
 	writer                gitops.Writer
+	status                *CatalogStatusReader
 	gridNamespace         string
 	namespace             string
 	subscriptionNamespace string
@@ -71,6 +73,13 @@ func (b *ModelsServerBuilder) SetLogger(logger *slog.Logger) *ModelsServerBuilde
 // Writer is set.
 func (b *ModelsServerBuilder) SetDynamicClient(client dynamic.Interface) *ModelsServerBuilder {
 	b.client = client
+	return b
+}
+
+// SetCatalogStatus sets where git mode reads status from the spokes.
+// Optional; without it git mode reports everything as saved to Git.
+func (b *ModelsServerBuilder) SetCatalogStatus(status *CatalogStatusReader) *ModelsServerBuilder {
+	b.status = status
 	return b
 }
 
@@ -131,6 +140,7 @@ func (b *ModelsServerBuilder) Build() (*ModelsServer, error) {
 		logger:                logger,
 		client:                b.client,
 		writer:                b.writer,
+		status:                b.status,
 		gridNamespace:         gridNS,
 		namespace:             namespace,
 		subscriptionNamespace: subNS,

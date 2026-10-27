@@ -3,7 +3,9 @@ package servers
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"regexp"
+	"slices"
 	"strings"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -147,4 +149,66 @@ func parseCompliance(message string) (map[string]bool, bool) {
 		}
 	}
 	return objects, recognised
+}
+
+// The Policies and ConfigurationPolicies that git mode reads status from.
+const (
+	// modelsStatusPolicy covers the inference and combined spokes.
+	modelsStatusPolicy = "ai-grid-models-status"
+	// catalogStatusPolicy covers the ingress and combined spokes.
+	catalogStatusPolicy = "ai-grid-catalog-status"
+
+	modelsReadyCheck         = "models-ready"         // LLMInferenceService Ready=True
+	modelRefsReadyCheck      = "model-refs-ready"     // MaaSModelRef phase Ready
+	subscriptionsActiveCheck = "subscriptions-active" // MaaSSubscription phase Active
+)
+
+// readReports reads one ConfigurationPolicy's reports for a git-mode request.
+// Status is read on every request, with no cache: a few gets per cluster is
+// fine for the handful of clusters a grid has. A failed read is logged and
+// reports nothing, so the request still answers from Git.
+func readReports(ctx context.Context, logger *slog.Logger, status *CatalogStatusReader, policy, check string) ObjectReports {
+	reports, err := status.Read(ctx, policy, check)
+	if err != nil {
+		logger.Warn("read catalog status", "policy", policy, "check", check, "error", err)
+		return nil
+	}
+	return reports
+}
+
+// objectClusters returns the clusters that report object name, sorted, split
+// into ready and not ready.
+func objectClusters(reports ObjectReports, name string) (ready, notReady []string) {
+	for cluster, objects := range reports {
+		state, ok := objects[name]
+		switch {
+		case !ok:
+		case state:
+			ready = append(ready, cluster)
+		default:
+			notReady = append(notReady, cluster)
+		}
+	}
+	slices.Sort(ready)
+	slices.Sort(notReady)
+	return ready, notReady
+}
+
+// clusterSummary says where an object is ready, for example "Not ready on
+// site-a; ready on site-b".
+func clusterSummary(notReady, ready, noReport []string) string {
+	var parts []string
+	for _, part := range []struct {
+		prefix   string
+		clusters []string
+	}{{"not ready on ", notReady}, {"ready on ", ready}, {"no report from ", noReport}} {
+		if len(part.clusters) > 0 {
+			parts = append(parts, part.prefix+strings.Join(part.clusters, ", "))
+		}
+	}
+	message := strings.Join(parts, "; ")
+	if message == "" {
+		return ""
+	}
+	return strings.ToUpper(message[:1]) + message[1:]
 }
