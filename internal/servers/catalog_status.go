@@ -38,10 +38,22 @@ func NewCatalogStatusReader(client dynamic.Interface, namespace string) *Catalog
 	return &CatalogStatusReader{client: client, namespace: namespace}
 }
 
-// ObjectReports maps each cluster that reported to the objects its
+// ObjectReports maps each cluster the Policy is placed on to the objects its
 // ConfigurationPolicy named: true when found as specified (ready), false when
-// found but not as specified. A cluster that is absent has no report.
+// found but not as specified, or not found. A cluster whose report is missing
+// or unusable maps to nil. The Policies look up every object of their kind, so
+// an object a cluster's report doesn't name isn't on that cluster yet.
 type ObjectReports map[string]map[string]bool
+
+// any reports whether at least one cluster has a usable report.
+func (r ObjectReports) any() bool {
+	for _, objects := range r {
+		if objects != nil {
+			return true
+		}
+	}
+	return false
+}
 
 // Read returns the reports of the ConfigurationPolicy check in Policy policy.
 // A Policy or cluster copy that is missing or forbidden (the Policies aren't
@@ -73,6 +85,7 @@ func (r *CatalogStatusReader) Read(ctx context.Context, policy, check string) (O
 		if namespace == "" {
 			namespace = cluster
 		}
+		out[cluster] = nil
 		copyName := r.namespace + "." + policy
 		replica, err := policies.Namespace(namespace).Get(ctx, copyName, metav1.GetOptions{})
 		if statusUnavailable(err) {
@@ -114,8 +127,9 @@ func latestMessage(replica unstructured.Unstructured, check string) string {
 
 // complianceClauseRE matches one clause of a ConfigurationPolicy message,
 // such as "violation - llminferenceservices [a, b] found but not as specified
-// in namespace models".
-var complianceClauseRE = regexp.MustCompile(`^(?:(?:notification|violation) - )?[a-z0-9.]+ \[([^\]]*)\] found (but not )?as specified\b`)
+// in namespace models" or "violation - maassubscriptions [c] not found in
+// namespace maas".
+var complianceClauseRE = regexp.MustCompile(`^(?:(?:notification|violation) - )?[a-z0-9.]+ \[([^\]]*)\] (?:found (but not )?as specified|(not found))\b`)
 
 // parseCompliance reads the objects a ConfigurationPolicy message names. It
 // returns false when the message says nothing usable: empty, a template
@@ -138,7 +152,7 @@ func parseCompliance(message string) (map[string]bool, bool) {
 			continue
 		}
 		recognised = true
-		ready := m[2] == ""
+		ready := m[2] == "" && m[3] == ""
 		for _, name := range strings.Split(m[1], ", ") {
 			if name = strings.TrimSpace(name); name == "" {
 				continue
@@ -176,13 +190,15 @@ func readReports(ctx context.Context, logger *slog.Logger, status *CatalogStatus
 	return reports
 }
 
-// objectClusters returns the clusters that report object name, sorted, split
-// into ready and not ready.
-func objectClusters(reports ObjectReports, name string) (ready, notReady []string) {
+// objectClusters returns the clusters in reports, sorted, split into those
+// that report object name ready, those that report it not ready, and those
+// whose report doesn't name it or that have no report (missing).
+func objectClusters(reports ObjectReports, name string) (ready, notReady, missing []string) {
 	for cluster, objects := range reports {
 		state, ok := objects[name]
 		switch {
 		case !ok:
+			missing = append(missing, cluster)
 		case state:
 			ready = append(ready, cluster)
 		default:
@@ -191,7 +207,8 @@ func objectClusters(reports ObjectReports, name string) (ready, notReady []strin
 	}
 	slices.Sort(ready)
 	slices.Sort(notReady)
-	return ready, notReady
+	slices.Sort(missing)
+	return ready, notReady, missing
 }
 
 // clusterSummary says where an object is ready, for example "Not ready on

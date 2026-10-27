@@ -95,14 +95,18 @@ func (s *SubscriptionsServer) readReports(ctx context.Context, check string) Obj
 }
 
 // withSubscriptionPhase sets status.phase from the ingress clusters'
-// subscriptions-active reports: Active when every cluster that reports the
-// subscription has it as specified, Pending when any has it not as specified,
-// and empty when none reports it.
+// subscriptions-active reports: Active when every cluster the Policy is
+// placed on has the subscription as specified, Pending when any has it not as
+// specified, doesn't have it yet or hasn't reported, and empty when no cluster
+// has reported.
 func withSubscriptionPhase(sub *aigridv1.Subscription, active ObjectReports) *aigridv1.Subscription {
-	ready, notReady := objectClusters(active, sub.GetId())
+	if !active.any() {
+		return sub
+	}
+	ready, notReady, missing := objectClusters(active, sub.GetId())
 	phase := ""
 	switch {
-	case len(notReady) > 0:
+	case len(notReady) > 0 || len(missing) > 0:
 		phase = "Pending"
 	case len(ready) > 0:
 		phase = "Active"
@@ -118,27 +122,27 @@ func withSubscriptionPhase(sub *aigridv1.Subscription, active ObjectReports) *ai
 
 // gitModelRegistrations stands in for the MaaSModelRef status a cluster
 // reports, from the ingress clusters' model-refs-ready reports: phase Ready
-// when every cluster that reports the MaaSModelRef has it ready, and Pending
-// when any has it not ready. A model with no report, or in another namespace
+// when every cluster the Policy is placed on has the MaaSModelRef ready, and
+// Pending when any has it not ready, doesn't have it yet or hasn't reported. A model with no report, or in another namespace
 // than the one the Models API writes MaaSModelRefs to, has no phase and a
 // Ready condition of unknown status, saying it was saved to Git. Without an
 // entry, a client takes the model as missing.
 func gitModelRegistrations(sub *aigridv1.Subscription, namespace string, modelRefs ObjectReports) []*aigridv1.ModelRegistration {
 	var out []*aigridv1.ModelRegistration
 	for _, ref := range sub.GetSpec().GetModelRefs() {
-		var ready, notReady []string
-		if ref.GetNamespace() == namespace {
-			ready, notReady = objectClusters(modelRefs, ref.GetName())
+		var ready, notReady, missing []string
+		if ref.GetNamespace() == namespace && modelRefs.any() {
+			ready, notReady, missing = objectClusters(modelRefs, ref.GetName())
 		}
-		if len(ready)+len(notReady) > 0 {
+		if len(ready)+len(notReady)+len(missing) > 0 {
 			reg := &aigridv1.ModelRegistration{Name: ref.GetName(), Namespace: ref.GetNamespace(), Phase: "Ready"}
 			condition := &aigridv1.Condition{
 				Type:    "Ready",
 				Status:  aigridv1.ConditionStatus_CONDITION_STATUS_TRUE,
 				Reason:  proto.String("Ready"),
-				Message: proto.String(clusterSummary(notReady, ready, nil)),
+				Message: proto.String(clusterSummary(notReady, ready, missing)),
 			}
-			if len(notReady) > 0 {
+			if len(notReady)+len(missing) > 0 {
 				reg.Phase = "Pending"
 				condition.Status = aigridv1.ConditionStatus_CONDITION_STATUS_FALSE
 				condition.Reason = proto.String("NotReady")

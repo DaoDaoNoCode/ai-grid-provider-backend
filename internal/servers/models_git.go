@@ -250,7 +250,7 @@ func (s *ModelsServer) readModelReports(ctx context.Context) modelReports {
 
 // apply sets the model's phase from the reports. Each cluster the file places
 // the model on should report its LLMInferenceService, and each ingress
-// cluster that reports its MaaSModelRef counts too. The model is READY when
+// cluster the catalog Policy is placed on should report its MaaSModelRef. The model is READY when
 // every placed cluster reports it ready and no report says not ready, and
 // PENDING (reason NotReady) when any report says not ready or a placed
 // cluster hasn't reported yet. With no report at all it stays saved to Git.
@@ -272,12 +272,13 @@ func (r modelReports) apply(current *gitModel) {
 		isPlaced := slices.Contains(placed, cluster)
 		inference, hasInference := r.inference[cluster][id]
 		ingress, hasIngress := r.ingress[cluster][id]
+		_, isIngress := r.ingress[cluster]
 		hasInference = hasInference && isPlaced
 		reported = reported || hasInference || hasIngress
 		switch {
 		case (hasInference && !inference) || (hasIngress && !ingress):
 			notReady = append(notReady, cluster)
-		case isPlaced && !hasInference:
+		case (isPlaced && !hasInference) || (isIngress && !hasIngress):
 			noReport = append(noReport, cluster)
 		case hasInference || hasIngress:
 			ready = append(ready, cluster)

@@ -36,6 +36,7 @@ func TestParseCompliance(t *testing.T) {
 		"ready":            {msgModelReady, map[string]bool{"granite-4-tiny": true}, true},
 		"not ready":        {msgModelNotReady, map[string]bool{"granite-4-tiny": false}, true},
 		"several names":    {"NonCompliant; violation - llminferenceservices [a, b] found but not as specified in namespace m; notification - llminferenceservices [c] found as specified in namespace m", map[string]bool{"a": false, "b": false, "c": true}, true},
+		"not found":        {"NonCompliant; violation - maassubscriptions [a] not found in namespace m; notification - maassubscriptions [b] found as specified in namespace m", map[string]bool{"a": false, "b": true}, true},
 		"not ready wins":   {"llminferenceservices [a] found but not as specified in namespace m; llminferenceservices [a] found as specified in namespace m", map[string]bool{"a": false}, true},
 		"nothing to check": {msgEmpty, map[string]bool{}, true},
 		"template failure": {msgTemplateFailure, nil, false},
@@ -65,8 +66,10 @@ func TestCatalogStatusRead(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Read() error = %v", err)
 	}
-	want := ObjectReports{"site-a": {"granite-4-tiny": true}, "site-b": {"granite-4-tiny": false}}
-	if !maps.EqualFunc(got, want, func(a, b map[string]bool) bool { return maps.Equal(a, b) }) {
+	// Every cluster the Policy is placed on is in the result; one without a
+	// usable report maps to nil.
+	want := ObjectReports{"site-a": {"granite-4-tiny": true}, "site-b": {"granite-4-tiny": false}, "site-c": nil, "site-d": nil}
+	if !maps.EqualFunc(got, want, func(a, b map[string]bool) bool { return (a == nil) == (b == nil) && maps.Equal(a, b) }) {
 		t.Fatalf("Read() = %v, want %v", got, want)
 	}
 }
@@ -111,8 +114,8 @@ func TestCatalogStatusReadUnavailable(t *testing.T) {
 			return false, nil, nil
 		})
 		got, err := NewCatalogStatusReader(client, "").Read(ctx, "ai-grid-models-status", "models-ready")
-		if err != nil || len(got) != 0 {
-			t.Fatalf("Read() = %v, %v; want no reports", got, err)
+		if err != nil || len(got) != 1 || got["site-a"] != nil {
+			t.Fatalf("Read() = %v, %v; want site-a with no report", got, err)
 		}
 	})
 	t.Run("other error", func(t *testing.T) {

@@ -81,6 +81,17 @@ func TestModelsGitStatus(t *testing.T) {
 			},
 			wantPhase: aigridv1.ModelPhase_MODEL_PHASE_PENDING, wantReason: "NotReady", wantMessage: "Ready on site-a; no report from site-b",
 		},
+		"MaaSModelRef missing on an ingress cluster": {
+			objects: []runtime.Object{
+				rootPolicy(modelsStatusPolicy, "site-a", "site-b"),
+				clusterPolicy("site-a", modelsStatusPolicy, modelReady(true)),
+				clusterPolicy("site-b", modelsStatusPolicy, modelReady(true)),
+				rootPolicy(catalogStatusPolicy, "hub", "edge"),
+				clusterPolicy("hub", catalogStatusPolicy, modelRefReady(true)),
+				clusterPolicy("edge", catalogStatusPolicy, map[string]string{modelRefsReadyCheck: msgEmpty}),
+			},
+			wantPhase: aigridv1.ModelPhase_MODEL_PHASE_PENDING, wantReason: "NotReady", wantMessage: "Ready on hub, site-a, site-b; no report from edge",
+		},
 		"no reports": {
 			objects:    []runtime.Object{rootPolicy(modelsStatusPolicy, "site-a")},
 			wantReason: "SavedToGit", wantMessage: "Saved to Git; no cluster has reported the model's status",
@@ -159,6 +170,23 @@ func TestSubscriptionsGitStatus(t *testing.T) {
 				rootPolicy(catalogStatusPolicy, "site-a", "site-b"),
 				clusterPolicy("site-a", catalogStatusPolicy, map[string]string{subscriptionsActiveCheck: subscriptionActive(false), modelRefsReadyCheck: refReady(false)}),
 				clusterPolicy("site-b", catalogStatusPolicy, map[string]string{subscriptionsActiveCheck: subscriptionActive(true), modelRefsReadyCheck: refReady(true)}),
+			},
+			wantPhase: "Pending", wantModelPhase: "Pending", wantReason: "NotReady",
+		},
+		// An ingress cluster that doesn't have the objects yet, or hasn't
+		// reported, keeps them from Active and Ready.
+		"missing on one cluster": {
+			objects: []runtime.Object{
+				rootPolicy(catalogStatusPolicy, "site-a", "site-b"),
+				clusterPolicy("site-a", catalogStatusPolicy, map[string]string{subscriptionsActiveCheck: subscriptionActive(true), modelRefsReadyCheck: refReady(true)}),
+				clusterPolicy("site-b", catalogStatusPolicy, map[string]string{subscriptionsActiveCheck: msgEmpty, modelRefsReadyCheck: msgEmpty}),
+			},
+			wantPhase: "Pending", wantModelPhase: "Pending", wantReason: "NotReady",
+		},
+		"one cluster hasn't reported": {
+			objects: []runtime.Object{
+				rootPolicy(catalogStatusPolicy, "site-a", "site-b"),
+				clusterPolicy("site-a", catalogStatusPolicy, map[string]string{subscriptionsActiveCheck: subscriptionActive(true), modelRefsReadyCheck: refReady(true)}),
 			},
 			wantPhase: "Pending", wantModelPhase: "Pending", wantReason: "NotReady",
 		},
