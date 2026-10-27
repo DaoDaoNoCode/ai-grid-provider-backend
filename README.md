@@ -112,7 +112,8 @@ For subscriptions:
   `<organization id>/<group>`, the tenant-qualified form, in both the
   subscription and its policy, and reads return the bare names. A group sent
   already qualified with the same organization is accepted; one qualified with
-  another organization is `InvalidArgument`; repeats are dropped.
+  another organization is `InvalidArgument`; surrounding spaces are trimmed and
+  repeats are dropped.
 - The policy lives in the subscription's file, so Argo CD prunes both
   together; it has no ownerReference.
 - A model ref without a namespace gets the subscription's namespace

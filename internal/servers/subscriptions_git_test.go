@@ -216,7 +216,7 @@ func TestSubscriptionsGitValidation(t *testing.T) {
 // groups are written as <organization>/<group> in both the subscription and
 // its policy, and read back bare. A group already qualified with the same
 // organization is kept, one qualified with another organization or empty is
-// rejected, and repeats are dropped.
+// rejected, surrounding spaces are trimmed, and repeats are dropped.
 func TestSubscriptionsGitOwnerGroups(t *testing.T) {
 	t.Parallel()
 	for name, tc := range map[string]struct {
@@ -235,6 +235,8 @@ func TestSubscriptionsGitOwnerGroups(t *testing.T) {
 		"nested after prefix":   {groups: []string{testOrgID + "/a/b"}, wantCode: connect.CodeInvalidArgument},
 		"leading separator":     {groups: []string{"/team-a"}, wantCode: connect.CodeInvalidArgument},
 		"one bad among good":    {groups: []string{"team-a", "x/team-b"}, wantCode: connect.CodeInvalidArgument},
+		"padded":                {groups: []string{" team-a ", "team-a", "\tb"}, wantFile: []string{testOrgID + "/team-a", testOrgID + "/b"}, wantAPI: []string{"team-a", "b"}},
+		"padded after prefix":   {groups: []string{" " + testOrgID + "/ team-a"}, wantFile: []string{testOrgID + "/team-a"}, wantAPI: []string{"team-a"}},
 		"same org, twice cased": {groups: []string{"Team-A", "team-a"}, wantFile: []string{testOrgID + "/Team-A", testOrgID + "/team-a"}, wantAPI: []string{"Team-A", "team-a"}},
 	} {
 		t.Run(name, func(t *testing.T) {

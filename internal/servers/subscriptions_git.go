@@ -341,8 +341,8 @@ func validateGitMetadata(meta *aigridv1.Metadata) error {
 // the token. spec.organization.id is required, and must be a DNS label so it
 // can't hold a separator that changes which group is granted. A group may be
 // sent bare or already qualified with the same organization; a group
-// qualified with another organization, or empty, is InvalidArgument. Repeats
-// are dropped, keeping the first.
+// qualified with another organization, or empty, is InvalidArgument.
+// Surrounding spaces are trimmed, and repeats are dropped, keeping the first.
 func qualifiedOwnerGroups(spec *aigridv1.SubscriptionSpec) ([]string, error) {
 	org := spec.GetOrganization().GetId()
 	if org == "" {
@@ -355,14 +355,14 @@ func qualifiedOwnerGroups(spec *aigridv1.SubscriptionSpec) ([]string, error) {
 	out := make([]string, 0, len(groups))
 	seen := make(map[string]bool, len(groups))
 	for i, group := range groups {
-		name := group
-		if prefix, rest, qualified := strings.Cut(group, "/"); qualified {
+		name := strings.TrimSpace(group)
+		if prefix, rest, qualified := strings.Cut(name, "/"); qualified {
 			if prefix != org {
 				return nil, connect.Errorf(connect.CodeInvalidArgument, "spec.owner.groups[%d] %q belongs to another organization; send the bare group name", i, group)
 			}
-			name = rest
+			name = strings.TrimSpace(rest)
 		}
-		if strings.TrimSpace(name) == "" || strings.Contains(name, "/") {
+		if name == "" || strings.Contains(name, "/") {
 			return nil, connect.Errorf(connect.CodeInvalidArgument, "spec.owner.groups[%d] %q is not a valid group name", i, group)
 		}
 		qualified := org + "/" + name
