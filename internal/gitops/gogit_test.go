@@ -148,6 +148,26 @@ func TestRepoWriterConflicts(t *testing.T) {
 	}
 }
 
+// A read set conflicts on a file added under a directory since base.
+func TestRepoWriterReadSetConflicts(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	url := newBareRepo(t, map[string]string{"subs/a.yaml": "a", "models/m": "m", "x": "x"})
+	w := newTestRepoWriter(t, url)
+	other := newTestRepoWriter(t, url)
+	base, _ := w.Head(ctx)
+	otherHead, _ := other.Head(ctx)
+	if _, err := other.Commit(ctx, otherHead.Revision(), Change{Put: map[string][]byte{"subs/b.yaml": []byte("b")}, Message: "other"}); err != nil {
+		t.Fatalf("other Commit() error = %v", err)
+	}
+	if _, err := w.Commit(ctx, base.Revision(), Change{Put: map[string][]byte{"x": []byte("x2")}, Read: []string{"subs"}, Message: "m"}); !errors.Is(err, ErrConflict) {
+		t.Fatalf("Commit(read subs) error = %v, want ErrConflict", err)
+	}
+	if _, err := w.Commit(ctx, base.Revision(), Change{Put: map[string][]byte{"x": []byte("x2")}, Read: []string{"models/m", "models"}, Message: "m"}); err != nil {
+		t.Fatalf("Commit(read unchanged) error = %v", err)
+	}
+}
+
 func TestRepoWriterDeleteMissingFile(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()

@@ -156,7 +156,9 @@ For models:
   phase and reason `SavedToGit`. It is never `FAILED`: the Policies can't tell
   a failed model from one that is starting.
 - Delete answers `FailedPrecondition` while a subscription in the repository
-  names the model.
+  names the model. A subscription written between the check and the commit
+  makes the delete `Aborted`, and a model deleted before a subscription that
+  names it commits makes that write `Aborted`.
 
 #### Status from the spokes
 

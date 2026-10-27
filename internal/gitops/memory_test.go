@@ -138,3 +138,24 @@ func TestMemoryWriterRejectsInvalidChanges(t *testing.T) {
 		t.Error("Commit() with an unknown base succeeded")
 	}
 }
+
+// A change's read set conflicts like the files it writes: a file, or any file
+// under a directory, added, changed or removed since base.
+func TestMemoryWriterReadSetConflicts(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	w := NewMemoryWriter(map[string][]byte{"subs/a.yaml": []byte("a"), "models/m": []byte("m"), "x": []byte("x")})
+	base, _ := w.Head(ctx)
+	if _, err := w.Commit(ctx, base.Revision(), Change{Put: map[string][]byte{"subs/b.yaml": []byte("b")}, Message: "m"}); err != nil {
+		t.Fatalf("Commit(subs/b) error = %v", err)
+	}
+	if _, err := w.Commit(ctx, base.Revision(), Change{Put: map[string][]byte{"x": []byte("x2")}, Read: []string{"subs"}, Message: "m"}); !errors.Is(err, ErrConflict) {
+		t.Fatalf("Commit(read subs) error = %v, want ErrConflict", err)
+	}
+	if _, err := w.Commit(ctx, base.Revision(), Change{Put: map[string][]byte{"x": []byte("x2")}, Read: []string{"models/m", "models"}, Message: "m"}); err != nil {
+		t.Fatalf("Commit(read unchanged) error = %v", err)
+	}
+	if _, err := w.Commit(ctx, base.Revision(), Change{Put: map[string][]byte{"y": nil}, Read: []string{"../x"}, Message: "m"}); err == nil {
+		t.Fatal("Commit() with an invalid read path succeeded")
+	}
+}

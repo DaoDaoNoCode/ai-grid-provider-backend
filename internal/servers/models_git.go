@@ -160,7 +160,9 @@ func (s *ModelsServer) gitUpdate(ctx context.Context, req *aigridv1.ModelsUpdate
 
 // gitDelete removes the model's files and its index entries. A nonzero
 // version must equal the model's, or the delete is Aborted. It is refused while
-// a subscription in the repository names the model.
+// a subscription in the repository names the model, and the subscriptions
+// directory is in the commit's read set, so a subscription written since the
+// check makes the delete Aborted.
 func (s *ModelsServer) gitDelete(ctx context.Context, id string, version int32) error {
 	head, err := s.writer.Head(ctx)
 	if err != nil {
@@ -177,7 +179,7 @@ func (s *ModelsServer) gitDelete(ctx context.Context, id string, version int32) 
 		return err
 	}
 
-	change := gitops.Change{Put: map[string][]byte{}, Message: "models: delete " + id}
+	change := gitops.Change{Put: map[string][]byte{}, Read: []string{subscriptionsGitDir}, Message: "models: delete " + id}
 	for _, dir := range []string{modelDeploymentGitDir(id), modelCatalogGitDir(id)} {
 		names, err := head.List(dir)
 		if err != nil {

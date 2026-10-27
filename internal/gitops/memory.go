@@ -7,6 +7,7 @@ import (
 	"path"
 	"sort"
 	"strconv"
+	"strings"
 	"sync"
 )
 
@@ -51,10 +52,8 @@ func (w *MemoryWriter) Commit(_ context.Context, base string, c Change) (string,
 	head := w.revisions[len(w.revisions)-1]
 	if baseRev != len(w.revisions)-1 {
 		baseTree := w.revisions[baseRev]
-		for _, p := range c.paths() {
-			before, inBase := baseTree[p]
-			now, inHead := head[p]
-			if inBase != inHead || !bytes.Equal(before, now) {
+		for _, p := range c.checked() {
+			if !sameAt(baseTree, head, p) {
 				return "", ErrConflict
 			}
 		}
@@ -77,6 +76,23 @@ func (w *MemoryWriter) Commit(_ context.Context, base string, c Change) (string,
 	w.revisions = append(w.revisions, next)
 	w.messages = append(w.messages, c.Message)
 	return strconv.Itoa(len(w.revisions) - 1), nil
+}
+
+// sameAt reports whether the file p, or every file under the directory p, is
+// the same in a and b.
+func sameAt(a, b map[string][]byte, p string) bool {
+	under := func(f string) bool { return f == p || strings.HasPrefix(f, p+"/") }
+	for f, data := range a {
+		if other, ok := b[f]; under(f) && (!ok || !bytes.Equal(data, other)) {
+			return false
+		}
+	}
+	for f := range b {
+		if _, ok := a[f]; under(f) && !ok {
+			return false
+		}
+	}
+	return true
 }
 
 // Messages returns the commit messages after the first revision, oldest first.

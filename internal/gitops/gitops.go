@@ -14,15 +14,21 @@ var (
 	// ErrNotFound reports a Read of a file that is not in the snapshot.
 	ErrNotFound = errors.New("gitops: file not found")
 	// ErrConflict reports a Commit whose base is stale: a file the change
-	// touches differs between the base revision and the branch head.
+	// touches or reads differs between the base revision and the branch head.
 	ErrConflict = errors.New("gitops: a file in the change was modified since the base revision")
 )
 
 // Change is one atomic commit: files to write and files to delete, by
 // repository path.
 type Change struct {
-	Put     map[string][]byte
-	Delete  []string
+	Put    map[string][]byte
+	Delete []string
+	// Read names the files or directories the change was decided on but
+	// doesn't write, such as the files a reference check read. The commit
+	// conflicts when any of them differs between base and the branch head,
+	// as for the files it writes; a directory differs when a file under it
+	// was added, changed or removed.
+	Read    []string
 	Message string
 }
 
@@ -41,7 +47,8 @@ type Writer interface {
 	// Head returns the snapshot at the branch head.
 	Head(ctx context.Context) (Snapshot, error)
 	// Commit applies c on top of the branch head and returns the new revision.
-	// It fails with ErrConflict when a file c touches changed since base, and
+	// It fails with ErrConflict when a file c touches or reads changed since
+	// base, and
 	// with ErrNotFound when c deletes a file the head doesn't have.
 	Commit(ctx context.Context, base string, c Change) (string, error)
 }
@@ -71,7 +78,18 @@ func (c Change) validate() error {
 		}
 		seen[p] = true
 	}
+	for _, p := range c.Read {
+		if err := validPath(p); err != nil {
+			return err
+		}
+	}
 	return nil
+}
+
+// checked returns every path that must be unchanged since base: the paths c
+// touches and those it read.
+func (c Change) checked() []string {
+	return append(c.paths(), c.Read...)
 }
 
 // paths returns every path c touches.

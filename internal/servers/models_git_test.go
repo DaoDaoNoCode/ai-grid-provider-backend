@@ -267,6 +267,41 @@ func TestModelsGitDeleteReferenced(t *testing.T) {
 	assertConnectCode(t, err, connect.CodeFailedPrecondition)
 }
 
+// The reference guard holds against a concurrent write: a subscription to
+// the model committed between the delete's read and its commit makes the
+// delete Aborted, and a model deleted between a subscribe's read and its
+// commit makes the subscribe Aborted.
+func TestModelsGitDeleteRacesSubscribe(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	writer := &racingWriter{MemoryWriter: gitops.NewMemoryWriter(nil)}
+	models := mustGitModelsServer(t, writer)
+	subscriptions := mustGitSubscriptionsServer(t, writer.MemoryWriter)
+	if _, err := models.Create(ctx, &aigridv1.ModelsCreateRequest{Object: gitSampleModel("sim-model", "site-a")}); err != nil {
+		t.Fatalf("Create model error = %v", err)
+	}
+
+	writer.race = func() {
+		if _, err := subscriptions.Create(ctx, &aigridv1.SubscriptionsCreateRequest{Object: gitSampleSubscription("team-a")}); err != nil {
+			t.Errorf("racing subscription Create() error = %v", err)
+		}
+	}
+	_, err := models.Delete(ctx, &aigridv1.ModelsDeleteRequest{Id: "sim-model"})
+	assertConnectCode(t, err, connect.CodeAborted)
+
+	if _, err := subscriptions.Delete(ctx, &aigridv1.SubscriptionsDeleteRequest{Id: "team-a"}); err != nil {
+		t.Fatalf("Delete subscription error = %v", err)
+	}
+	racingSubs := mustGitSubscriptionsServer(t, writer)
+	writer.race = func() {
+		if _, err := models.Delete(ctx, &aigridv1.ModelsDeleteRequest{Id: "sim-model"}); err != nil {
+			t.Errorf("racing model Delete() error = %v", err)
+		}
+	}
+	_, err = racingSubs.Create(ctx, &aigridv1.SubscriptionsCreateRequest{Object: gitSampleSubscription("team-b")})
+	assertConnectCode(t, err, connect.CodeAborted)
+}
+
 func mustGitModelsServer(t *testing.T, writer gitops.Writer) *ModelsServer {
 	t.Helper()
 	// No dynamic client: git mode must never call the cluster.

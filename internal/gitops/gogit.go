@@ -124,7 +124,7 @@ func (w *RepoWriter) Commit(ctx context.Context, base string, c Change) (string,
 		if err != nil {
 			return "", err
 		}
-		for _, p := range c.paths() {
+		for _, p := range c.checked() {
 			if blobHash(baseTree, p) != blobHash(headTree, p) {
 				return "", ErrConflict
 			}
@@ -217,7 +217,8 @@ func (w *RepoWriter) snapshot(h plumbing.Hash) (Snapshot, error) {
 	return treeSnapshot{rev: h.String(), tree: tree}, nil
 }
 
-// blobHash returns the file's blob hash, or the zero hash when it is absent.
+// blobHash returns the hash of the file or directory at p, or the zero hash
+// when it is absent.
 func blobHash(tree *object.Tree, p string) plumbing.Hash {
 	entry, err := tree.FindEntry(p)
 	if err != nil {

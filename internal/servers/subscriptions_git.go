@@ -175,10 +175,11 @@ func (s *SubscriptionsServer) gitCreate(ctx context.Context, object *aigridv1.Su
 	} else if !errors.Is(err, gitops.ErrNotFound) {
 		return nil, subscriptionGitError("create", id, err)
 	}
-	if err := s.gitEnsureModelsExist(head, "create", object); err != nil {
+	read, err := s.gitEnsureModelsExist(head, "create", object)
+	if err != nil {
 		return nil, err
 	}
-	doc, err := s.gitCommit(ctx, head.Revision(), "create", object, 1)
+	doc, err := s.gitCommit(ctx, head.Revision(), "create", object, 1, read)
 	if err != nil {
 		return nil, err
 	}
@@ -219,6 +220,7 @@ func (s *SubscriptionsServer) gitUpdate(ctx context.Context, req *aigridv1.Subsc
 	if err := validateGitMetadata(candidate.GetMetadata()); err != nil {
 		return nil, err
 	}
+	var read []string
 	if paths.anySpec() {
 		if err := validateSubscriptionSpec(candidate.GetSpec()); err != nil {
 			return nil, err
@@ -229,11 +231,11 @@ func (s *SubscriptionsServer) gitUpdate(ctx context.Context, req *aigridv1.Subsc
 		if _, err := qualifiedOwnerGroups(candidate.GetSpec()); err != nil {
 			return nil, err
 		}
-		if err := s.gitEnsureModelsExist(head, "update", candidate); err != nil {
+		if read, err = s.gitEnsureModelsExist(head, "update", candidate); err != nil {
 			return nil, err
 		}
 	}
-	doc, err := s.gitCommit(ctx, head.Revision(), "update", candidate, currentVersion+1)
+	doc, err := s.gitCommit(ctx, head.Revision(), "update", candidate, currentVersion+1, read)
 	if err != nil {
 		return nil, err
 	}
@@ -270,26 +272,30 @@ func (s *SubscriptionsServer) gitDelete(ctx context.Context, id string, version 
 // subscription namespace, to a model the repository doesn't have: Argo CD
 // would apply a MaaSSubscription naming a MaaSModelRef that doesn't exist. A
 // ref to another namespace isn't checked, because the Models API doesn't
-// write there.
-func (s *SubscriptionsServer) gitEnsureModelsExist(head gitops.Snapshot, op string, object *aigridv1.Subscription) error {
+// write there. It returns the files it read, for the commit's read set, so a
+// model deleted before the commit makes it conflict.
+func (s *SubscriptionsServer) gitEnsureModelsExist(head gitops.Snapshot, op string, object *aigridv1.Subscription) ([]string, error) {
+	var read []string
 	for _, ref := range object.GetSpec().GetModelRefs() {
 		if ref.GetNamespace() != "" && ref.GetNamespace() != s.namespace {
 			continue
 		}
-		_, err := head.Read(path.Join(modelDeploymentGitDir(ref.GetName()), "deployment.yaml"))
+		p := path.Join(modelDeploymentGitDir(ref.GetName()), "deployment.yaml")
+		_, err := head.Read(p)
 		if errors.Is(err, gitops.ErrNotFound) {
-			return connect.Errorf(connect.CodeFailedPrecondition, "spec.model_refs: Model %q does not exist", ref.GetName())
+			return nil, connect.Errorf(connect.CodeFailedPrecondition, "spec.model_refs: Model %q does not exist", ref.GetName())
 		}
 		if err != nil {
-			return subscriptionGitError(op, subscriptionID(object), err)
+			return nil, subscriptionGitError(op, subscriptionID(object), err)
 		}
+		read = append(read, p)
 	}
-	return nil
+	return read, nil
 }
 
 // gitCommit writes object's file at version on top of base and returns the
-// subscription as read back from that file.
-func (s *SubscriptionsServer) gitCommit(ctx context.Context, base, op string, object *aigridv1.Subscription, version int32) (*subscriptionDoc, error) {
+// subscription as read back from that file. read is the commit's read set.
+func (s *SubscriptionsServer) gitCommit(ctx context.Context, base, op string, object *aigridv1.Subscription, version int32, read []string) (*subscriptionDoc, error) {
 	id := subscriptionID(object)
 	data, err := renderSubscriptionDoc(object, s.namespace, version)
 	if err != nil {
@@ -297,6 +303,7 @@ func (s *SubscriptionsServer) gitCommit(ctx context.Context, base, op string, ob
 	}
 	if _, err := s.writer.Commit(ctx, base, gitops.Change{
 		Put:     map[string][]byte{subscriptionGitPath(id): data},
+		Read:    read,
 		Message: fmt.Sprintf("subscriptions: %s %s", op, id),
 	}); err != nil {
 		return nil, subscriptionGitError(op, id, err)
