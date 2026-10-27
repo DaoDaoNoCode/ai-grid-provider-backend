@@ -43,9 +43,10 @@ type ModelsClient interface {
 	Create(ctx context.Context, in *ModelsCreateRequest, opts ...grpc.CallOption) (*ModelsCreateResponse, error)
 	Update(ctx context.Context, in *ModelsUpdateRequest, opts ...grpc.CallOption) (*ModelsUpdateResponse, error)
 	Delete(ctx context.Context, in *ModelsDeleteRequest, opts ...grpc.CallOption) (*ModelsDeleteResponse, error)
-	// Locations a model can be placed on: unique sorted `location` labels of
+	// Locations a model can be placed on: unique sorted names of the
 	// ManagedClusters that are AI Grid members (ai-grid/enabled and
-	// ai-grid/provisioned "true") and Available.
+	// ai-grid/provisioned "true") and Available. A location is a cluster: the
+	// values a placement's `name In [...]` takes.
 	ListLocations(ctx context.Context, in *ModelsListLocationsRequest, opts ...grpc.CallOption) (*ModelsListLocationsResponse, error)
 }
 
@@ -133,9 +134,10 @@ type ModelsServer interface {
 	Create(context.Context, *ModelsCreateRequest) (*ModelsCreateResponse, error)
 	Update(context.Context, *ModelsUpdateRequest) (*ModelsUpdateResponse, error)
 	Delete(context.Context, *ModelsDeleteRequest) (*ModelsDeleteResponse, error)
-	// Locations a model can be placed on: unique sorted `location` labels of
+	// Locations a model can be placed on: unique sorted names of the
 	// ManagedClusters that are AI Grid members (ai-grid/enabled and
-	// ai-grid/provisioned "true") and Available.
+	// ai-grid/provisioned "true") and Available. A location is a cluster: the
+	// values a placement's `name In [...]` takes.
 	ListLocations(context.Context, *ModelsListLocationsRequest) (*ModelsListLocationsResponse, error)
 	mustEmbedUnimplementedModelsServer()
 }

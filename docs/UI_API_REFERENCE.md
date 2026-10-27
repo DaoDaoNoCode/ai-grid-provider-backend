@@ -43,7 +43,7 @@ unwraps them via `response_body: "object"`.
 | `DELETE` | `/api/v1/tenants/{id}` | Delete tenant |
 | `GET` | `/api/v1/tenants/{id}:listMembers` | List users in the tenant Organization |
 | `GET` | `/api/v1/models` | List models (from the Git catalog) |
-| `GET` | `/api/v1/models:listLocations` | Unique sorted location labels of Available AI Grid members |
+| `GET` | `/api/v1/models:listLocations` | Unique sorted names of Available AI Grid member clusters |
 | `GET` | `/api/v1/models/{id}` | Get one model |
 | `POST` | `/api/v1/models` | Create model (commits it to Git) |
 | `PATCH` | `/api/v1/models/{id}` | Update model (FieldMask) |
@@ -510,7 +510,7 @@ annotations take only unprefixed keys plus `openshift.io/display-name` and
 | Method | Path | Notes |
 | --- | --- | --- |
 | GET | `/api/v1/models` | List; CEL `filter`; `order` allowlist `id`, `-id`, `metadata.name`, `-metadata.name` |
-| GET | `/api/v1/models:listLocations` | Unique sorted `location` labels of Available AI Grid member clusters (P7) |
+| GET | `/api/v1/models:listLocations` | Unique sorted names of Available AI Grid member clusters, the values `spec.placement` takes (P7) |
 | GET | `/api/v1/models/{id}` | Get one (unwraps to the Model object); `status.placement.locations` when placed (P8) |
 | POST | `/api/v1/models` | Create (= deploy); body is the Model object |
 | PATCH | `/api/v1/models/{id}` | FieldMask update (`spec.replicas`, `spec.main.image`, `spec.main.env`, `spec.placement`, `spec.rollout`, `metadata.labels`, `metadata.annotations`) |

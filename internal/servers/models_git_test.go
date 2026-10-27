@@ -351,7 +351,7 @@ func kustomizationResources(t *testing.T, writer gitops.Writer, p string) []stri
 }
 
 // Git mode reads the ManagedClusters only for status.placement.locations, from
-// each placed cluster's location label, and ListLocations still lists them.
+// each placed cluster's location label, and for ListLocations.
 func TestModelsGitLocations(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -385,6 +385,34 @@ func TestModelsGitLocations(t *testing.T) {
 	locations, err := noClient.ListLocations(ctx, &aigridv1.ModelsListLocationsRequest{})
 	if err != nil || len(locations.GetLocations()) != 0 {
 		t.Fatalf("ListLocations() without a client = %v, %v", locations, err)
+	}
+}
+
+// ListLocations answers the names of the clusters a model can be placed on,
+// since git mode places by cluster name: AI Grid members (ai-grid/enabled and
+// ai-grid/provisioned "true") that are Available, with or without a location
+// label, unique and sorted.
+func TestModelsListLocationsAnswersClusterNames(t *testing.T) {
+	t.Parallel()
+	member := map[string]string{"ai-grid/enabled": "true", "ai-grid/provisioned": "true"}
+	available := []map[string]interface{}{{"type": "ManagedClusterConditionAvailable", "status": "True"}}
+	client := newManagedClusterClient(
+		managedClusterUnstructured("site-b", map[string]string{"ai-grid/enabled": "true", "ai-grid/provisioned": "true", "location": "us-west"}, nil, true, available),
+		managedClusterUnstructured("site-a", member, nil, true, available),
+		managedClusterUnstructured("site-c", map[string]string{"ai-grid/enabled": "true", "location": "us-east"}, nil, true, available),
+		managedClusterUnstructured("site-d", member, nil, true, []map[string]interface{}{{"type": "ManagedClusterConditionAvailable", "status": "False"}}),
+		managedClusterUnstructured("site-e", map[string]string{"ai-grid/provisioned": "true"}, nil, true, available),
+	)
+	srv, err := NewModelsServer().SetWriter(gitops.NewMemoryWriter(nil)).SetDynamicClient(client).Build()
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+	got, err := srv.ListLocations(context.Background(), &aigridv1.ModelsListLocationsRequest{})
+	if err != nil {
+		t.Fatalf("ListLocations() error = %v", err)
+	}
+	if want := []string{"site-a", "site-b"}; !slices.Equal(got.GetLocations(), want) {
+		t.Fatalf("ListLocations() = %v, want %v", got.GetLocations(), want)
 	}
 }
 

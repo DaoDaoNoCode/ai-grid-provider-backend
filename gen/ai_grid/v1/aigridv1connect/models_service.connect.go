@@ -93,9 +93,10 @@ type ModelsClient interface {
 	Create(context.Context, *v1.ModelsCreateRequest) (*v1.ModelsCreateResponse, error)
 	Update(context.Context, *v1.ModelsUpdateRequest) (*v1.ModelsUpdateResponse, error)
 	Delete(context.Context, *v1.ModelsDeleteRequest) (*v1.ModelsDeleteResponse, error)
-	// Locations a model can be placed on: unique sorted `location` labels of
+	// Locations a model can be placed on: unique sorted names of the
 	// ManagedClusters that are AI Grid members (ai-grid/enabled and
-	// ai-grid/provisioned "true") and Available.
+	// ai-grid/provisioned "true") and Available. A location is a cluster: the
+	// values a placement's `name In [...]` takes.
 	ListLocations(context.Context, *v1.ModelsListLocationsRequest) (*v1.ModelsListLocationsResponse, error)
 }
 
@@ -115,9 +116,10 @@ type ModelsHandler interface {
 	Create(context.Context, *v1.ModelsCreateRequest) (*v1.ModelsCreateResponse, error)
 	Update(context.Context, *v1.ModelsUpdateRequest) (*v1.ModelsUpdateResponse, error)
 	Delete(context.Context, *v1.ModelsDeleteRequest) (*v1.ModelsDeleteResponse, error)
-	// Locations a model can be placed on: unique sorted `location` labels of
+	// Locations a model can be placed on: unique sorted names of the
 	// ManagedClusters that are AI Grid members (ai-grid/enabled and
-	// ai-grid/provisioned "true") and Available.
+	// ai-grid/provisioned "true") and Available. A location is a cluster: the
+	// values a placement's `name In [...]` takes.
 	ListLocations(context.Context, *v1.ModelsListLocationsRequest) (*v1.ModelsListLocationsResponse, error)
 }
 

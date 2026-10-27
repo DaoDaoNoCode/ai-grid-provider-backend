@@ -219,7 +219,8 @@ func (c *Client) DeleteModel(ctx context.Context, id string) error {
 	return err
 }
 
-// ListModelLocations returns unique sorted location labels of Available AI Grid member clusters.
+// ListModelLocations returns the unique sorted names of the Available AI Grid
+// member clusters, the clusters a model can be placed on.
 func (c *Client) ListModelLocations(ctx context.Context) ([]string, error) {
 	response, err := c.models.ListLocations(ctx, &aigridv1.ModelsListLocationsRequest{})
 	if err != nil {

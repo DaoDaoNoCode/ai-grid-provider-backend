@@ -451,7 +451,7 @@
     },
     "/api/v1/models:listLocations": {
       "get": {
-        "summary": "Locations a model can be placed on: unique sorted `location` labels of\nManagedClusters that are AI Grid members (ai-grid/enabled and\nai-grid/provisioned \"true\") and Available.",
+        "summary": "Locations a model can be placed on: unique sorted names of the\nManagedClusters that are AI Grid members (ai-grid/enabled and\nai-grid/provisioned \"true\") and Available. A location is a cluster: the\nvalues a placement's `name In [...]` takes.",
         "operationId": "Models_ListLocations",
         "responses": {
           "200": {
@@ -1773,7 +1773,7 @@
           "items": {
             "type": "string"
           },
-          "description": "Unique sorted `location` labels of AI Grid member clusters that are Available."
+          "description": "Unique sorted names of AI Grid member clusters that are Available."
         }
       },
       "description": "Response of ListLocations (P7)."

@@ -260,7 +260,9 @@ func listModelItems(ctx context.Context, req *aigridv1.ModelsListRequest, items 
 	}, nil
 }
 
-// ListLocations returns unique sorted location labels of Available AI Grid member clusters.
+// ListLocations returns the unique sorted names of the Available AI Grid
+// member clusters: the values a placement's name In [...] takes, since git
+// mode places a model by cluster name.
 func (s *ModelsServer) ListLocations(ctx context.Context, _ *aigridv1.ModelsListLocationsRequest) (*aigridv1.ModelsListLocationsResponse, error) {
 	if s.client == nil {
 		return &aigridv1.ModelsListLocationsResponse{}, nil
@@ -272,25 +274,14 @@ func (s *ModelsServer) ListLocations(ctx context.Context, _ *aigridv1.ModelsList
 		}
 		return nil, mapModelAPIError("list locations", "", err)
 	}
-	seen := map[string]struct{}{}
-	var locs []string
+	var names []string
 	for i := range list.Items {
-		item := list.Items[i]
-		if !isAIGridMemberCluster(item) {
-			continue
+		if isAIGridMemberCluster(list.Items[i]) {
+			names = append(names, list.Items[i].GetName())
 		}
-		loc := item.GetLabels()["location"]
-		if loc == "" {
-			continue
-		}
-		if _, ok := seen[loc]; ok {
-			continue
-		}
-		seen[loc] = struct{}{}
-		locs = append(locs, loc)
 	}
-	sort.Strings(locs)
-	return &aigridv1.ModelsListLocationsResponse{Locations: locs}, nil
+	sort.Strings(names)
+	return &aigridv1.ModelsListLocationsResponse{Locations: slices.Compact(names)}, nil
 }
 
 func isAIGridMemberCluster(item unstructured.Unstructured) bool {
