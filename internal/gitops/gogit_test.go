@@ -168,6 +168,26 @@ func TestRepoWriterReadSetConflicts(t *testing.T) {
 	}
 }
 
+// A push the remote refuses because the branch moved after the fetch, as
+// when two replicas commit at once, is ErrConflict.
+func TestRepoWriterPushRace(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	url := newBareRepo(t, map[string]string{"a": "a", "b": "b"})
+	w := newTestRepoWriter(t, url)
+	other := newTestRepoWriter(t, url)
+	w.beforePush = func() {
+		head, _ := other.Head(ctx)
+		if _, err := other.Commit(ctx, head.Revision(), Change{Put: map[string][]byte{"b": []byte("b2")}, Message: "other"}); err != nil {
+			t.Errorf("other Commit() error = %v", err)
+		}
+	}
+	head, _ := w.Head(ctx)
+	if _, err := w.Commit(ctx, head.Revision(), Change{Put: map[string][]byte{"a": []byte("a2")}, Message: "m"}); !errors.Is(err, ErrConflict) {
+		t.Fatalf("Commit() racing a push error = %v, want ErrConflict", err)
+	}
+}
+
 func TestRepoWriterDeleteMissingFile(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()

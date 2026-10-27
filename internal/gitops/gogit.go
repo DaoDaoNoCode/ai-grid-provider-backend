@@ -7,6 +7,7 @@ import (
 	"io"
 	"path"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -53,6 +54,9 @@ type RepoWriter struct {
 	repo   *git.Repository
 	remote plumbing.ReferenceName
 	local  plumbing.ReferenceName
+	// beforePush, when set, runs between the commit and its push. Tests use
+	// it to move the remote branch in that gap.
+	beforePush func()
 }
 
 var _ Writer = (*RepoWriter)(nil)
@@ -165,18 +169,32 @@ func (w *RepoWriter) Commit(ctx context.Context, base string, c Change) (string,
 		return "", fmt.Errorf("gitops: commit: %w", err)
 	}
 
+	if w.beforePush != nil {
+		w.beforePush()
+	}
 	err = w.repo.PushContext(ctx, &git.PushOptions{
 		RemoteName: git.DefaultRemoteName,
 		RefSpecs:   []config.RefSpec{config.RefSpec(w.local + ":" + w.local)},
 		Auth:       w.auth,
 	})
 	if err != nil {
-		if errors.Is(err, git.ErrNonFastForwardUpdate) {
-			return "", ErrConflict
+		if pushRaced(err) {
+			return "", fmt.Errorf("%w: push: %w", ErrConflict, err)
 		}
 		return "", fmt.Errorf("gitops: push: %w", err)
 	}
 	return commit.String(), nil
+}
+
+// pushRaced reports whether a push failed because the remote branch moved
+// after the fetch. go-git's own check answers a plain error, "non-fast-forward
+// update: <ref>", not git.ErrNonFastForwardUpdate (that one is Pull's); a
+// server that rejects the ref update reports "non-fast-forward" or "cannot
+// lock ref" in the push report.
+func pushRaced(err error) bool {
+	msg := err.Error()
+	return errors.Is(err, git.ErrNonFastForwardUpdate) ||
+		strings.Contains(msg, "non-fast-forward") || strings.Contains(msg, "cannot lock ref")
 }
 
 // fetch updates the remote-tracking branch and returns its head.
