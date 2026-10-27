@@ -245,20 +245,10 @@ if [[ "$APPLY_SAMPLES" == "1" ]]; then
   fi
 fi
 
-HTTP_HOST="$(oc get route ai-grid-provider-backend-http -n "${NAMESPACE}" -o jsonpath='{.spec.host}' 2>/dev/null || true)"
-GRPC_HOST="$(oc get route ai-grid-provider-backend-grpc -n "${NAMESPACE}" -o jsonpath='{.spec.host}' 2>/dev/null || true)"
 
 echo ""
 echo "OpenShift deploy ready (namespace ${NAMESPACE})."
-if [[ -n "${HTTP_HOST}" ]]; then
-  echo "  REST/Swagger: https://${HTTP_HOST}/docs/"
-  echo "  curl example: curl -sk https://${HTTP_HOST}/api/v1/ping"
-  echo "  Clusters:     curl -sk https://${HTTP_HOST}/api/v1/clusters"
-  echo "  Tenants:      curl -sk https://${HTTP_HOST}/api/v1/tenants"
-fi
-if [[ -n "${GRPC_HOST}" ]]; then
-  echo "  gRPC Route:   ${GRPC_HOST} (passthrough; prefer port-forward for plaintext grpcurl)"
-fi
+echo "  No Route: the API has no authentication of its own. Use port-forward:"
 echo "  Port-forward: oc -n ${NAMESPACE} port-forward svc/ai-grid-provider-backend 8080:8080 8081:8081"
 echo "  grpcurl:      grpcurl -plaintext localhost:8080 ai_grid.v1.AiGrid/Ping"
 echo "  Smoke:        make smoke-openshift"

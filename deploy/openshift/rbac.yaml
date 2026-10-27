@@ -3,6 +3,9 @@ kind: ClusterRole
 metadata:
   name: ai-grid-provider-backend-managedclusters
 rules:
+  # The only writes: the Clusters API creates, labels and deletes
+  # ManagedClusters. Models and Subscriptions write to Git, never to a
+  # cluster; rbac_test.go fails on a write verb anywhere else.
   - apiGroups: ["cluster.open-cluster-management.io"]
     resources: ["managedclusters"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
@@ -27,11 +30,11 @@ rules:
   # Role in ai-grid-policies would be narrower, but this kustomization's
   # namespace: ai-grid would move it. Change the name here if you change
   # AI_GRID_READY_POLICY.
-  # Git mode reads model and subscription status from the inform-only
+  # Models and Subscriptions read their status from the inform-only
   # ai-grid-models-status and ai-grid-catalog-status Policies: the roots, and
   # each cluster's copy (<AI_GRID_POLICY_NAMESPACE>.<policy> in the cluster's
-  # namespace). Without these names git mode reports models as saved to Git
-  # and subscriptions with no phase.
+  # namespace). Without these names models show as saved to Git and
+  # subscriptions with no phase.
   - apiGroups: ["policy.open-cluster-management.io"]
     resources: ["policies"]
     resourceNames:
@@ -41,32 +44,6 @@ rules:
       - ai-grid-policies.ai-grid-models-status
       - ai-grid-policies.ai-grid-catalog-status
     verbs: ["get"]
-  # Subscriptions CRUD (+ managed AuthPolicy) and Models Delete guards against MaaS CRs.
-  # Objects live in AI_GRID_SUBSCRIPTION_NAMESPACE (default models-as-a-service).
-  - apiGroups: ["maas.opendatahub.io"]
-    resources: ["maassubscriptions", "maasauthpolicies"]
-    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
-  # Get/List enrich model_refs and return model_registrations from MaaSModelRef.
-  # Models Create/Update/Delete also write MaaSModelRef in AI_GRID_MODELS_NAMESPACE.
-  # Subscriptions Get/List enrich model_refs and return model_registrations (read).
-  - apiGroups: ["maas.opendatahub.io"]
-    resources: ["maasmodelrefs"]
-    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
-  # Models CRUD: LLMInferenceService (+ optional Placement / ManifestWorkReplicaSet).
-  # Objects live in AI_GRID_MODELS_NAMESPACE (default ai-grid-models).
-  - apiGroups: ["serving.kserve.io"]
-    resources: ["llminferenceservices"]
-    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
-  - apiGroups: ["cluster.open-cluster-management.io"]
-    resources: ["placements", "placementdecisions"]
-    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
-  - apiGroups: ["work.open-cluster-management.io"]
-    resources: ["manifestworkreplicasets"]
-    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
-  # Models Get/List enrich status.rollout.works from per-cluster ManifestWorks.
-  - apiGroups: ["work.open-cluster-management.io"]
-    resources: ["manifestworks"]
-    verbs: ["get", "list", "watch"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding

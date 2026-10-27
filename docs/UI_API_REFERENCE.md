@@ -9,7 +9,7 @@ today. This describes the **REST** surface (`grpc-gateway`). Field names are
 | Base path | `/api/v1` |
 | Content-Type | `application/json` |
 | OpenAPI | [`openapi/ai_grid.swagger.json`](./openapi/ai_grid.swagger.json) |
-| Live Swagger UI | `http://<host>:8081/docs/` (or the OpenShift HTTP Route `/docs/`) |
+| Live Swagger UI | `http://<host>:8081/docs/` (on OpenShift, through `oc port-forward`) |
 | Proto source of truth | `proto/ai_grid/v1/` |
 | Auth | None (out of scope for this MVP) |
 

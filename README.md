@@ -176,8 +176,14 @@ Policy that is missing or forbidden means no report, not an error, so the
 backend works before the Policies are deployed.
 
 The service runs in-cluster using its Kubernetes ServiceAccount. Its RBAC role
-allows `get`, `list`, `watch`, `create`, `update`, `patch`, and `delete` on
-`ManagedCluster` resources.
+(`deploy/openshift/rbac.yaml`, and the same rules for Kind) writes only
+ManagedClusters: `get`, `list`, `watch`, `create`, `update`, `patch` and
+`delete` on `ManagedCluster` resources, plus the ManagedClusterSet join and
+accept subresources the Clusters API needs. Otherwise it may only `get` the
+`ai-grid-ready` Policy and the two status Policies and their per-cluster
+copies. It has no rights on MaaS, KServe or ACM placement objects: Models and
+Subscriptions write to Git. `internal/deploycheck` fails on a write verb
+outside the ManagedCluster rules.
 
 Tenants CRUD maps to **Keycloak Organizations** in one shared platform realm
 (`KEYCLOAK_REALM`, default `ai-grid`) through the Keycloak Admin REST API.
@@ -628,8 +634,11 @@ have real ACM clusters, skip backend sample CRs with
 ## Deploy to OpenShift
 
 Kind-parity stack for a logged-in OpenShift cluster (`oc whoami`): backend,
-optional embedded Keycloak + Postgres (Tenants API), Routes for HTTP and gRPC,
-RHACM when needed (Clusters API), and sample ManagedClusters.
+optional embedded Keycloak + Postgres (Tenants API), RHACM when needed
+(Clusters API), and sample ManagedClusters. There is no Route: the API has no
+authentication of its own, and anyone who reaches it can commit a model (any
+image, onto the spokes) or a subscription to the catalog. Reach it with
+`oc port-forward`, or put an authenticating proxy in front of the Service.
 
 Default image: [`ghcr.io/ai-grid-cloud/ai-grid-provider-backend`](https://github.com/ai-grid-cloud/ai-grid-provider-backend/pkgs/container/ai-grid-provider-backend).
 
@@ -666,8 +675,11 @@ the deployment (`make openshift-up` or `oc -n ai-grid rollout restart deploy/ai-
 Then deploy:
 
 ```sh
-# Embedded Keycloak + ACM (if ManagedCluster CRD missing) + sample clusters
-make openshift-up
+# Embedded Keycloak + ACM (if ManagedCluster CRD missing) + sample clusters.
+# AI_GRID_GIT_URL is required: the repository Models and Subscriptions commit to.
+AI_GRID_GIT_URL=https://github.com/<you>/<catalog>.git \
+  AI_GRID_GIT_TOKEN_FILE=$HOME/.config/ai-grid/catalog-token \
+  make openshift-up
 
 # Or build/push and deploy in one step
 BUILD_IMAGE=1 make openshift-up
@@ -699,8 +711,7 @@ that permission, or without the Policy, `provisioning` is empty.
 If Keycloak or Postgres pods are rejected by SCC, re-run with
 `GRANT_ANYUID=1` (or grant `anyuid` to the `default` SA in `ai-grid`).
 
-After deploy, the HTTP Route serves REST and Swagger UI. For plaintext
-`grpcurl`, prefer port-forward:
+After deploy, reach REST, Swagger UI and gRPC through a port-forward:
 
 ```sh
 oc -n ai-grid port-forward svc/ai-grid-provider-backend 8080:8080 8081:8081
@@ -728,7 +739,7 @@ internal/servers/tenants_server.go Keycloak-backed tenant API
 internal/keycloak/               Keycloak Admin API client
 internal/restgateway/            HTTP gateway + Swagger UI
 deploy/kind/                     Kind Kubernetes manifests
-deploy/openshift/                OpenShift manifests (Routes, kustomize)
+deploy/openshift/                OpenShift manifests (kustomize; no Route)
 deploy/acm-hub/                  Helm chart + scripts for RHACM hub playground
 hack/kind-up.sh                  build/load/deploy helper
 hack/ocm-up.sh                   OCM bootstrap helper

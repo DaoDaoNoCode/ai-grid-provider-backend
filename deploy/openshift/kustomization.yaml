@@ -15,8 +15,10 @@ resources:
   - rbac.yaml
   - backend-deployment.yaml
   - backend-service.yaml
-  - backend-route-http.yaml
-  - backend-route-grpc.yaml
+  # No Route: the API has no authentication of its own, and anyone who could
+  # reach it could commit a model (any image, onto the spokes) or a
+  # subscription to the catalog. Use oc port-forward, or put an
+  # authenticating proxy in front of the Service.
 
 images:
   - name: ai-grid-provider-backend
