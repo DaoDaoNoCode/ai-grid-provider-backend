@@ -2,13 +2,15 @@ package main
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"errors"
 	"flag"
 	"fmt"
 	"log/slog"
 	"net"
 	"net/http"
-	"net/url"
+	neturl "net/url"
 	"os"
 	"os/signal"
 	"strings"
@@ -21,6 +23,7 @@ import (
 	grpchealth "connectrpc.com/grpchealth/v2"
 	grpcreflect "connectrpc.com/grpcreflect/v2"
 	"github.com/osac-project/ai-grid-provider-backend/gen/ai_grid/v1/aigridv1connect"
+	"github.com/osac-project/ai-grid-provider-backend/internal/acmsearch"
 	"github.com/osac-project/ai-grid-provider-backend/internal/gitops"
 	"github.com/osac-project/ai-grid-provider-backend/internal/keycloak"
 	"github.com/osac-project/ai-grid-provider-backend/internal/restgateway"
@@ -28,12 +31,17 @@ import (
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
+	"k8s.io/client-go/transport"
 )
 
 func main() {
 	address := flag.String("listen-address", ":8080", "gRPC listen address")
 	httpAddress := flag.String("http-listen-address", ":8081", "REST gateway and Swagger UI listen address")
 	kubeconfig := flag.String("kubeconfig", "", "path to kubeconfig; empty uses in-cluster service-account credentials")
+	var search searchSettings
+	flag.StringVar(&search.url, "search-api-url", acmsearch.DefaultURL, "ACM Search GraphQL endpoint, https only; \"off\" turns cluster GPUs off (a hub without Search, such as Kind)")
+	flag.StringVar(&search.caFile, "search-ca-file", "", "CA of ACM Search's serving certificate; empty uses the pod's service CA when present, else the system roots")
+	flag.BoolVar(&search.insecureSkipVerify, "search-insecure-skip-verify", false, "skip ACM Search's certificate check; only for a port-forward, so refused unless --search-api-url is a loopback address")
 	flag.Parse()
 
 	listener, err := net.Listen("tcp", *address)
@@ -42,9 +50,19 @@ func main() {
 		os.Exit(1)
 	}
 
-	kubeClient, err := newDynamicClient(*kubeconfig)
+	restConfig, err := newRestConfig(*kubeconfig)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "load Kubernetes client: %v\n", err)
+		fmt.Fprintf(os.Stderr, "load Kubernetes config: %v\n", err)
+		os.Exit(1)
+	}
+	kubeClient, err := dynamic.NewForConfig(restConfig)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "create Kubernetes client: %v\n", err)
+		os.Exit(1)
+	}
+	gpuInventory, err := newGPUInventory(restConfig, search)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "ACM Search client: %v\n", err)
 		os.Exit(1)
 	}
 
@@ -56,6 +74,7 @@ func main() {
 	clustersServer, err := servers.NewClustersServer().
 		SetDynamicClient(kubeClient).
 		SetReadyPolicy(getEnv("AI_GRID_READY_POLICY", servers.DefaultReadyPolicy)).
+		SetGPUInventory(gpuInventory).
 		Build()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "build Clusters server: %v\n", err)
@@ -222,7 +241,7 @@ func newGitWriter() (gitops.Writer, error) {
 	if cfg.URL == "" {
 		return nil, errors.New("AI_GRID_GIT_URL is required")
 	}
-	if u, err := url.Parse(cfg.URL); err != nil || u.User != nil {
+	if u, err := neturl.Parse(cfg.URL); err != nil || u.User != nil {
 		return nil, errors.New("AI_GRID_GIT_URL must be a URL without credentials; put the token in AI_GRID_GIT_TOKEN_FILE")
 	}
 	if tokenFile := os.Getenv("AI_GRID_GIT_TOKEN_FILE"); tokenFile != "" {
@@ -243,25 +262,112 @@ func newGitWriter() (gitops.Writer, error) {
 	}, time.Second), nil
 }
 
-func newDynamicClient(kubeconfig string) (dynamic.Interface, error) {
-	var (
-		config *rest.Config
-		err    error
-	)
+func newRestConfig(kubeconfig string) (*rest.Config, error) {
 	if kubeconfig == "" {
-		config, err = rest.InClusterConfig()
+		config, err := rest.InClusterConfig()
 		if err != nil {
 			return nil, fmt.Errorf("load in-cluster Kubernetes config: %w", err)
 		}
-	} else {
-		config, err = clientcmd.BuildConfigFromFlags("", kubeconfig)
-		if err != nil {
-			return nil, fmt.Errorf("load kubeconfig: %w", err)
+		return config, nil
+	}
+	config, err := clientcmd.BuildConfigFromFlags("", kubeconfig)
+	if err != nil {
+		return nil, fmt.Errorf("load kubeconfig: %w", err)
+	}
+	return config, nil
+}
+
+// serviceCAFile is where OpenShift puts the service CA, which signs the
+// Search API's serving certificate, in every pod.
+const serviceCAFile = "/var/run/secrets/kubernetes.io/serviceaccount/service-ca.crt"
+
+// searchSettings are the ACM Search flags newGPUInventory reads.
+type searchSettings struct {
+	url                string
+	caFile             string
+	insecureSkipVerify bool
+}
+
+// isLoopback reports whether host is localhost or a loopback IP address.
+func isLoopback(host string) bool {
+	if host == "localhost" {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
+}
+
+// newGPUInventory builds the ACM Search client the Clusters API reads GPUs
+// from. It calls Search with the backend's own credential, the one the
+// Kubernetes client uses (the ServiceAccount's token in a pod, re-read from
+// its file when it rotates; out of one, the kubeconfig's token, token file,
+// exec plugin or auth provider, through client-go's own wrappers). Search
+// authenticates a bearer token, so a kubeconfig with only a client
+// certificate leaves Search calls anonymous: clusters then carry no GPUs,
+// and a warning says why.
+//
+//   - --search-api-url: the GraphQL endpoint (acmsearch.DefaultURL), https
+//     only; "off" turns GPUs off, for a hub without ACM Search such as Kind.
+//   - --search-ca-file: the CA of Search's serving certificate; the service CA
+//     when the file exists, else the system roots.
+//   - --search-insecure-skip-verify: no certificate check, for a local run
+//     against a port-forwarded Search only, so refused unless
+//     --search-api-url is a loopback address: without the check, whoever
+//     answers at any other address would receive the credential.
+func newGPUInventory(config *rest.Config, s searchSettings) (*servers.GPUInventory, error) {
+	url := s.url
+	if url == "off" {
+		slog.Info("cluster GPUs off: --search-api-url=off")
+		return nil, nil
+	}
+	// The credential goes with every query, so never over plain HTTP.
+	u, err := neturl.Parse(url)
+	if err != nil || u.Scheme != "https" || u.Host == "" {
+		return nil, fmt.Errorf("--search-api-url %q must be an https URL, or \"off\"", url)
+	}
+	if s.insecureSkipVerify && !isLoopback(u.Hostname()) {
+		return nil, fmt.Errorf("--search-insecure-skip-verify is only for a port-forward on this machine; --search-api-url %q is not a loopback address", url)
+	}
+	tlsConfig := &tls.Config{MinVersion: tls.VersionTLS12}
+	caFile := s.caFile
+	if caFile == "" {
+		if _, err := os.Stat(serviceCAFile); err == nil {
+			caFile = serviceCAFile
 		}
 	}
-	client, err := dynamic.NewForConfig(config)
-	if err != nil {
-		return nil, fmt.Errorf("create Kubernetes client: %w", err)
+	if caFile != "" {
+		pem, err := os.ReadFile(caFile)
+		if err != nil {
+			return nil, fmt.Errorf("read --search-ca-file: %w", err)
+		}
+		pool := x509.NewCertPool()
+		if !pool.AppendCertsFromPEM(pem) {
+			return nil, fmt.Errorf("--search-ca-file %s holds no PEM certificate", caFile)
+		}
+		tlsConfig.RootCAs = pool
 	}
-	return client, nil
+	if s.insecureSkipVerify {
+		slog.Warn("ACM Search certificate not verified: --search-insecure-skip-verify is for local development only")
+		tlsConfig.InsecureSkipVerify = true // #nosec G402 -- opt-in for a local port-forward
+	}
+	base := http.DefaultTransport.(*http.Transport).Clone()
+	base.TLSClientConfig = tlsConfig
+	// The Kubernetes client's credential wrappers around Search's own TLS:
+	// its bearer token or token file, exec plugin or auth provider, and any
+	// impersonation, but not its client certificate, which is for the API
+	// server's TLS.
+	authConfig, err := config.TransportConfig()
+	if err != nil {
+		return nil, fmt.Errorf("search credential: %w", err)
+	}
+	if !authConfig.HasTokenAuth() && !authConfig.HasBasicAuth() && authConfig.WrapTransport == nil {
+		slog.Warn("no bearer credential for ACM Search: its queries are anonymous, so clusters carry no GPUs; use a kubeconfig with a token, or the in-cluster ServiceAccount")
+	}
+	rt, err := transport.HTTPWrappersForConfig(authConfig, base)
+	if err != nil {
+		return nil, fmt.Errorf("search credential: %w", err)
+	}
+	client := acmsearch.New(url, &http.Client{Transport: rt, Timeout: 15 * time.Second})
+	slog.Info("cluster GPUs from ACM Search", "url", url)
+	return servers.NewGPUInventory(client, servers.DefaultGPUInventoryTTL, slog.Default()), nil
 }

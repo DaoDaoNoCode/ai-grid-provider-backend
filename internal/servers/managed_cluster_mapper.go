@@ -3,6 +3,7 @@ package servers
 import (
 	"strconv"
 	"strings"
+	"time"
 
 	connect "connectrpc.com/connect/v2"
 	aigridv1 "github.com/osac-project/ai-grid-provider-backend/gen/ai_grid/v1"
@@ -39,6 +40,21 @@ func managedClusterFromUnstructured(item unstructured.Unstructured) *aigridv1.Ma
 
 func managedClusterStatusFromUnstructured(item unstructured.Unstructured) *aigridv1.ManagedClusterStatus {
 	status := &aigridv1.ManagedClusterStatus{}
+	status.KubernetesVersion, _, _ = unstructured.NestedString(item.Object, "status", "version", "kubernetes")
+	status.Capacity = quantitiesFromUnstructured(item, "capacity")
+	status.Allocatable = quantitiesFromUnstructured(item, "allocatable")
+	claims, _, _ := unstructured.NestedSlice(item.Object, "status", "clusterClaims")
+	for _, raw := range claims {
+		claim, ok := raw.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		name, _ := claim["name"].(string)
+		value, _ := claim["value"].(string)
+		if name != "" {
+			status.ClusterClaims = append(status.ClusterClaims, &aigridv1.ManagedClusterClaim{Name: name, Value: value})
+		}
+	}
 	conditions, found, err := unstructured.NestedSlice(item.Object, "status", "conditions")
 	if err != nil || !found {
 		return status
@@ -50,6 +66,15 @@ func managedClusterStatusFromUnstructured(item unstructured.Unstructured) *aigri
 		}
 		condType, _ := cond["type"].(string)
 		condStatus, _ := cond["status"].(string)
+		condition := &aigridv1.ManagedClusterCondition{Type: condType, Status: condStatus}
+		condition.Reason, _ = cond["reason"].(string)
+		condition.Message, _ = cond["message"].(string)
+		if raw, _ := cond["lastTransitionTime"].(string); raw != "" {
+			if t, err := time.Parse(time.RFC3339, raw); err == nil {
+				condition.LastTransitionTime = timestamppb.New(t)
+			}
+		}
+		status.Conditions = append(status.Conditions, condition)
 		switch condType {
 		case "ManagedClusterConditionAvailable", "Available":
 			// Keep the first Available condition; later duplicates do not override.
@@ -69,6 +94,22 @@ func managedClusterStatusFromUnstructured(item unstructured.Unstructured) *aigri
 		}
 	}
 	return status
+}
+
+// quantitiesFromUnstructured reads status.<field> (capacity or allocatable),
+// a map of Kubernetes quantity strings; nil when absent.
+func quantitiesFromUnstructured(item unstructured.Unstructured, field string) map[string]string {
+	raw, found, err := unstructured.NestedMap(item.Object, "status", field)
+	if err != nil || !found || len(raw) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(raw))
+	for name, v := range raw {
+		if q, ok := v.(string); ok {
+			out[name] = q
+		}
+	}
+	return out
 }
 
 func managedClusterID(object *aigridv1.ManagedCluster) string {

@@ -1079,6 +1079,38 @@
       },
       "description": "BillingRate defines cost per token."
     },
+    "v1ClusterGPUs": {
+      "type": "object",
+      "properties": {
+        "total": {
+          "type": "integer",
+          "format": "int32",
+          "description": "GPU devices on the cluster's GPU nodes, as GPU Feature Discovery counts\nthem: the sum of each node's `count`. That is physical GPUs, except on a\nnode with MIG strategy \"single\", where GFD's count is the MIG devices\n(GFD replaces the physical count there and reports none; under \"mixed\"\nit stays the physical count)."
+        },
+        "node_count": {
+          "type": "integer",
+          "format": "int32",
+          "description": "Nodes with at least one GPU."
+        },
+        "configurations": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "$ref": "#/definitions/v1GPUConfiguration"
+          },
+          "description": "The distinct node configurations (vendor, product, memory, GPUs per node,\nsharing), each with how many nodes have it, most nodes first, then by\nproduct. One entry is the usual case, for example NVIDIA-L4 with 1 GPU per\nnode on 2 nodes."
+        },
+        "nodes": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "$ref": "#/definitions/v1GPUNode"
+          },
+          "description": "Every GPU node, by name."
+        }
+      },
+      "description": "GPU inventory of one cluster."
+    },
     "v1ClustersCreateResponse": {
       "type": "object",
       "properties": {
@@ -1171,6 +1203,118 @@
       "default": "CONDITION_STATUS_UNSPECIFIED",
       "description": "Status of a condition. Kubernetes `Unknown` is reported as UNSPECIFIED.\n\n - CONDITION_STATUS_UNSPECIFIED: The system cannot decide whether the object is in the condition.\n - CONDITION_STATUS_TRUE: The object is in the condition.\n - CONDITION_STATUS_FALSE: The object is not in the condition."
     },
+    "v1GPUConfiguration": {
+      "type": "object",
+      "properties": {
+        "vendor": {
+          "type": "string",
+          "description": "\"NVIDIA\" for the nvidia.com labels."
+        },
+        "product": {
+          "type": "string",
+          "description": "`nvidia.com/gpu.product` as GPU Feature Discovery writes it, for example\n\"NVIDIA-L4\" or \"NVIDIA-H200\"; MIG and time-slicing suffixes kept."
+        },
+        "memory_mib": {
+          "type": "string",
+          "format": "int64",
+          "description": "`nvidia.com/gpu.memory`, MiB per GPU (per MIG device under MIG\nstrategy \"single\")."
+        },
+        "gpus_per_node": {
+          "type": "integer",
+          "format": "int32",
+          "description": "`nvidia.com/gpu.count`: physical GPUs, or MIG devices under MIG\nstrategy \"single\" (see ClusterGPUs.total)."
+        },
+        "node_count": {
+          "type": "integer",
+          "format": "int32",
+          "description": "Nodes with this configuration."
+        },
+        "sharing": {
+          "$ref": "#/definitions/v1GPUSharing",
+          "description": "How these nodes share or slice their GPUs."
+        }
+      },
+      "description": "Nodes that share one GPU configuration."
+    },
+    "v1GPUNode": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "The node's name."
+        },
+        "vendor": {
+          "type": "string",
+          "description": "\"NVIDIA\" for the nvidia.com labels."
+        },
+        "product": {
+          "type": "string",
+          "description": "`nvidia.com/gpu.product`, for example \"NVIDIA-L4\"."
+        },
+        "count": {
+          "type": "integer",
+          "format": "int32",
+          "description": "`nvidia.com/gpu.count`: physical GPUs, or MIG devices under MIG\nstrategy \"single\" (see ClusterGPUs.total)."
+        },
+        "memory_mib": {
+          "type": "string",
+          "format": "int64",
+          "description": "`nvidia.com/gpu.memory`, MiB per GPU."
+        },
+        "family": {
+          "type": "string",
+          "description": "`nvidia.com/gpu.family`, the architecture, for example \"ada-lovelace\"."
+        },
+        "compute_capability": {
+          "type": "string",
+          "description": "`nvidia.com/gpu.compute.major` \".\" `minor`, for example \"8.9\"."
+        },
+        "driver_version": {
+          "type": "string",
+          "description": "`nvidia.com/cuda.driver-version.full`, for example \"580.105.08\"."
+        },
+        "cuda_runtime_version": {
+          "type": "string",
+          "description": "`nvidia.com/cuda.runtime-version.full`, for example \"13.0\"."
+        },
+        "sharing": {
+          "$ref": "#/definitions/v1GPUSharing",
+          "description": "How the node shares or slices its GPUs."
+        },
+        "instance_type": {
+          "type": "string",
+          "description": "`nvidia.com/gpu.machine`, the instance type, for example \"g6.xlarge\"."
+        },
+        "ready": {
+          "type": "boolean",
+          "description": "The node's Ready condition is True."
+        }
+      },
+      "description": "One node with GPUs."
+    },
+    "v1GPUSharing": {
+      "type": "object",
+      "properties": {
+        "strategy": {
+          "type": "string",
+          "description": "`nvidia.com/gpu.sharing-strategy`: \"none\", \"time-slicing\" or \"mps\";\n\"mig\" when `nvidia.com/mig.strategy` is set. Empty when GPU Feature\nDiscovery reports none."
+        },
+        "replicas": {
+          "type": "integer",
+          "format": "int32",
+          "description": "`nvidia.com/gpu.replicas`: schedulable units per GPU; 1 without sharing."
+        },
+        "mig_capable": {
+          "type": "boolean",
+          "description": "`nvidia.com/mig.capable`."
+        },
+        "mig_strategy": {
+          "type": "string",
+          "description": "`nvidia.com/mig.strategy`: \"single\" or \"mixed\"; empty without MIG."
+        }
+      },
+      "description": "How a node's GPUs are shared or sliced."
+    },
     "v1GuardrailAttachment": {
       "type": "object",
       "properties": {
@@ -1207,6 +1351,43 @@
       },
       "description": "Hub-side ACM/OCM ManagedCluster inventory object.\n\nThe `spec` contains the desired details and may be modified by the user.\nThe `status` contains the current status and is provided by the system."
     },
+    "v1ManagedClusterClaim": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "value": {
+          "type": "string"
+        }
+      },
+      "description": "One `status.clusterClaims[]` entry of a ManagedCluster."
+    },
+    "v1ManagedClusterCondition": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "description": "For example \"ManagedClusterConditionAvailable\" or \"ManagedClusterJoined\"."
+        },
+        "status": {
+          "type": "string",
+          "description": "\"True\", \"False\" or \"Unknown\"."
+        },
+        "reason": {
+          "type": "string"
+        },
+        "message": {
+          "type": "string"
+        },
+        "last_transition_time": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Unset when the hub recorded none."
+        }
+      },
+      "description": "One `status.conditions[]` entry of a ManagedCluster."
+    },
     "v1ManagedClusterSpec": {
       "type": "object",
       "properties": {
@@ -1235,6 +1416,44 @@
         "provisioning": {
           "type": "string",
           "description": "AI Grid provisioning, from the cluster's compliance with the hub's\nai-grid-ready Policy (by default ai-grid-policies/ai-grid-ready):\n\"Compliant\" (provisioned), \"NonCompliant\", or \"Pending\" (placed, no\nresult yet). Empty when the Policy doesn't cover the cluster, for\nexample because it isn't labelled ai-grid/enabled=true, or when the\nPolicy can't be read."
+        },
+        "conditions": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "$ref": "#/definitions/v1ManagedClusterCondition"
+          },
+          "description": "`status.conditions`, as the hub reports them, in the hub's order."
+        },
+        "kubernetes_version": {
+          "type": "string",
+          "description": "`status.version.kubernetes`, for example \"v1.34.9\". Empty until the\ncluster's agent reports it."
+        },
+        "capacity": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "`status.capacity`: what the cluster's nodes provide, as Kubernetes\nquantity strings keyed by resource name (for example \"cpu\": \"68\",\n\"memory\": \"273509824Ki\", \"nvidia.com/gpu\": \"1\"). Empty until the agent\nreports it."
+        },
+        "allocatable": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "`status.allocatable`, keyed and encoded like `capacity`."
+        },
+        "cluster_claims": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "$ref": "#/definitions/v1ManagedClusterClaim"
+          },
+          "description": "`status.clusterClaims`, as the cluster's agent reports them, for example\n`consoleurl.cluster.open-cluster-management.io`,\n`platform.open-cluster-management.io` and\n`product.open-cluster-management.io`."
+        },
+        "gpus": {
+          "$ref": "#/definitions/v1ClusterGPUs",
+          "description": "The cluster's GPUs, from ACM Search's index of its nodes and the labels\nNVIDIA GPU Feature Discovery puts on them. Unset when Search isn't\navailable or hasn't indexed the cluster; `capacity[\"nvidia.com/gpu\"]`\nstill counts its schedulable GPUs then."
         }
       },
       "description": "Observed state of a hub ManagedCluster."

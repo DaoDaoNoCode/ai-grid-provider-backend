@@ -6,6 +6,8 @@ import (
 	"time"
 
 	aigridv1 "github.com/osac-project/ai-grid-provider-backend/gen/ai_grid/v1"
+	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/timestamppb"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 )
@@ -233,5 +235,81 @@ func TestProvisioningFromPolicy(t *testing.T) {
 	}
 	if got := provisioningFromPolicy(unstructured.Unstructured{Object: map[string]interface{}{}}); len(got) != 0 {
 		t.Fatalf("no status: %v", got)
+	}
+}
+
+func TestManagedClusterStatusDetails(t *testing.T) {
+	t.Parallel()
+
+	// A ManagedCluster as the hub reports it: conditions, version, capacity,
+	// allocatable and claims, with values from a real hub (names fictional).
+	object := managedClusterUnstructured("site-a", nil, nil, true, nil)
+	object.Object["status"] = map[string]interface{}{
+		"conditions": []interface{}{
+			map[string]interface{}{
+				"type": "ManagedClusterConditionAvailable", "status": "True", "reason": "ManagedClusterAvailable",
+				"message": "Managed cluster is available", "lastTransitionTime": "2026-10-21T04:01:02Z",
+			},
+			map[string]interface{}{"type": "ManagedClusterJoined", "status": "True"},
+			map[string]interface{}{"type": "HubAcceptedManagedCluster", "status": "True", "lastTransitionTime": "not a time"},
+		},
+		"version":     map[string]interface{}{"kubernetes": "v1.34.9"},
+		"capacity":    map[string]interface{}{"cpu": "68", "memory": "273509824Ki", "nvidia.com/gpu": "1"},
+		"allocatable": map[string]interface{}{"cpu": "65", "memory": "264506816Ki", "nvidia.com/gpu": "1"},
+		"clusterClaims": []interface{}{
+			map[string]interface{}{"name": "consoleurl.cluster.open-cluster-management.io", "value": "https://console.apps.site-a.example.com"},
+			map[string]interface{}{"name": "platform.open-cluster-management.io", "value": "AWS"},
+			map[string]interface{}{"value": "a claim without a name is dropped"},
+		},
+	}
+
+	want := &aigridv1.ManagedClusterStatus{
+		Available:          true,
+		Joined:             true,
+		AvailableCondition: "True",
+		Conditions: []*aigridv1.ManagedClusterCondition{
+			{
+				Type: "ManagedClusterConditionAvailable", Status: "True", Reason: "ManagedClusterAvailable",
+				Message:            "Managed cluster is available",
+				LastTransitionTime: timestamppb.New(time.Date(2026, 10, 21, 4, 1, 2, 0, time.UTC)),
+			},
+			{Type: "ManagedClusterJoined", Status: "True"},
+			// An unparseable time is left out rather than failing the cluster.
+			{Type: "HubAcceptedManagedCluster", Status: "True"},
+		},
+		KubernetesVersion: "v1.34.9",
+		Capacity:          map[string]string{"cpu": "68", "memory": "273509824Ki", "nvidia.com/gpu": "1"},
+		Allocatable:       map[string]string{"cpu": "65", "memory": "264506816Ki", "nvidia.com/gpu": "1"},
+		ClusterClaims: []*aigridv1.ManagedClusterClaim{
+			{Name: "consoleurl.cluster.open-cluster-management.io", Value: "https://console.apps.site-a.example.com"},
+			{Name: "platform.open-cluster-management.io", Value: "AWS"},
+		},
+	}
+	if got := managedClusterFromUnstructured(*object).GetStatus(); !proto.Equal(got, want) {
+		t.Fatalf("status = %v\nwant %v", got, want)
+	}
+
+	// Malformed entries are skipped; the valid ones beside them stay.
+	object.Object["status"] = map[string]interface{}{
+		"conditions":    []interface{}{"not a map", map[string]interface{}{"type": "ManagedClusterJoined", "status": "True"}},
+		"capacity":      map[string]interface{}{"cpu": int64(68), "memory": "1Gi"},
+		"clusterClaims": []interface{}{int64(42), map[string]interface{}{"name": "product.open-cluster-management.io", "value": "ROSA"}},
+	}
+	malformed := managedClusterFromUnstructured(*object).GetStatus()
+	if len(malformed.GetConditions()) != 1 || !malformed.GetJoined() {
+		t.Fatalf("conditions = %v, joined = %v; want only the Joined one", malformed.GetConditions(), malformed.GetJoined())
+	}
+	if !maps.Equal(malformed.GetCapacity(), map[string]string{"memory": "1Gi"}) {
+		t.Fatalf("capacity = %v, want only the string quantity", malformed.GetCapacity())
+	}
+	if len(malformed.GetClusterClaims()) != 1 || malformed.GetClusterClaims()[0].GetValue() != "ROSA" {
+		t.Fatalf("claims = %v, want only the product claim", malformed.GetClusterClaims())
+	}
+
+	// A cluster whose agent hasn't reported yet has none of them.
+	empty := managedClusterFromUnstructured(*managedClusterUnstructured("site-new", nil, nil, true, nil)).GetStatus()
+	if empty.GetKubernetesVersion() != "" || empty.GetCapacity() != nil || empty.GetAllocatable() != nil ||
+		empty.GetClusterClaims() != nil || empty.GetConditions() != nil {
+		t.Fatalf("status of a new cluster = %v, want none of the details", empty)
 	}
 }

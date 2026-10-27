@@ -158,6 +158,11 @@ Hub-side ACM/OCM `ManagedCluster` CRs. **Does not provision spoke clusters.**
 | `spec.hub_accepts_client` | Hub accepts spoke registration |
 | `status.available` / `joined` | Derived from OCM conditions |
 | `status.available_condition` | Raw `"True"` / `"False"` / `"Unknown"` / `""` — useful for Ready/Offline/Unknown |
+| `status.conditions` | The hub's conditions (`type`, `status`, `reason`, `message`, `last_transition_time`), in the hub's order |
+| `status.kubernetes_version` | `status.version.kubernetes`, for example `"v1.34.9"`; empty until the agent reports it |
+| `status.capacity` / `allocatable` | Kubernetes quantity strings by resource name, for example `"cpu": "68"`, `"memory": "273509824Ki"`, `"nvidia.com/gpu": "1"`; absent until the agent reports them |
+| `status.cluster_claims` | `{name, value}` pairs the agent reports, for example the console URL (`consoleurl.cluster.open-cluster-management.io`), platform and product |
+| `status.gpus` | The cluster's GPUs from ACM Search (its nodes' NVIDIA GPU Feature Discovery labels); absent when Search is off, unavailable or hasn't indexed the cluster (`capacity["nvidia.com/gpu"]` still counts schedulable GPUs then). `total` GPU devices as GPU Feature Discovery counts them (physical GPUs; MIG devices on a node with MIG strategy `"single"`, where GFD reports no physical count) and `node_count` GPU nodes; `configurations[]`: `{vendor, product, memory_mib, gpus_per_node, node_count, sharing}`, most nodes first (for a list cell such as "NVIDIA-L4 · 1 per node"); `nodes[]`: `{name, vendor, product, count, memory_mib, family, compute_capability, driver_version, cuda_runtime_version, sharing, instance_type, ready}` by name. `sharing`: `{strategy` (`"none"`, `"time-slicing"`, `"mps"` or `"mig"`), `replicas` (schedulable units per GPU), `mig_capable`, `mig_strategy` (`"single"` / `"mixed"`)`}`. With time-slicing, `capacity["nvidia.com/gpu"]` is `total` × `replicas`. |
 | `metadata.labels["ai-grid/enabled"]` | Enroll-style flag (string `"true"` / `"false"`) |
 
 ---

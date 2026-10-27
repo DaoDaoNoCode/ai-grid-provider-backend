@@ -19,6 +19,8 @@ DEV_DRAFT_ADDRESS="${DEV_DRAFT_ADDRESS-$DEV_HOST:$DEV_DRAFT_PORT}"
 DEV_FIXTURES="${DEV_FIXTURES:-fixtures/default}"
 DEV_DRAFT_FIXTURES="${DEV_DRAFT_FIXTURES:-fixtures/draft/default}"
 DEV_KUBECONFIG="${DEV_KUBECONFIG:-bin/fake-kubeconfig}"
+# The fake hub's CA, which also signs the fake ACM Search on the hub's port.
+DEV_HUB_CA="${DEV_HUB_CA:-bin/fake-hub-ca.crt}"
 FAKE_INFRA_BIN="${FAKE_INFRA_BIN:-bin/ai-grid-fake-infra}"
 BACKEND_BIN="${BACKEND_BIN:-bin/ai-grid-provider-backend}"
 DEV_CATALOG="${DEV_CATALOG:-bin/dev-catalog.git}"
@@ -71,6 +73,7 @@ fi
   --draft-address "$DEV_DRAFT_ADDRESS" \
   --draft-fixtures "$DEV_DRAFT_FIXTURES" \
   --kubeconfig-out "$DEV_KUBECONFIG" \
+  --hub-ca-out "$DEV_HUB_CA" \
   --keycloak-admin-realm "$KC_ADMIN_REALM" \
   --keycloak-realm "$KC_REALM" \
   --keycloak-admin-username "$KC_ADMIN_USERNAME" \
@@ -100,7 +103,9 @@ AI_GRID_GIT_URL="$AI_GRID_GIT_URL" \
 "$BACKEND_BIN" \
   --listen-address "$DEV_HOST:$DEV_GRPC_PORT" \
   --http-listen-address "$DEV_HOST:$DEV_HTTP_PORT" \
-  --kubeconfig "$DEV_KUBECONFIG" &
+  --kubeconfig "$DEV_KUBECONFIG" \
+  --search-api-url "https://$DEV_HOST:$DEV_HUB_PORT/searchapi/graphql" \
+  --search-ca-file "$DEV_HUB_CA" &
 backend_pid=$!
 
 cat <<EOF
@@ -111,6 +116,7 @@ dev-fake: fixtures $DEV_FIXTURES, draft fixtures $DEV_DRAFT_FIXTURES
                     http://$DEV_HOST:$DEV_HUB_PORT for the console BFF (same port)
   fake Keycloak     http://$DEV_HOST:$DEV_KEYCLOAK_PORT
   catalog (Git)     $AI_GRID_GIT_URL  (make dev-catalog-log; make dev-catalog-reset starts over)
+  fake ACM Search   https://$DEV_HOST:$DEV_HUB_PORT/searchapi/graphql (cluster GPUs, from searchnodes.json)
   draft API (fake)  ${DEV_DRAFT_ADDRESS:-off}  gRPC ai_grid.draft.v1, own state from $DEV_DRAFT_FIXTURES
 Press Ctrl-C to stop both.
 EOF

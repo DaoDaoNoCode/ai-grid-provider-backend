@@ -51,7 +51,7 @@ func SelfSignedCert(host string) (tls.Certificate, []byte, error) {
 	now := time.Now()
 	tmpl := &x509.Certificate{
 		SerialNumber:          serial,
-		Subject:               pkix.Name{CommonName: "ai-grid-fake-hub"},
+		Subject:               pkix.Name{CommonName: FakeHubCACommonName},
 		NotBefore:             now.Add(-time.Hour),
 		NotAfter:              now.Add(365 * 24 * time.Hour),
 		IsCA:                  true,
@@ -183,6 +183,80 @@ const (
 	FakeUser    = "ai-grid-fake-hub-backend"
 )
 
+// FakeHubCACommonName is the subject of the fake hub's self-signed
+// certificate, by which WriteHubCA recognizes a CA file it may replace.
+const FakeHubCACommonName = "ai-grid-fake-hub"
+
+// WriteHubCA writes the fake hub's CA certificate (caPEM) to path, for the
+// backend's --search-ca-file, and returns the bytes it wrote. Like
+// WriteKubeconfig it never clobbers what isn't its own: it refuses a symbolic
+// link, and an existing file unless that holds a certificate for
+// FakeHubCACommonName (one a previous run left behind). It writes a temporary
+// file in the same directory and renames it, so it never writes through a
+// link; the mode is 0600.
+func WriteHubCA(path string, caPEM []byte) ([]byte, error) {
+	err := writeReplacingOwn(path, "hub CA", caPEM, isFakeHubCA,
+		fmt.Sprintf("a CA ai-grid-fake-infra wrote (subject %s)", FakeHubCACommonName))
+	if err != nil {
+		return nil, err
+	}
+	return append([]byte(nil), caPEM...), nil
+}
+
+// writeReplacingOwn writes content to path for WriteHubCA and
+// WriteKubeconfig, never clobbering what isn't theirs: it refuses a symbolic
+// link or other non-regular file, and an existing file isOurs rejects
+// (ours describes what isOurs accepts, for the error). It writes a temporary
+// file in the same directory and renames it, so a reader never sees half a
+// file and nothing is written through a link; the mode is 0600.
+func writeReplacingOwn(path, what string, content []byte, isOurs func([]byte) bool, ours string) error {
+	if path == "" {
+		return fmt.Errorf("%s path is empty", what)
+	}
+	if info, err := os.Lstat(path); err == nil {
+		if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
+			return fmt.Errorf("%s exists and is not a regular file; refusing to replace it, choose another path", path)
+		}
+		raw, err := os.ReadFile(path)
+		if err != nil {
+			return fmt.Errorf("check existing %s %s: %w", what, path, err)
+		}
+		if !isOurs(raw) {
+			return fmt.Errorf("%s exists and is not %s; refusing to replace it, choose another path", path, ours)
+		}
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("check existing %s %s: %w", what, path, err)
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return fmt.Errorf("create %s directory: %w", what, err)
+	}
+	tmp, err := os.CreateTemp(filepath.Dir(path), "."+filepath.Base(path)+".*.tmp")
+	if err != nil {
+		return fmt.Errorf("write %s: %w", what, err)
+	}
+	_, werr := tmp.Write(content)
+	cerr := tmp.Close()
+	if werr == nil && cerr == nil {
+		werr = os.Rename(tmp.Name(), path)
+	}
+	if werr != nil || cerr != nil {
+		_ = os.Remove(tmp.Name())
+		return fmt.Errorf("write %s: %w", what, errors.Join(werr, cerr))
+	}
+	return nil
+}
+
+// isFakeHubCA reports whether raw is one PEM certificate whose subject is
+// FakeHubCACommonName.
+func isFakeHubCA(raw []byte) bool {
+	block, rest := pem.Decode(raw)
+	if block == nil || block.Type != "CERTIFICATE" || len(bytes.TrimSpace(rest)) != 0 {
+		return false
+	}
+	cert, err := x509.ParseCertificate(block.Bytes)
+	return err == nil && cert.Subject.CommonName == FakeHubCACommonName
+}
+
 // IsFakeKubeconfig reports whether path holds a kubeconfig WriteKubeconfig
 // wrote: exactly one cluster, user and context, with the fake-infra names,
 // and FakeContext current. A file that does not parse is not one.
@@ -191,15 +265,19 @@ func IsFakeKubeconfig(path string) (bool, error) {
 	if err != nil {
 		return false, err
 	}
+	return isFakeKubeconfig(raw), nil
+}
+
+func isFakeKubeconfig(raw []byte) bool {
 	cfg, err := clientcmd.Load(raw)
 	if err != nil {
-		return false, nil
+		return false
 	}
 	_, cluster := cfg.Clusters[FakeCluster]
 	_, user := cfg.AuthInfos[FakeUser]
 	_, context := cfg.Contexts[FakeContext]
 	return cfg.CurrentContext == FakeContext && cluster && user && context &&
-		len(cfg.Clusters) == 1 && len(cfg.AuthInfos) == 1 && len(cfg.Contexts) == 1, nil
+		len(cfg.Clusters) == 1 && len(cfg.AuthInfos) == 1 && len(cfg.Contexts) == 1
 }
 
 // WriteKubeconfig writes a kubeconfig for server that trusts caPEM and
@@ -209,23 +287,6 @@ func IsFakeKubeconfig(path string) (bool, error) {
 // same directory and renames it, so a reader never sees half a file; the
 // mode is 0600.
 func WriteKubeconfig(path, server string, caPEM []byte, token string) ([]byte, error) {
-	if path == "" {
-		return nil, errors.New("kubeconfig path is empty")
-	}
-	if _, err := os.Lstat(path); err == nil {
-		ours, err := IsFakeKubeconfig(path)
-		if err != nil {
-			return nil, fmt.Errorf("check existing kubeconfig %s: %w", path, err)
-		}
-		if !ours {
-			return nil, fmt.Errorf("%s exists and is not a kubeconfig ai-grid-fake-infra wrote (current-context %s); refusing to replace it, choose another path", path, FakeContext)
-		}
-	} else if !errors.Is(err, os.ErrNotExist) {
-		return nil, fmt.Errorf("check existing kubeconfig %s: %w", path, err)
-	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return nil, fmt.Errorf("create kubeconfig directory: %w", err)
-	}
 	cfg := clientcmdapi.NewConfig()
 	cfg.Clusters[FakeCluster] = &clientcmdapi.Cluster{Server: server, CertificateAuthorityData: caPEM}
 	cfg.AuthInfos[FakeUser] = &clientcmdapi.AuthInfo{Token: token}
@@ -235,26 +296,19 @@ func WriteKubeconfig(path, server string, caPEM []byte, token string) ([]byte, e
 	if err != nil {
 		return nil, fmt.Errorf("encode kubeconfig: %w", err)
 	}
-	tmp, err := os.CreateTemp(filepath.Dir(path), "."+filepath.Base(path)+".*.tmp")
+	err = writeReplacingOwn(path, "kubeconfig", content, isFakeKubeconfig,
+		fmt.Sprintf("a kubeconfig ai-grid-fake-infra wrote (current-context %s)", FakeContext))
 	if err != nil {
-		return nil, fmt.Errorf("write kubeconfig: %w", err)
-	}
-	_, werr := tmp.Write(content)
-	cerr := tmp.Close()
-	if werr == nil && cerr == nil {
-		werr = os.Rename(tmp.Name(), path)
-	}
-	if werr != nil || cerr != nil {
-		_ = os.Remove(tmp.Name())
-		return nil, fmt.Errorf("write kubeconfig: %w", errors.Join(werr, cerr))
+		return nil, err
 	}
 	return content, nil
 }
 
-// RemoveKubeconfig removes path only while it still holds exactly the bytes
-// WriteKubeconfig returned (written); a file replaced since, by a newer run
-// or by anyone else, is left alone. A missing file is not an error.
-func RemoveKubeconfig(path string, written []byte) error {
+// RemoveWritten removes path only while it still holds exactly the bytes
+// WriteKubeconfig or WriteHubCA returned (written); a file replaced since, by
+// a newer run or by anyone else, is left alone. A missing file is not an
+// error.
+func RemoveWritten(path string, written []byte) error {
 	raw, err := os.ReadFile(path)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil
