@@ -574,7 +574,7 @@ func (*ModelsListLocationsRequest) Descriptor() ([]byte, []int) {
 // Response of ListLocations (P7).
 type ModelsListLocationsResponse struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// Unique sorted `location` labels of AI Grid member clusters that are Available.
+	// Unique sorted names of AI Grid member clusters that are Available.
 	Locations     []string `protobuf:"bytes,1,rep,name=locations,proto3" json:"locations,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache

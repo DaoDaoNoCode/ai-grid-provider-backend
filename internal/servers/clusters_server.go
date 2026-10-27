@@ -81,6 +81,19 @@ func (b *ClustersServerBuilder) SetReadyPolicy(namespacedName string) *ClustersS
 	return b
 }
 
+// splitReadyPolicy splits a ready Policy's namespace/name, DefaultReadyPolicy
+// when empty.
+func splitReadyPolicy(readyPolicy string) (namespace, name string, err error) {
+	if readyPolicy == "" {
+		readyPolicy = DefaultReadyPolicy
+	}
+	namespace, name, ok := strings.Cut(readyPolicy, "/")
+	if !ok || namespace == "" || name == "" {
+		return "", "", fmt.Errorf("ready policy %q must be namespace/name", readyPolicy)
+	}
+	return namespace, name, nil
+}
+
 // Build creates the ClustersServer.
 func (b *ClustersServerBuilder) Build() (*ClustersServer, error) {
 	if b.client == nil {
@@ -90,13 +103,9 @@ func (b *ClustersServerBuilder) Build() (*ClustersServer, error) {
 	if logger == nil {
 		logger = slog.Default()
 	}
-	readyPolicy := b.readyPolicy
-	if readyPolicy == "" {
-		readyPolicy = DefaultReadyPolicy
-	}
-	namespace, name, ok := strings.Cut(readyPolicy, "/")
-	if !ok || namespace == "" || name == "" {
-		return nil, fmt.Errorf("ready policy %q must be namespace/name", readyPolicy)
+	namespace, name, err := splitReadyPolicy(b.readyPolicy)
+	if err != nil {
+		return nil, err
 	}
 	return &ClustersServer{logger: logger, client: b.client, readyPolicyNamespace: namespace, readyPolicyName: name}, nil
 }
@@ -291,10 +300,14 @@ type clusterUpdatePaths struct {
 // Policy's status.status. A missing or unreadable Policy gives an empty map,
 // so clusters show no provisioning state rather than failing the request.
 func (s *ClustersServer) provisioning(ctx context.Context) map[string]string {
-	policy, err := s.client.Resource(policiesResource).Namespace(s.readyPolicyNamespace).Get(ctx, s.readyPolicyName, metav1.GetOptions{})
+	return readProvisioning(ctx, s.client, s.logger, s.readyPolicyNamespace, s.readyPolicyName)
+}
+
+func readProvisioning(ctx context.Context, client dynamic.Interface, logger *slog.Logger, namespace, name string) map[string]string {
+	policy, err := client.Resource(policiesResource).Namespace(namespace).Get(ctx, name, metav1.GetOptions{})
 	if err != nil {
 		if !apierrors.IsNotFound(err) {
-			s.logger.Warn("read ready policy", "policy", s.readyPolicyNamespace+"/"+s.readyPolicyName, "error", err)
+			logger.Warn("read ready policy", "policy", namespace+"/"+name, "error", err)
 		}
 		return map[string]string{}
 	}

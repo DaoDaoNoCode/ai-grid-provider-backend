@@ -10,9 +10,10 @@ option go_package = "github.com/osac-project/ai-grid-provider-backend/gen/ai_gri
 
 // Model is a deployable LLM inference workload on the AI Grid.
 //
-// It maps to a hub LLMInferenceService (serving.kserve.io/v1alpha2) plus an
-// optional ACM Placement and ManifestWorkReplicaSet that distribute the
-// workload to managed clusters, and a MaaSModelRef for catalog registration.
+// It is committed to the backend's Git catalog: an LLMInferenceService
+// (serving.kserve.io/v1alpha2) that Argo CD delivers to the clusters the
+// placement names, and an ExternalModel and MaaSModelRef that publish it
+// through the grid on the ingress clusters.
 //
 // The `spec` contains the desired details and may be modified by the user.
 // The `status` contains the current status and is provided by the system.
@@ -52,11 +53,13 @@ message ModelSpec {
   // Autoscaling. Mutually exclusive with replicas.
   ModelScaling scaling = 7;
 
-  // Where to deploy. Unset: hub-only LLMInferenceService.
-  // Set: ACM Placement + ManifestWorkReplicaSet named model-<id>.
+  // Where to deploy. Required: names at least one cluster by the ACM `name`
+  // label (`name In [...]` or a `name` match label); the model is listed in
+  // each named cluster's index in the Git catalog.
   ModelPlacement placement = 8;
 
-  // ManifestWorkReplicaSet rollout. Only meaningful with placement; unset means All.
+  // Rollout. Only strategy All (the default) is accepted: Argo CD delivers to
+  // every placed cluster at once.
   ModelRollout rollout = 9;
 }
 

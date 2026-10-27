@@ -46,6 +46,7 @@ type Hub struct {
 	mu          sync.Mutex
 	clusters    map[string]*ManagedCluster
 	maas        map[string]map[string]*unstructured.Unstructured // resource -> ns/name -> object
+	policies    map[string]*unstructured.Unstructured            // ns/name -> fixture Policy
 	rv          int64
 	scenarios   []*scenario
 	detaches    map[string]time.Time
@@ -75,6 +76,7 @@ func New(fx *Fixtures, opts ...Option) (*Hub, error) {
 	h := &Hub{
 		clusters:    map[string]*ManagedCluster{},
 		maas:        map[string]map[string]*unstructured.Unstructured{},
+		policies:    map[string]*unstructured.Unstructured{},
 		detaches:    map[string]time.Time{},
 		enabledAt:   map[string]time.Time{},
 		access:      fx.Access,
@@ -126,6 +128,9 @@ func New(fx *Fixtures, opts ...Option) (*Hub, error) {
 	}
 	h.scenarios = scenarios
 	if err := seedMAASFixtures(h, fx); err != nil {
+		return nil, err
+	}
+	if err := seedPolicyFixtures(h, fx); err != nil {
 		return nil, err
 	}
 	h.start = h.clock()

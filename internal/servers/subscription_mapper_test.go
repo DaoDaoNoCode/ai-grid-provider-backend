@@ -26,7 +26,8 @@ func TestSubscriptionRoundTrip(t *testing.T) {
 			},
 			ModelRefs: []*aigridv1.SubscriptionModelRef{
 				{
-					Name: "sim-model",
+					Name:      "sim-model",
+					Namespace: "models-as-a-service",
 					TokenRateLimits: []*aigridv1.TokenRateLimit{
 						{Limit: 100, Window: "1m"},
 					},
@@ -48,8 +49,8 @@ func TestSubscriptionRoundTrip(t *testing.T) {
 		t.Fatalf("modelRefs len = %d", len(refs))
 	}
 	ref := refs[0].(map[string]interface{})
-	if ref["namespace"] != defaultModelNamespace {
-		t.Fatalf("default model namespace = %v, want %q", ref["namespace"], defaultModelNamespace)
+	if ref["namespace"] != "models-as-a-service" {
+		t.Fatalf("model namespace = %v", ref["namespace"])
 	}
 	groups, _, _ := unstructured.NestedSlice(obj.Object, "spec", "owner", "groups")
 	g0 := groups[0].(map[string]interface{})
@@ -73,7 +74,7 @@ func TestSubscriptionRoundTrip(t *testing.T) {
 	if got := out.GetSpec().GetOwner().GetGroups(); len(got) != 2 || got[0] != "system:authenticated" {
 		t.Fatalf("groups = %v", got)
 	}
-	if got := out.GetSpec().GetModelRefs()[0].GetNamespace(); got != defaultModelNamespace {
+	if got := out.GetSpec().GetModelRefs()[0].GetNamespace(); got != "models-as-a-service" {
 		t.Fatalf("model namespace = %q", got)
 	}
 	if got := out.GetSpec().GetModelRefs()[0].GetTokenRateLimits()[0].GetLimit(); got != 100 {
@@ -98,7 +99,7 @@ func TestAuthPolicyFromSubscription(t *testing.T) {
 				Users:  []string{"alice"},
 			},
 			ModelRefs: []*aigridv1.SubscriptionModelRef{
-				{Name: "granite", Namespace: "llm"},
+				{Name: "granite", Namespace: "models-as-a-service"},
 			},
 		},
 	}
@@ -135,34 +136,11 @@ func TestAuthPolicyFromSubscription(t *testing.T) {
 	}
 	refs, _, _ := unstructured.NestedSlice(policy.Object, "spec", "modelRefs")
 	ref := refs[0].(map[string]interface{})
-	if ref["name"] != "granite" || ref["namespace"] != "llm" {
+	if ref["name"] != "granite" || ref["namespace"] != "models-as-a-service" {
 		t.Fatalf("modelRefs = %v", ref)
 	}
 	if _, hasLimits := ref["tokenRateLimits"]; hasLimits {
 		t.Fatal("auth policy must not carry tokenRateLimits")
-	}
-}
-
-func TestIsManagedAuthPolicy(t *testing.T) {
-	t.Parallel()
-	managed := &unstructured.Unstructured{Object: map[string]interface{}{
-		"metadata": map[string]interface{}{
-			"labels": map[string]interface{}{managedByLabelKey: managedByLabelValue},
-		},
-	}}
-	if !isManagedAuthPolicy(managed) {
-		t.Fatal("expected managed")
-	}
-	unmanaged := &unstructured.Unstructured{Object: map[string]interface{}{
-		"metadata": map[string]interface{}{
-			"labels": map[string]interface{}{"app": "other"},
-		},
-	}}
-	if isManagedAuthPolicy(unmanaged) {
-		t.Fatal("expected unmanaged")
-	}
-	if isManagedAuthPolicy(nil) {
-		t.Fatal("nil should be false")
 	}
 }
 

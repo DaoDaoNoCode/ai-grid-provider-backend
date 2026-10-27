@@ -292,7 +292,7 @@
         ]
       },
       "post": {
-        "summary": "Creates (= deploys) a model: LLMInferenceService, optional Placement +\nManifestWorkReplicaSet, and MaaSModelRef.",
+        "summary": "Creates (= deploys) a model: commits its LLMInferenceService to the\nplaced clusters' indexes, and its ExternalModel and MaaSModelRef to the\ningress index, in the Git catalog.",
         "operationId": "Models_Create",
         "responses": {
           "200": {
@@ -433,7 +433,7 @@
                   "$ref": "#/definitions/v1ModelStatus"
                 }
               },
-              "description": "Model is a deployable LLM inference workload on the AI Grid.\n\nIt maps to a hub LLMInferenceService (serving.kserve.io/v1alpha2) plus an\noptional ACM Placement and ManifestWorkReplicaSet that distribute the\nworkload to managed clusters, and a MaaSModelRef for catalog registration.\n\nThe `spec` contains the desired details and may be modified by the user.\nThe `status` contains the current status and is provided by the system."
+              "description": "Model is a deployable LLM inference workload on the AI Grid.\n\nIt is committed to the backend's Git catalog: an LLMInferenceService\n(serving.kserve.io/v1alpha2) that Argo CD delivers to the clusters the\nplacement names, and an ExternalModel and MaaSModelRef that publish it\nthrough the grid on the ingress clusters.\n\nThe `spec` contains the desired details and may be modified by the user.\nThe `status` contains the current status and is provided by the system."
             }
           },
           {
@@ -451,7 +451,7 @@
     },
     "/api/v1/models:listLocations": {
       "get": {
-        "summary": "Locations a model can be placed on: unique sorted `location` labels of\nManagedClusters that are AI Grid members (ai-grid/enabled and\nai-grid/provisioned \"true\") and Available.",
+        "summary": "Locations a model can be placed on: unique sorted names of the\nManagedClusters labelled ai-grid/enabled \"true\" and ai-grid/role\ninference or combined that are Available and Compliant with the ready\nPolicy (AI_GRID_READY_POLICY). A location is a cluster: the values a\nplacement's `name In [...]` takes.",
         "operationId": "Models_ListLocations",
         "responses": {
           "200": {
@@ -1303,7 +1303,7 @@
           "$ref": "#/definitions/v1ModelStatus"
         }
       },
-      "description": "Model is a deployable LLM inference workload on the AI Grid.\n\nIt maps to a hub LLMInferenceService (serving.kserve.io/v1alpha2) plus an\noptional ACM Placement and ManifestWorkReplicaSet that distribute the\nworkload to managed clusters, and a MaaSModelRef for catalog registration.\n\nThe `spec` contains the desired details and may be modified by the user.\nThe `status` contains the current status and is provided by the system."
+      "description": "Model is a deployable LLM inference workload on the AI Grid.\n\nIt is committed to the backend's Git catalog: an LLMInferenceService\n(serving.kserve.io/v1alpha2) that Argo CD delivers to the clusters the\nplacement names, and an ExternalModel and MaaSModelRef that publish it\nthrough the grid on the ingress clusters.\n\nThe `spec` contains the desired details and may be modified by the user.\nThe `status` contains the current status and is provided by the system."
     },
     "v1ModelContainer": {
       "type": "object",
@@ -1682,11 +1682,11 @@
         },
         "placement": {
           "$ref": "#/definitions/v1ModelPlacement",
-          "description": "Where to deploy. Unset: hub-only LLMInferenceService.\nSet: ACM Placement + ManifestWorkReplicaSet named model-\u003cid\u003e."
+          "description": "Where to deploy. Required: names at least one cluster by the ACM `name`\nlabel (`name In [...]` or a `name` match label); the model is listed in\neach named cluster's index in the Git catalog."
         },
         "rollout": {
           "$ref": "#/definitions/v1ModelRollout",
-          "description": "ManifestWorkReplicaSet rollout. Only meaningful with placement; unset means All."
+          "description": "Rollout. Only strategy All (the default) is accepted: Argo CD delivers to\nevery placed cluster at once."
         }
       },
       "description": "Desired state of a Model (trimmed LLMInferenceService.spec + ACM placement)."
@@ -1782,7 +1782,7 @@
           "items": {
             "type": "string"
           },
-          "description": "Unique sorted `location` labels of AI Grid member clusters that are Available."
+          "description": "Unique sorted names of AI Grid member clusters that are Available."
         }
       },
       "description": "Response of ListLocations (P7)."

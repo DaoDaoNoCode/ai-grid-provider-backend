@@ -2,8 +2,8 @@
 # Run hack/smoke-apis.sh against ai-grid-provider-backend on the current
 # OpenShift cluster via oc port-forward (plaintext gRPC + HTTP).
 #
-# Prefer port-forward over Routes: the gRPC Route is TLS passthrough while the
-# pod still serves plaintext gRPC, so grpcurl -plaintext works best locally.
+# The deploy has no Route (the API has no authentication of its own), so
+# port-forward is the way in.
 #
 # Usage:
 #   bash hack/smoke-openshift.sh
@@ -16,7 +16,6 @@
 #   GRPC_LOCAL_PORT    local gRPC port (default 8080)
 #   HTTP_LOCAL_PORT    local HTTP port (default 8081)
 #   SKIP_CLUSTERS / SKIP_TENANTS  forwarded to smoke-apis.sh
-#   SMOKE_HTTP_ROUTE   1 to also print the public HTTP Route URL (smoke still uses port-forward)
 #
 # Needs: oc logged in, grpcurl, curl, python3. Deploy first with make openshift-up.
 set -euo pipefail
@@ -25,7 +24,6 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 NAMESPACE="${NAMESPACE:-ai-grid}"
 GRPC_LOCAL_PORT="${GRPC_LOCAL_PORT:-8080}"
 HTTP_LOCAL_PORT="${HTTP_LOCAL_PORT:-8081}"
-SMOKE_HTTP_ROUTE="${SMOKE_HTTP_ROUTE:-0}"
 SERVICE="${SERVICE:-ai-grid-provider-backend}"
 PF_LOG="$(mktemp -t ai-grid-smoke-pf.XXXXXX)"
 PF_PID=""
@@ -58,13 +56,6 @@ fi
 
 echo "==> OpenShift context: $(oc whoami -c 2>/dev/null || oc config current-context)"
 echo "==> namespace ${NAMESPACE}, service ${SERVICE}"
-
-if [[ "${SMOKE_HTTP_ROUTE}" == "1" ]]; then
-  http_host="$(oc get route ai-grid-provider-backend-http -n "${NAMESPACE}" -o jsonpath='{.spec.host}' 2>/dev/null || true)"
-  if [[ -n "${http_host}" ]]; then
-    echo "==> HTTP Route (info only): https://${http_host}/docs/"
-  fi
-fi
 
 echo "==> waiting for deployment/${SERVICE} available"
 oc -n "${NAMESPACE}" rollout status "deployment/${SERVICE}" --timeout=3m

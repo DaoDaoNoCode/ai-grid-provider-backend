@@ -77,12 +77,13 @@ message ModelsListLocationsRequest {}
 
 // Response of ListLocations (P7).
 message ModelsListLocationsResponse {
-  // Unique sorted `location` labels of AI Grid member clusters that are Available.
+  // Unique sorted names of AI Grid member clusters that are Available.
   repeated string locations = 1;
 }
 
-// Models manage LLMInferenceService deployments (optionally placed via ACM).
-// Create also writes a MaaSModelRef for catalog registration.
+// Models manage LLMInferenceService deployments in the backend's Git catalog,
+// placed on clusters by name. Create also writes the ExternalModel and
+// MaaSModelRef that register the model on the ingress clusters.
 service Models {
   rpc List(ModelsListRequest) returns (ModelsListResponse) {
     option (google.api.http) = {get: "/api/v1/models"};
@@ -95,8 +96,9 @@ service Models {
     };
   }
 
-  // Creates (= deploys) a model: LLMInferenceService, optional Placement +
-  // ManifestWorkReplicaSet, and MaaSModelRef.
+  // Creates (= deploys) a model: commits its LLMInferenceService to the
+  // placed clusters' indexes, and its ExternalModel and MaaSModelRef to the
+  // ingress index, in the Git catalog.
   rpc Create(ModelsCreateRequest) returns (ModelsCreateResponse) {
     option (google.api.http) = {
       post: "/api/v1/models"
@@ -117,9 +119,11 @@ service Models {
     option (google.api.http) = {delete: "/api/v1/models/{id}"};
   }
 
-  // Locations a model can be placed on: unique sorted `location` labels of
-  // ManagedClusters that are AI Grid members (ai-grid/enabled and
-  // ai-grid/provisioned "true") and Available.
+  // Locations a model can be placed on: unique sorted names of the
+  // ManagedClusters labelled ai-grid/enabled "true" and ai-grid/role
+  // inference or combined that are Available and Compliant with the ready
+  // Policy (AI_GRID_READY_POLICY). A location is a cluster: the values a
+  // placement's `name In [...]` takes.
   rpc ListLocations(ModelsListLocationsRequest) returns (ModelsListLocationsResponse) {
     option (google.api.http) = {get: "/api/v1/models:listLocations"};
   }

@@ -1,0 +1,231 @@
+package servers
+
+import (
+	"context"
+	"fmt"
+	"log/slog"
+	"regexp"
+	"slices"
+	"strings"
+
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/client-go/dynamic"
+)
+
+// DefaultPolicyNamespace is the hub namespace that holds the inform-only ACM
+// Policies git mode reads status from (AI_GRID_POLICY_NAMESPACE).
+const DefaultPolicyNamespace = "ai-grid-policies"
+
+// CatalogStatusReader reads what spoke clusters report about the objects git
+// mode delivers, from inform-only ACM Policies on the hub. Each Policy holds
+// ConfigurationPolicies that check one kind of object each; ACM lists the
+// clusters it reports for in the root Policy's status.status, and copies the
+// Policy into each cluster's namespace on the hub as <namespace>.<policy>,
+// where status.details[] holds each ConfigurationPolicy's latest message.
+type CatalogStatusReader struct {
+	client    dynamic.Interface
+	namespace string
+}
+
+// NewCatalogStatusReader returns a reader for the Policies in namespace, or
+// DefaultPolicyNamespace when it is empty.
+func NewCatalogStatusReader(client dynamic.Interface, namespace string) *CatalogStatusReader {
+	if namespace == "" {
+		namespace = DefaultPolicyNamespace
+	}
+	return &CatalogStatusReader{client: client, namespace: namespace}
+}
+
+// ObjectReports maps each cluster the Policy is placed on to the objects its
+// ConfigurationPolicy named: true when found as specified (ready), false when
+// found but not as specified, or not found. A cluster whose report is missing
+// or unusable maps to nil. The Policies look up every object of their kind, so
+// an object a cluster's report doesn't name isn't on that cluster yet.
+type ObjectReports map[string]map[string]bool
+
+// any reports whether at least one cluster has a usable report.
+func (r ObjectReports) any() bool {
+	for _, objects := range r {
+		if objects != nil {
+			return true
+		}
+	}
+	return false
+}
+
+// Read returns the reports of the ConfigurationPolicy check in Policy policy.
+// A Policy or cluster copy that is missing or forbidden (the Policies aren't
+// deployed, or the ServiceAccount can't read them) gives no report for it
+// rather than an error, so git mode works without them. A nil reader reports
+// nothing. Read calls the hub on every request: the root plus one copy per
+// cluster, which is fine for the handful of clusters a grid has.
+func (r *CatalogStatusReader) Read(ctx context.Context, policy, check string) (ObjectReports, error) {
+	if r == nil {
+		return nil, nil
+	}
+	policies := r.client.Resource(policiesResource)
+	root, err := policies.Namespace(r.namespace).Get(ctx, policy, metav1.GetOptions{})
+	if statusUnavailable(err) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("read Policy %s/%s: %w", r.namespace, policy, err)
+	}
+	out := ObjectReports{}
+	entries, _, _ := unstructured.NestedSlice(root.Object, "status", "status")
+	for _, raw := range entries {
+		entry, _ := raw.(map[string]interface{})
+		cluster, _ := entry["clustername"].(string)
+		namespace, _ := entry["clusternamespace"].(string)
+		if cluster == "" {
+			continue
+		}
+		if namespace == "" {
+			namespace = cluster
+		}
+		out[cluster] = nil
+		copyName := r.namespace + "." + policy
+		replica, err := policies.Namespace(namespace).Get(ctx, copyName, metav1.GetOptions{})
+		if statusUnavailable(err) {
+			continue
+		}
+		if err != nil {
+			return nil, fmt.Errorf("read Policy %s/%s: %w", namespace, copyName, err)
+		}
+		if objects, ok := parseCompliance(latestMessage(*replica, check)); ok {
+			out[cluster] = objects
+		}
+	}
+	return out, nil
+}
+
+func statusUnavailable(err error) bool {
+	return apierrors.IsNotFound(err) || apierrors.IsForbidden(err)
+}
+
+// latestMessage returns the newest history message of ConfigurationPolicy
+// check in a cluster's copy of a Policy, or "" when it has none.
+func latestMessage(replica unstructured.Unstructured, check string) string {
+	details, _, _ := unstructured.NestedSlice(replica.Object, "status", "details")
+	for _, raw := range details {
+		detail, _ := raw.(map[string]interface{})
+		if name, _, _ := unstructured.NestedString(detail, "templateMeta", "name"); name != check {
+			continue
+		}
+		history, _, _ := unstructured.NestedSlice(detail, "history")
+		if len(history) == 0 {
+			return ""
+		}
+		latest, _ := history[0].(map[string]interface{})
+		message, _ := latest["message"].(string)
+		return message
+	}
+	return ""
+}
+
+// complianceClauseRE matches one clause of a ConfigurationPolicy message,
+// such as "violation - llminferenceservices [a, b] found but not as specified
+// in namespace models" or "violation - maassubscriptions [c] not found in
+// namespace maas".
+var complianceClauseRE = regexp.MustCompile(`^(?:(?:notification|violation) - )?[a-z0-9.]+ \[([^\]]*)\] (?:found (but not )?as specified|(not found))\b`)
+
+// parseCompliance reads the objects a ConfigurationPolicy message names. It
+// returns false when the message says nothing usable: empty, a template
+// failure, or no clause it recognises. A policy with nothing to check reports
+// no objects. Clauses it doesn't recognise, such as the leading
+// "NonCompliant", are skipped; an object named both ready and not ready is
+// not ready.
+func parseCompliance(message string) (map[string]bool, bool) {
+	if message == "" || strings.Contains(message, "failed to resolve the template") {
+		return nil, false
+	}
+	if strings.Contains(message, "contains no object templates to check") {
+		return map[string]bool{}, true
+	}
+	objects := map[string]bool{}
+	recognised := false
+	for _, clause := range strings.Split(message, "; ") {
+		m := complianceClauseRE.FindStringSubmatch(strings.TrimSpace(clause))
+		if m == nil {
+			continue
+		}
+		recognised = true
+		ready := m[2] == "" && m[3] == ""
+		for _, name := range strings.Split(m[1], ", ") {
+			if name = strings.TrimSpace(name); name == "" {
+				continue
+			}
+			if previous, seen := objects[name]; !seen || previous {
+				objects[name] = ready
+			}
+		}
+	}
+	return objects, recognised
+}
+
+// The Policies and ConfigurationPolicies that git mode reads status from.
+const (
+	// modelsStatusPolicy covers the inference and combined spokes.
+	modelsStatusPolicy = "ai-grid-models-status"
+	// catalogStatusPolicy covers the ingress and combined spokes.
+	catalogStatusPolicy = "ai-grid-catalog-status"
+
+	modelsReadyCheck         = "models-ready"         // LLMInferenceService Ready=True
+	modelRefsReadyCheck      = "model-refs-ready"     // MaaSModelRef phase Ready
+	subscriptionsActiveCheck = "subscriptions-active" // MaaSSubscription phase Active
+)
+
+// readReports reads one ConfigurationPolicy's reports for a git-mode request.
+// Status is read on every request, with no cache: a few gets per cluster is
+// fine for the handful of clusters a grid has. A failed read is logged and
+// reports nothing, so the request still answers from Git.
+func readReports(ctx context.Context, logger *slog.Logger, status *CatalogStatusReader, policy, check string) ObjectReports {
+	reports, err := status.Read(ctx, policy, check)
+	if err != nil {
+		logger.Warn("read catalog status", "policy", policy, "check", check, "error", err)
+		return nil
+	}
+	return reports
+}
+
+// objectClusters returns the clusters in reports, sorted, split into those
+// that report object name ready, those that report it not ready, and those
+// whose report doesn't name it or that have no report (missing).
+func objectClusters(reports ObjectReports, name string) (ready, notReady, missing []string) {
+	for cluster, objects := range reports {
+		state, ok := objects[name]
+		switch {
+		case !ok:
+			missing = append(missing, cluster)
+		case state:
+			ready = append(ready, cluster)
+		default:
+			notReady = append(notReady, cluster)
+		}
+	}
+	slices.Sort(ready)
+	slices.Sort(notReady)
+	slices.Sort(missing)
+	return ready, notReady, missing
+}
+
+// clusterSummary says where an object is ready, for example "Not ready on
+// site-a; ready on site-b".
+func clusterSummary(notReady, ready, noReport []string) string {
+	var parts []string
+	for _, part := range []struct {
+		prefix   string
+		clusters []string
+	}{{"not ready on ", notReady}, {"ready on ", ready}, {"no report from ", noReport}} {
+		if len(part.clusters) > 0 {
+			parts = append(parts, part.prefix+strings.Join(part.clusters, ", "))
+		}
+	}
+	message := strings.Join(parts, "; ")
+	if message == "" {
+		return ""
+	}
+	return strings.ToUpper(message[:1]) + message[1:]
+}

@@ -8,8 +8,10 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/signal"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -19,6 +21,7 @@ import (
 	grpchealth "connectrpc.com/grpchealth/v2"
 	grpcreflect "connectrpc.com/grpcreflect/v2"
 	"github.com/osac-project/ai-grid-provider-backend/gen/ai_grid/v1/aigridv1connect"
+	"github.com/osac-project/ai-grid-provider-backend/internal/gitops"
 	"github.com/osac-project/ai-grid-provider-backend/internal/keycloak"
 	"github.com/osac-project/ai-grid-provider-backend/internal/restgateway"
 	"github.com/osac-project/ai-grid-provider-backend/internal/servers"
@@ -74,18 +77,33 @@ func main() {
 		fmt.Fprintf(os.Stderr, "build Tenants server: %v\n", err)
 		os.Exit(1)
 	}
+	// Models and Subscriptions are committed to the AI_GRID_GIT_URL
+	// repository, and Argo CD delivers them. The status of what came up on
+	// the spokes is read back from inform-only ACM Policies on this hub.
+	writer, err := newGitWriter()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "git writer: %v\n", err)
+		os.Exit(1)
+	}
+	status := servers.NewCatalogStatusReader(kubeClient, getEnv("AI_GRID_POLICY_NAMESPACE", servers.DefaultPolicyNamespace))
+	subscriptionNamespace := getEnv("AI_GRID_SUBSCRIPTION_NAMESPACE", "models-as-a-service")
 	modelsServer, err := servers.NewModelsServer().
+		SetWriter(writer).
+		SetCatalogStatus(status).
 		SetDynamicClient(kubeClient).
 		SetNamespace(getEnv("AI_GRID_MODELS_NAMESPACE", "ai-grid-models")).
-		SetSubscriptionNamespace(getEnv("AI_GRID_SUBSCRIPTION_NAMESPACE", "models-as-a-service")).
+		SetSubscriptionNamespace(subscriptionNamespace).
+		SetGridNamespace(getEnv("AI_GRID_GRID_NAMESPACE", "redhat-ai-grid")).
+		SetReadyPolicy(getEnv("AI_GRID_READY_POLICY", servers.DefaultReadyPolicy)).
 		Build()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "build Models server: %v\n", err)
 		os.Exit(1)
 	}
 	subscriptionsServer, err := servers.NewSubscriptionsServer().
-		SetDynamicClient(kubeClient).
-		SetNamespace(getEnv("AI_GRID_SUBSCRIPTION_NAMESPACE", "models-as-a-service")).
+		SetWriter(writer).
+		SetCatalogStatus(status).
+		SetNamespace(subscriptionNamespace).
 		Build()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "build Subscriptions server: %v\n", err)
@@ -186,6 +204,43 @@ func getEnv(name, fallback string) string {
 		return value
 	}
 	return fallback
+}
+
+// newGitWriter clones the repository Models and Subscriptions commit to, in
+// the background: a Git host that is down, or a wrong token, makes Models and
+// Subscriptions answer Unavailable until a retry succeeds, and leaves the other
+// APIs serving. Missing or bad settings are still an error at startup. The
+// token is read from a file, a mounted Secret, so it never appears in the
+// environment or in logs.
+func newGitWriter() (gitops.Writer, error) {
+	cfg := gitops.RepoConfig{
+		URL:         os.Getenv("AI_GRID_GIT_URL"),
+		Branch:      getEnv("AI_GRID_GIT_BRANCH", "main"),
+		AuthorName:  "ai-grid-provider-backend",
+		AuthorEmail: "ai-grid-provider-backend@noreply.invalid",
+	}
+	if cfg.URL == "" {
+		return nil, errors.New("AI_GRID_GIT_URL is required")
+	}
+	if u, err := url.Parse(cfg.URL); err != nil || u.User != nil {
+		return nil, errors.New("AI_GRID_GIT_URL must be a URL without credentials; put the token in AI_GRID_GIT_TOKEN_FILE")
+	}
+	if tokenFile := os.Getenv("AI_GRID_GIT_TOKEN_FILE"); tokenFile != "" {
+		token, err := os.ReadFile(tokenFile)
+		if err != nil {
+			return nil, fmt.Errorf("read AI_GRID_GIT_TOKEN_FILE: %w", err)
+		}
+		cfg.Token = strings.TrimSpace(string(token))
+	}
+	if err := cfg.Validate(); err != nil {
+		return nil, err
+	}
+	slog.Info("git write mode", "url", cfg.URL, "branch", cfg.Branch)
+	return gitops.StartBackgroundWriter(context.Background(), func(ctx context.Context) (gitops.Writer, error) {
+		ctx, cancel := context.WithTimeout(ctx, time.Minute)
+		defer cancel()
+		return gitops.NewRepoWriter(ctx, cfg)
+	}, time.Second), nil
 }
 
 func newDynamicClient(kubeconfig string) (dynamic.Interface, error) {

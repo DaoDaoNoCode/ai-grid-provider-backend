@@ -24,6 +24,7 @@ const (
 	MaaSAuthPoliciesFile     = "maasauthpolicies.json"
 	MaaSModelRefsFile        = "maasmodelrefs.json"
 	LLMInferenceServicesFile = "llminferenceservices.json"
+	PoliciesFile             = "policies.json"
 )
 
 // Defaults for the backend's ServiceAccount when access.json names none: the
@@ -55,6 +56,11 @@ type Fixtures struct {
 	MaaSModelRefs     []unstructured.Unstructured
 	// LLMInferenceService CRs for Models (optional; missing means empty List).
 	LLMInferenceServices []unstructured.Unstructured
+	// Policies are ACM Policies the hub serves by namespace and name, such as
+	// the status Policies the backend reads models' and subscriptions' status
+	// from and their per-cluster copies (optional). The ai-grid-ready Policy
+	// is computed from the clusters instead (policy.go).
+	Policies []unstructured.Unstructured
 }
 
 // Access decides who the fake hub accepts. It is the console fake's
@@ -173,6 +179,11 @@ func LoadFixtures(dir string) (*Fixtures, error) {
 		return nil, err
 	} else {
 		fx.LLMInferenceServices = items
+	}
+	if items, err := loadUnstructuredList(filepath.Join(dir, PoliciesFile), policyAPIVersion, policyKind); err != nil {
+		return nil, err
+	} else {
+		fx.Policies = items
 	}
 	return fx, nil
 }

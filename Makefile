@@ -22,6 +22,11 @@ DEV_DRAFT_ADDRESS ?= $(DEV_HOST):$(DEV_DRAFT_PORT)
 DEV_FIXTURES ?= fixtures/default
 DEV_DRAFT_FIXTURES ?= fixtures/draft/default
 DEV_KUBECONFIG ?= $(BIN_DIR)/fake-kubeconfig
+# The bare repository make dev-fake and make run commit Models and
+# Subscriptions to (hack/dev-catalog.sh), created on first use. An
+# AI_GRID_GIT_URL in the environment overrides it.
+DEV_CATALOG ?= $(BIN_DIR)/dev-catalog.git
+AI_GRID_GIT_URL ?=
 
 # Container image (Podman preferred). Override with IMAGE=... TAG=dev.
 # Default linux/amd64 so OpenShift nodes can run images built on Apple Silicon.
@@ -45,7 +50,7 @@ HTTP_ADDR ?= http://localhost:8081
 .PHONY: help all binary build-bin build test unit smoke smoke-openshift vet fmt-check lint verify generate check-generated \
 	image container push build-and-push run \
 	keycloak-up keycloak-down keycloak-seed \
-	build-fake-infra dev-fake dev-fake-poc \
+	build-fake-infra dev-fake dev-fake-poc dev-catalog-reset dev-catalog-log \
 	prereqs kind-test clean-kind openshift-up openshift-down acm-hub-up acm-hub-down
 
 help: ## Show available targets
@@ -84,12 +89,19 @@ dev-fake: build build-fake-infra ## Run the real backend on a fake hub and Keycl
 		DEV_HTTP_PORT="$(DEV_HTTP_PORT)" DEV_KEYCLOAK_PORT="$(DEV_KEYCLOAK_PORT)" \
 		DEV_DRAFT_PORT="$(DEV_DRAFT_PORT)" DEV_DRAFT_ADDRESS="$(DEV_DRAFT_ADDRESS)" DEV_DRAFT_FIXTURES="$(DEV_DRAFT_FIXTURES)" \
 		DEV_FIXTURES="$(DEV_FIXTURES)" DEV_KUBECONFIG="$(DEV_KUBECONFIG)" \
+		DEV_CATALOG="$(DEV_CATALOG)" AI_GRID_GIT_URL="$(AI_GRID_GIT_URL)" \
 		FAKE_INFRA_BIN="$(FAKE_INFRA_BIN)" BACKEND_BIN="$(BACKEND_BIN)" \
 		bash hack/dev-fake.sh
 
 # The same on the PoC preset (fixtures/poc, fixtures/draft/poc).
 dev-fake-poc: ## dev-fake on the PoC preset (fixtures/poc, fixtures/draft/poc)
 	@$(MAKE) --no-print-directory dev-fake DEV_FIXTURES=fixtures/poc DEV_DRAFT_FIXTURES=fixtures/draft/poc
+
+dev-catalog-reset: ## Delete the dev catalog repository (bin/dev-catalog.git) and create it again
+	@DEV_CATALOG="$(DEV_CATALOG)" bash hack/dev-catalog.sh reset
+
+dev-catalog-log: ## Show the dev catalog's commits and files
+	@DEV_CATALOG="$(DEV_CATALOG)" bash hack/dev-catalog.sh log
 
 vet:
 	$(GO) vet ./...
@@ -176,7 +188,10 @@ run: ## Run the API locally (gRPC :8080, REST/Swagger :8081)
 	@echo "HTTP      $(HTTP_LISTEN_ADDRESS)  (Swagger UI at /docs/)"
 	@echo "kube      $(KUBECONFIG_PATH)"
 	@echo "keycloak  $(KEYCLOAK_URL)"
+	@if [[ -z "$(AI_GRID_GIT_URL)" ]]; then DEV_CATALOG="$(DEV_CATALOG)" bash hack/dev-catalog.sh init; fi
+	@echo "git       $(or $(AI_GRID_GIT_URL),file://$(CURDIR)/$(DEV_CATALOG))"
 	KEYCLOAK_URL=$(KEYCLOAK_URL) \
+	AI_GRID_GIT_URL="$(or $(AI_GRID_GIT_URL),file://$(CURDIR)/$(DEV_CATALOG))" \
 	$(GO) run ./cmd/ai-grid-provider-backend \
 		--listen-address=$(LISTEN_ADDRESS) \
 		--http-listen-address=$(HTTP_LISTEN_ADDRESS) \

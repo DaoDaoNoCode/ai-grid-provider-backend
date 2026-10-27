@@ -9,7 +9,7 @@ today. This describes the **REST** surface (`grpc-gateway`). Field names are
 | Base path | `/api/v1` |
 | Content-Type | `application/json` |
 | OpenAPI | [`openapi/ai_grid.swagger.json`](./openapi/ai_grid.swagger.json) |
-| Live Swagger UI | `http://<host>:8081/docs/` (or the OpenShift HTTP Route `/docs/`) |
+| Live Swagger UI | `http://<host>:8081/docs/` (on OpenShift, through `oc port-forward`) |
 | Proto source of truth | `proto/ai_grid/v1/` |
 | Auth | None (out of scope for this MVP) |
 
@@ -42,14 +42,14 @@ unwraps them via `response_body: "object"`.
 | `PATCH` | `/api/v1/tenants/{id}` | Update name and/or domains |
 | `DELETE` | `/api/v1/tenants/{id}` | Delete tenant |
 | `GET` | `/api/v1/tenants/{id}:listMembers` | List users in the tenant Organization |
-| `GET` | `/api/v1/models` | List models (LLMInferenceService) |
-| `GET` | `/api/v1/models:listLocations` | Unique sorted location labels of Available AI Grid members |
+| `GET` | `/api/v1/models` | List models (from the Git catalog) |
+| `GET` | `/api/v1/models:listLocations` | Unique sorted names of the provisioned, Available inference and combined clusters |
 | `GET` | `/api/v1/models/{id}` | Get one model |
-| `POST` | `/api/v1/models` | Create (= deploy) model |
+| `POST` | `/api/v1/models` | Create model (commits it to Git) |
 | `PATCH` | `/api/v1/models/{id}` | Update model (FieldMask) |
-| `DELETE` | `/api/v1/models/{id}` | Delete model (+ placement / MWRS / MaaSModelRef) |
+| `DELETE` | `/api/v1/models/{id}` | Delete model (its files and index entries); optional If-Match / resource_version |
 | `GET` | `/api/v1/subscriptions` | List subscriptions |
-| `GET` | `/api/v1/subscriptions/{id}` | Get subscription + covering auth policies + model registrations |
+| `GET` | `/api/v1/subscriptions/{id}` | Get subscription + its managed auth policy + model registrations |
 | `POST` | `/api/v1/subscriptions` | Create subscription (+ managed AuthPolicy in response) |
 | `PATCH` | `/api/v1/subscriptions/{id}` | Update subscription (syncs managed AuthPolicy) |
 | `DELETE` | `/api/v1/subscriptions/{id}` | Delete subscription (+ managed AuthPolicy); optional If-Match / resource_version |
@@ -514,22 +514,31 @@ gRPC: `ai_grid.v1.Tenants/ListMembers` with `{"id":"<org-uuid>"}`.
 ---
 
 
-## 4. Models (LLMInferenceService deploy)
+## 4. Models (Git catalog)
 
-Models live in `AI_GRID_MODELS_NAMESPACE` (default `ai-grid-models`).
-**Create is deploy:** it writes an `LLMInferenceService` and a `MaaSModelRef`
-(`kind: LLMInferenceService`). When `spec.placement` is set it also writes
-`Placement` / `ManifestWorkReplicaSet` named `model-<id>` (fails with
-FailedPrecondition if MWRS is unavailable on the hub).
+Every write commits to the backend's Git repository (`AI_GRID_GIT_URL`), and
+Argo CD delivers it; the backend never writes to a cluster. Each model is an
+`LLMInferenceService` and a NetworkPolicy in `AI_GRID_MODELS_NAMESPACE`
+(default `ai-grid-models`) on the clusters its placement names, and an
+`ExternalModel` and `MaaSModelRef` in `AI_GRID_SUBSCRIPTION_NAMESPACE` on the
+ingress clusters. See README "Git catalog" for the repository layout.
+
+`spec.placement` is required and names at least one cluster, by the ACM
+`name` label only (`name In [...]` or a `name` match label); cluster sets, other labels,
+`number_of_clusters` and any rollout other than strategy `All` alone are
+`InvalidArgument`. Status comes from the hub's status Policies, or reason
+`SavedToGit` with no phase when no cluster has reported. Labels and
+annotations take only unprefixed keys plus `openshift.io/display-name` and
+`openshift.io/description`.
 
 | Method | Path | Notes |
 | --- | --- | --- |
 | GET | `/api/v1/models` | List; CEL `filter`; `order` allowlist `id`, `-id`, `metadata.name`, `-metadata.name` |
-| GET | `/api/v1/models:listLocations` | Unique sorted `location` labels of Available AI Grid member clusters (P7) |
+| GET | `/api/v1/models:listLocations` | Unique sorted names of the provisioned (ai-grid-ready Compliant), Available inference and combined clusters, the values `spec.placement` takes (P7) |
 | GET | `/api/v1/models/{id}` | Get one (unwraps to the Model object); `status.placement.locations` when placed (P8) |
 | POST | `/api/v1/models` | Create (= deploy); body is the Model object |
 | PATCH | `/api/v1/models/{id}` | FieldMask update (`spec.replicas`, `spec.main.image`, `spec.main.env`, `spec.placement`, `spec.rollout`, `metadata.labels`, `metadata.annotations`) |
-| DELETE | `/api/v1/models/{id}` | Refuses while a Subscription or AuthPolicy references the model |
+| DELETE | `/api/v1/models/{id}` | Refuses while a subscription in the repository references the model |
 
 ### Create body (key fields)
 
@@ -554,7 +563,7 @@ FailedPrecondition if MWRS is unavailable on the hub).
     "placement": {
       "label_selector": {
         "match_expressions": [
-          {"key": "location", "operator": "In", "values": ["paris", "berlin"]}
+          {"key": "name", "operator": "In", "values": ["site-a", "site-b"]}
         ]
       }
     }
@@ -562,7 +571,8 @@ FailedPrecondition if MWRS is unavailable on the hub).
 }
 ```
 
-Without `placement`, the model is hub-only. Gateway defaults to
+Without `placement`, the model is on no cluster (only its catalog entry is
+delivered). Gateway defaults to
 `openshift-ingress/openshift-ai-inference`. Display name / description live in
 `openshift.io/display-name` and `openshift.io/description` annotations.
 
@@ -572,20 +582,27 @@ gRPC: `ai_grid.v1.Models/{List,Get,Create,Update,Delete}`.
 
 ## 5. Subscriptions (MaaS entitlements)
 
-Maps to namespaced `MaaSSubscription` CRs (`maas.opendatahub.io/v1alpha1`).
+Each subscription is a `MaaSSubscription` (`maas.opendatahub.io/v1alpha1`)
+committed to the backend's Git repository, `catalog/subscriptions/<id>.yaml`,
+which Argo CD delivers to the ingress clusters in
+`AI_GRID_SUBSCRIPTION_NAMESPACE` (default `models-as-a-service`).
 OSAC shape: `id` + `metadata` + `spec` + `status`. `id` equals `metadata.name`.
 
-Requires a kubeconfig that can reach a cluster with the MaaS CRDs. Both
-subscription and auth-policy objects live in
-`AI_GRID_SUBSCRIPTION_NAMESPACE` (default `models-as-a-service`).
+`spec.organization.id` is required. `spec.owner.groups` take bare group names
+(a group already prefixed with the same organization is accepted; another
+organization's prefix is `InvalidArgument`); the file holds
+`<organization>/<group>`, and reads return the bare names. A model ref without
+a namespace gets the subscription namespace, and a ref in that namespace must
+name an existing model (`FailedPrecondition` otherwise). Labels and annotations take only
+unprefixed keys plus `openshift.io/display-name` and
+`openshift.io/description`.
 
-**AuthPolicy pairing (server side-effect):** every Create also creates a managed
-`MaaSAuthPolicy` named `<id>-policy` in the same namespace (subjects from
-`owner`, model refs without rate limits). Labels:
+**AuthPolicy pairing (server side-effect):** the same file holds a managed
+`MaaSAuthPolicy` named `<id>-policy` (subjects from `owner`, model refs
+without rate limits). Labels:
 `app.kubernetes.io/managed-by=ai-grid-provider-backend` and
-`ai-grid/subscription=<id>`. Update syncs that managed policy when `spec`
-changes; Delete removes it. Unmanaged policies with the same name are left
-alone. There is no separate AuthPolicies RPC and no
+`ai-grid/subscription=<id>`. Update rewrites it; Delete removes the file and
+both objects with it. There is no separate AuthPolicies RPC and no
 `create_auth_policy=false` path.
 
 **Get / Create response shape (REST):** unlike Clusters/Tenants unwrap,
@@ -596,10 +613,10 @@ these return the full gRPC response wrapper:
 - `PATCH` still unwraps to the Subscription (`response_body: object`)
 - `GET /subscriptions` list remains `{ size, total, items }`
 
-`authPolicies` on Get are every AuthPolicy in the namespace whose `modelRefs`
-intersect the subscription’s models. `modelRegistrations` come from
-`MaaSModelRef` CRs. `model_refs[].display_name` / `description` are output
-enrichment from ModelRef annotations (ignored on write).
+`authPolicies` on Get is the subscription's managed policy. `modelRegistrations`
+has one entry per model ref, with phase `Ready` or `Pending` from the hub's
+status Policies, or reason `SavedToGit` and no phase when no cluster has
+reported.
 
 **Go client note:** `client.GetSubscription` returns only the Subscription
 `object` (same unwrap as Clusters/Tenants helpers). REST `GET
@@ -610,12 +627,13 @@ gRPC `Subscriptions/Get` response, not the Go helper.
 Display name / description for the subscription itself stay in
 `metadata.annotations` (`openshift.io/display-name`,
 `openshift.io/description`). Optimistic concurrency uses `metadata.version`
-(int32 from Kubernetes `resourceVersion`); BFF maps that to string ETags.
+(int32, the file's `ai-grid/version` annotation, incremented on every write);
+BFF maps that to string ETags.
 
 Subscription ids must leave room for the `-policy` suffix (max 56 chars).
 
-**List `filter` / `order`:** applied as filter → order → offset/limit, then
-ModelRef enrichment on the page only. `total` is the match count after filter.
+**List `filter` / `order`:** applied as filter → order → offset/limit.
+`total` is the match count after filter.
 
 - `filter`: CEL over `this` (a Subscription, proto field names) and `now`, with
   cel-go plus `ext.Strings()`. Empty means all. Example:
@@ -644,21 +662,20 @@ ModelRef enrichment on the page only. `total` is the match count after filter.
 | Field | Type | Notes |
 | --- | --- | --- |
 | `name` | string | MaaSModelRef name |
-| `namespace` | string | Defaults to `llm` on write |
+| `namespace` | string | Defaults to the subscription namespace on write |
 | `token_rate_limits[]` | object | Required unless `unlimited` |
 | `unlimited` | bool | Mutually exclusive with `token_rate_limits` |
 | `billing_rate.per_token` | string | Optional |
 | `guardrails[]` | object | Per-model guardrails |
-| `display_name` / `description` | string | Output only (from ModelRef annotations) |
 
 ### `Subscription.status`
 
 | Field | Type | Notes |
 | --- | --- | --- |
-| `phase` | string | Controller phase (e.g. `Active`) |
-| `conditions[]` | Condition | Ready, SpecPriorityDuplicate, … |
-| `model_ref_statuses[]` | ResourceRefStatus | Per referenced model |
-| `token_rate_limit_statuses[]` | object | Generated TRLP status + `model` |
+| `phase` | string | `Active` or `Pending` from the hub's status Policies; empty when no ingress cluster has reported |
+| `conditions[]` | Condition | Not read back; empty |
+| `model_ref_statuses[]` | ResourceRefStatus | Not read back; empty |
+| `token_rate_limit_statuses[]` | object | Not read back; empty |
 
 ### Example create
 
@@ -673,7 +690,6 @@ curl -sS -X POST 'http://localhost:8081/api/v1/subscriptions' \
       "organization": {"id": "org-uuid"},
       "model_refs": [{
         "name": "facebook-opt-125m-simulated",
-        "namespace": "llm",
         "token_rate_limits": [{"limit": "100", "window": "1m"}]
       }],
       "priority": 10
@@ -713,13 +729,12 @@ this file is the current contract snapshot).
 ## 7. Local / OpenShift try-out
 
 ```bash
-# Local without a cluster (fixtures/default seeds LLMInferenceService + MaaS CRs)
+# Local without a cluster: commits to bin/dev-catalog.git (README "Developing")
 make dev-fake
-# Prefer make dev-fake over make dev-fake-poc: poc has no MaaS/LLMISvc seeds.
 # REST :9092, gRPC :9090 — curl /api/v1/models, /api/v1/subscriptions
 
-# Local against a real kubeconfig + Keycloak (needs LLMInferenceService / MaaS CRDs)
-KEYCLOAK_URL=http://127.0.0.1:8180 make run
+# Local against a real kubeconfig + Keycloak, committing to a repository
+AI_GRID_GIT_URL=file:///path/to/catalog.git KEYCLOAK_URL=http://127.0.0.1:8180 make run
 # Swagger: http://localhost:8081/docs/
 
 # OpenShift (after make openshift-up)
@@ -736,8 +751,6 @@ curl -sS 'http://localhost:8081/api/v1/clusters'
 curl -sS 'http://localhost:8081/api/v1/tenants'
 curl -sS 'http://localhost:8081/api/v1/models'
 curl -sS 'http://localhost:8081/api/v1/subscriptions'
-# Seeded on make dev-fake — REST Get returns object + authPolicies + modelRegistrations
-curl -sS 'http://localhost:8081/api/v1/subscriptions/engineering'
 
 curl -sS -X POST 'http://localhost:8081/api/v1/clusters' \
   -H 'Content-Type: application/json' \
@@ -747,13 +760,13 @@ curl -sS -X PATCH 'http://localhost:8081/api/v1/clusters/demo-cluster' \
   -H 'Content-Type: application/json' \
   -d '{"id":"demo-cluster","metadata":{"labels":{"ai-grid/enabled":"true"}},"spec":{"hub_accepts_client":true}}'
 
-# Models (hub-only; Create deploys LLMInferenceService + MaaSModelRef)
+# Models (Create commits the model to the Git catalog)
 curl -sS -X POST 'http://localhost:8081/api/v1/models' \
   -H 'Content-Type: application/json' \
   -d '{"id":"facebook-opt-125m","metadata":{"name":"facebook-opt-125m","annotations":{"openshift.io/display-name":"Facebook OPT 125M"}},"spec":{"model":{"uri":"hf://facebook/opt-125m","name":"facebook/opt-125m"},"replicas":1,"main":{"image":"quay.io/example/vllm:latest","requests":{"cpu":"100m","memory":"1Gi"},"limits":{"cpu":"1","memory":"2Gi"}}}}'
 
 curl -sS 'http://localhost:8081/api/v1/models/facebook-opt-125m'
-curl -sS -X PATCH 'http://localhost:8081/api/v1/models/facebook-opt-125m' \
+curl -sS -X PATCH 'http://localhost:8081/api/v1/models/facebook-opt-125m?update_mask=spec.replicas' \
   -H 'Content-Type: application/json' \
   -d '{"id":"facebook-opt-125m","metadata":{"name":"facebook-opt-125m"},"spec":{"replicas":2}}'
 curl -sS -X DELETE 'http://localhost:8081/api/v1/models/facebook-opt-125m'
@@ -761,7 +774,7 @@ curl -sS -X DELETE 'http://localhost:8081/api/v1/models/facebook-opt-125m'
 # Subscriptions create returns { object, authPolicy }; see Example create above
 curl -sS -X POST 'http://localhost:8081/api/v1/subscriptions' \
   -H 'Content-Type: application/json' \
-  -d '{"id":"smoke-sub","metadata":{"name":"smoke-sub"},"spec":{"owner":{"groups":["smoke"]},"model_refs":[{"name":"tiny-llm","namespace":"llm","token_rate_limits":[{"limit":50,"window":"1m"}]}],"priority":5}}'
+  -d '{"id":"smoke-sub","metadata":{"name":"smoke-sub"},"spec":{"organization":{"id":"smoke-org"},"owner":{"groups":["smoke"]},"model_refs":[{"name":"tiny-llm","token_rate_limits":[{"limit":50,"window":"1m"}]}],"priority":5}}'
 ```
 
 ---

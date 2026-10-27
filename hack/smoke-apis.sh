@@ -16,9 +16,9 @@
 # Environment:
 #   GRPC_ADDR / HTTP_ADDR
 #   SKIP_CLUSTERS / SKIP_TENANTS / SKIP_MODELS / SKIP_SUBSCRIPTIONS
-# Models need LLMInferenceService / MaaS CRDs (or make dev-fake). Subscriptions
-# need MaaS CRDs. When List fails because the CRDs are missing, the suite skips
-# that section instead of failing the run.
+# Models and Subscriptions commit to the backend's Git repository
+# (AI_GRID_GIT_URL; make dev-fake and Kind set one up). When List fails, the
+# suite skips that section instead of failing the run.
 set -euo pipefail
 
 addr="${GRPC_ADDR:-localhost:8080}"
@@ -38,6 +38,7 @@ smoke_model_grpc="ai-grid-smk-g-${smoke_suffix}"
 smoke_model_rest="ai-grid-smk-r-${smoke_suffix}"
 smoke_sub_grpc="ai-grid-smk-g-${smoke_suffix}"
 smoke_sub_rest="ai-grid-smk-r-${smoke_suffix}"
+smoke_sub_model="ai-grid-smk-m-${smoke_suffix}"
 
 # Resources created during smoke; deleted on EXIT even if a mid-CRUD call fails.
 cleanup_cluster_ids=()
@@ -56,15 +57,16 @@ smoke_cleanup() {
     [[ -n "$id" ]] || continue
     delete_tenant_quietly "$id"
   done
-  for id in "${cleanup_model_ids[@]+"${cleanup_model_ids[@]}"}"; do
-    [[ -n "$id" ]] || continue
-    grpcurl -plaintext -d "{\"id\":\"${id}\"}" "$addr" ai_grid.v1.Models/Delete >/dev/null 2>&1 || true
-    curl -sS -o /dev/null -X DELETE "${http_addr}/api/v1/models/${id}" >/dev/null 2>&1 || true
-  done
+  # Subscriptions first: a model a subscription names can't be deleted.
   for id in "${cleanup_subscription_ids[@]+"${cleanup_subscription_ids[@]}"}"; do
     [[ -n "$id" ]] || continue
     grpcurl -plaintext -d "{\"id\":\"${id}\"}" "$addr" ai_grid.v1.Subscriptions/Delete >/dev/null 2>&1 || true
     curl -sS -o /dev/null -X DELETE "${http_addr}/api/v1/subscriptions/${id}" >/dev/null 2>&1 || true
+  done
+  for id in "${cleanup_model_ids[@]+"${cleanup_model_ids[@]}"}"; do
+    [[ -n "$id" ]] || continue
+    grpcurl -plaintext -d "{\"id\":\"${id}\"}" "$addr" ai_grid.v1.Models/Delete >/dev/null 2>&1 || true
+    curl -sS -o /dev/null -X DELETE "${http_addr}/api/v1/models/${id}" >/dev/null 2>&1 || true
   done
 }
 trap smoke_cleanup EXIT
@@ -293,7 +295,7 @@ if [[ "$skip_models" == "1" ]]; then
 else
   printf '    model ids: grpc=%s rest=%s\n' "$smoke_model_grpc" "$smoke_model_rest"
   if ! grpcurl -plaintext -d '{}' "$addr" ai_grid.v1.Models/List >/dev/null 2>&1; then
-    printf '\n==> skipping Models (List failed; need LLMInferenceService/MaaS CRDs or make dev-fake)\n'
+    printf '\n==> skipping Models (List failed; check AI_GRID_GIT_URL)\n'
   else
     call_grpc 'Models/List' '{}' 'ai_grid.v1.Models/List'
     call_grpc 'Models/List (limit=1)' '{"limit":1}' 'ai_grid.v1.Models/List'
@@ -302,7 +304,7 @@ else
 
     before_failed=$failed
     call_grpc 'Models/Create' \
-      "{\"object\":{\"id\":\"${smoke_model_grpc}\",\"metadata\":{\"name\":\"${smoke_model_grpc}\",\"annotations\":{\"openshift.io/display-name\":\"Smoke OPT\"}},\"spec\":{\"model\":{\"uri\":\"hf://facebook/opt-125m\",\"name\":\"facebook/opt-125m\"},\"replicas\":1,\"main\":{\"image\":\"quay.io/example/vllm:smoke\",\"requests\":{\"cpu\":\"100m\",\"memory\":\"1Gi\"},\"limits\":{\"cpu\":\"1\",\"memory\":\"2Gi\"}}}}}" \
+      "{\"object\":{\"id\":\"${smoke_model_grpc}\",\"metadata\":{\"name\":\"${smoke_model_grpc}\",\"annotations\":{\"openshift.io/display-name\":\"Smoke OPT\"}},\"spec\":{\"model\":{\"uri\":\"hf://facebook/opt-125m\",\"name\":\"facebook/opt-125m\"},\"replicas\":1,\"main\":{\"image\":\"quay.io/example/vllm:smoke\",\"requests\":{\"cpu\":\"100m\",\"memory\":\"1Gi\"},\"limits\":{\"cpu\":\"1\",\"memory\":\"2Gi\"}},\"placement\":{\"label_selector\":{\"match_expressions\":[{\"key\":\"name\",\"operator\":\"In\",\"values\":[\"site-paris-1\"]}]}}}}}" \
       'ai_grid.v1.Models/Create'
     if (( failed == before_failed )); then
       cleanup_model_ids+=("$smoke_model_grpc")
@@ -319,7 +321,7 @@ else
 
     before_failed=$failed
     call_http 'POST /api/v1/models' POST '/api/v1/models' \
-      "{\"id\":\"${smoke_model_rest}\",\"metadata\":{\"name\":\"${smoke_model_rest}\",\"annotations\":{\"openshift.io/display-name\":\"Smoke OPT REST\"}},\"spec\":{\"model\":{\"uri\":\"hf://facebook/opt-125m\",\"name\":\"facebook/opt-125m\"},\"replicas\":1,\"main\":{\"image\":\"quay.io/example/vllm:smoke\",\"requests\":{\"cpu\":\"100m\",\"memory\":\"1Gi\"},\"limits\":{\"cpu\":\"1\",\"memory\":\"2Gi\"}}}}"
+      "{\"id\":\"${smoke_model_rest}\",\"metadata\":{\"name\":\"${smoke_model_rest}\",\"annotations\":{\"openshift.io/display-name\":\"Smoke OPT REST\"}},\"spec\":{\"model\":{\"uri\":\"hf://facebook/opt-125m\",\"name\":\"facebook/opt-125m\"},\"replicas\":1,\"main\":{\"image\":\"quay.io/example/vllm:smoke\",\"requests\":{\"cpu\":\"100m\",\"memory\":\"1Gi\"},\"limits\":{\"cpu\":\"1\",\"memory\":\"2Gi\"}},\"placement\":{\"label_selector\":{\"match_expressions\":[{\"key\":\"name\",\"operator\":\"In\",\"values\":[\"site-paris-1\"]}]}}}}"
     if (( failed == before_failed )); then
       cleanup_model_ids+=("$smoke_model_rest")
       call_http "GET /api/v1/models/${smoke_model_rest}" GET "/api/v1/models/${smoke_model_rest}"
@@ -336,8 +338,12 @@ if [[ "$skip_subscriptions" == "1" ]]; then
 else
   printf '    subscription ids: grpc=%s rest=%s\n' "$smoke_sub_grpc" "$smoke_sub_rest"
   if ! grpcurl -plaintext -d '{}' "$addr" ai_grid.v1.Subscriptions/List >/dev/null 2>&1; then
-    printf '\n==> skipping Subscriptions (List failed; need MaaS CRDs or make dev-fake)\n'
+    printf '\n==> skipping Subscriptions (List failed; check AI_GRID_GIT_URL)\n'
   else
+    # A subscription must name a model in the catalog.
+    grpcurl -plaintext -d "{\"object\":{\"id\":\"${smoke_sub_model}\",\"spec\":{\"model\":{\"uri\":\"hf://facebook/opt-125m\"},\"replicas\":1,\"placement\":{\"label_selector\":{\"match_expressions\":[{\"key\":\"name\",\"operator\":\"In\",\"values\":[\"site-paris-1\"]}]}}}}}" \
+      "$addr" ai_grid.v1.Models/Create >/dev/null 2>&1 || true
+    cleanup_model_ids+=("$smoke_sub_model")
     call_grpc 'Subscriptions/List' '{}' 'ai_grid.v1.Subscriptions/List'
     call_grpc 'Subscriptions/List (limit=1)' '{"limit":1}' 'ai_grid.v1.Subscriptions/List'
     grpcurl -plaintext -d "{\"id\":\"${smoke_sub_grpc}\"}" "$addr" \
@@ -345,13 +351,13 @@ else
 
     before_failed=$failed
     call_grpc 'Subscriptions/Create' \
-      "{\"object\":{\"id\":\"${smoke_sub_grpc}\",\"metadata\":{\"name\":\"${smoke_sub_grpc}\"},\"spec\":{\"owner\":{\"groups\":[\"smoke\"]},\"model_refs\":[{\"name\":\"tiny-llm\",\"namespace\":\"llm\",\"token_rate_limits\":[{\"limit\":50,\"window\":\"1m\"}]}],\"priority\":5}}}" \
+      "{\"object\":{\"id\":\"${smoke_sub_grpc}\",\"metadata\":{\"name\":\"${smoke_sub_grpc}\"},\"spec\":{\"organization\":{\"id\":\"smoke-org\"},\"owner\":{\"groups\":[\"smoke\"]},\"model_refs\":[{\"name\":\"${smoke_sub_model}\",\"token_rate_limits\":[{\"limit\":50,\"window\":\"1m\"}]}],\"priority\":5}}}" \
       'ai_grid.v1.Subscriptions/Create'
     if (( failed == before_failed )); then
       cleanup_subscription_ids+=("$smoke_sub_grpc")
       call_grpc 'Subscriptions/Get' "{\"id\":\"${smoke_sub_grpc}\"}" 'ai_grid.v1.Subscriptions/Get'
       call_grpc 'Subscriptions/Update (update_mask=spec)' \
-        "{\"object\":{\"id\":\"${smoke_sub_grpc}\",\"metadata\":{\"name\":\"${smoke_sub_grpc}\"},\"spec\":{\"owner\":{\"groups\":[\"smoke-admins\"]},\"model_refs\":[{\"name\":\"tiny-llm\",\"namespace\":\"llm\",\"token_rate_limits\":[{\"limit\":50,\"window\":\"1m\"}]}],\"priority\":9}},\"update_mask\":{\"paths\":[\"spec\"]}}" \
+        "{\"object\":{\"id\":\"${smoke_sub_grpc}\",\"metadata\":{\"name\":\"${smoke_sub_grpc}\"},\"spec\":{\"organization\":{\"id\":\"smoke-org\"},\"owner\":{\"groups\":[\"smoke-admins\"]},\"model_refs\":[{\"name\":\"${smoke_sub_model}\",\"token_rate_limits\":[{\"limit\":50,\"window\":\"1m\"}]}],\"priority\":9}},\"update_mask\":{\"paths\":[\"spec\"]}}" \
         'ai_grid.v1.Subscriptions/Update'
       call_grpc 'Subscriptions/Delete' "{\"id\":\"${smoke_sub_grpc}\"}" 'ai_grid.v1.Subscriptions/Delete'
     fi
@@ -362,12 +368,12 @@ else
 
     before_failed=$failed
     call_http 'POST /api/v1/subscriptions' POST '/api/v1/subscriptions' \
-      "{\"id\":\"${smoke_sub_rest}\",\"metadata\":{\"name\":\"${smoke_sub_rest}\"},\"spec\":{\"owner\":{\"groups\":[\"smoke\"]},\"model_refs\":[{\"name\":\"tiny-llm\",\"namespace\":\"llm\",\"token_rate_limits\":[{\"limit\":50,\"window\":\"1m\"}]}],\"priority\":5}}"
+      "{\"id\":\"${smoke_sub_rest}\",\"metadata\":{\"name\":\"${smoke_sub_rest}\"},\"spec\":{\"organization\":{\"id\":\"smoke-org\"},\"owner\":{\"groups\":[\"smoke\"]},\"model_refs\":[{\"name\":\"${smoke_sub_model}\",\"token_rate_limits\":[{\"limit\":50,\"window\":\"1m\"}]}],\"priority\":5}}"
     if (( failed == before_failed )); then
       cleanup_subscription_ids+=("$smoke_sub_rest")
       call_http "GET /api/v1/subscriptions/${smoke_sub_rest}" GET "/api/v1/subscriptions/${smoke_sub_rest}"
       call_http "PATCH /api/v1/subscriptions/${smoke_sub_rest}" PATCH "/api/v1/subscriptions/${smoke_sub_rest}" \
-        "{\"id\":\"${smoke_sub_rest}\",\"metadata\":{\"name\":\"${smoke_sub_rest}\"},\"spec\":{\"owner\":{\"groups\":[\"smoke-admins\"]},\"model_refs\":[{\"name\":\"tiny-llm\",\"namespace\":\"llm\",\"token_rate_limits\":[{\"limit\":50,\"window\":\"1m\"}]}],\"priority\":9}}"
+        "{\"id\":\"${smoke_sub_rest}\",\"metadata\":{\"name\":\"${smoke_sub_rest}\"},\"spec\":{\"organization\":{\"id\":\"smoke-org\"},\"owner\":{\"groups\":[\"smoke-admins\"]},\"model_refs\":[{\"name\":\"${smoke_sub_model}\",\"token_rate_limits\":[{\"limit\":50,\"window\":\"1m\"}]}],\"priority\":9}}"
       call_http "DELETE /api/v1/subscriptions/${smoke_sub_rest}" DELETE "/api/v1/subscriptions/${smoke_sub_rest}"
     fi
   fi

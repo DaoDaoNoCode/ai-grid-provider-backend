@@ -33,6 +33,11 @@
 #   ACM_NAMESPACE         RHACM operator namespace (default open-cluster-management)
 #   GRANT_ANYUID          1 to grant anyuid SCC to default SA (Keycloak/Postgres)
 #   CHANNEL               ACM Subscription channel (passed through to acm-hub-up)
+#   AI_GRID_GIT_URL       required: the repository Models and Subscriptions commit to
+#                         (HTTPS, no credentials in the URL)
+#   AI_GRID_GIT_BRANCH    branch to commit to (default main)
+#   AI_GRID_GIT_TOKEN_FILE local file holding a token with contents:write on that
+#                         repository only; stored in Secret ai-grid-provider-backend-git
 #
 # Needs oc logged in. helm required when ACM is installed. Idempotent.
 set -euo pipefail
@@ -56,6 +61,13 @@ KEYCLOAK_ADMIN_REALM="${KEYCLOAK_ADMIN_REALM:-master}"
 DEFAULT_API_IMAGE="quay.io/rh-ee-rjjohnso/ai-grid-provider-backend:latest"
 MANAGED_CLUSTER_CRD="managedclusters.cluster.open-cluster-management.io"
 DEFAULT_IMAGE="ghcr.io/ai-grid-cloud/ai-grid-provider-backend:latest"
+AI_GRID_GIT_URL="${AI_GRID_GIT_URL:-}"
+AI_GRID_GIT_BRANCH="${AI_GRID_GIT_BRANCH:-main}"
+AI_GRID_GIT_TOKEN_FILE="${AI_GRID_GIT_TOKEN_FILE:-}"
+if [[ -z "$AI_GRID_GIT_URL" ]]; then
+  echo "AI_GRID_GIT_URL is required: the Git repository Models and Subscriptions commit to" >&2
+  exit 1
+fi
 
 for arg in "$@"; do
   case "$arg" in
@@ -172,6 +184,10 @@ kustomize_build \
   | sed -e "s#${DEFAULT_IMAGE}#${IMAGE}#g" \
   | oc apply -f -
 
+# oc apply doesn't prune: remove the public Routes an install made before they
+# were dropped, because the API has no authentication of its own.
+oc -n "${NAMESPACE}" delete route ai-grid-provider-backend-grpc ai-grid-provider-backend-http --ignore-not-found
+
 if [[ "$EXTERNAL_KEYCLOAK" != "1" ]]; then
   if [[ "$GRANT_ANYUID" == "1" ]]; then
     echo "==> granting anyuid SCC to system:serviceaccount:${NAMESPACE}:default (Keycloak/Postgres)"
@@ -200,6 +216,17 @@ oc create secret generic ai-grid-provider-backend-keycloak -n "${NAMESPACE}" \
   --from-literal=password="${KEYCLOAK_ADMIN_PASSWORD}" \
   --dry-run=client -o yaml | oc apply -f -
 
+echo "==> creating secret ai-grid-provider-backend-git for ${AI_GRID_GIT_URL} (branch ${AI_GRID_GIT_BRANCH})"
+git_token_args=(--from-literal=token=)
+if [[ -n "$AI_GRID_GIT_TOKEN_FILE" ]]; then
+  git_token_args=(--from-file=token="${AI_GRID_GIT_TOKEN_FILE}")
+fi
+oc create secret generic ai-grid-provider-backend-git -n "${NAMESPACE}" \
+  --from-literal=url="${AI_GRID_GIT_URL}" \
+  --from-literal=branch="${AI_GRID_GIT_BRANCH}" \
+  "${git_token_args[@]}" \
+  --dry-run=client -o yaml | oc apply -f -
+
 # Ensure the deployment picks up a newly created/rotated secret.
 oc rollout restart deployment/ai-grid-provider-backend -n "${NAMESPACE}" >/dev/null 2>&1 || true
 
@@ -222,20 +249,10 @@ if [[ "$APPLY_SAMPLES" == "1" ]]; then
   fi
 fi
 
-HTTP_HOST="$(oc get route ai-grid-provider-backend-http -n "${NAMESPACE}" -o jsonpath='{.spec.host}' 2>/dev/null || true)"
-GRPC_HOST="$(oc get route ai-grid-provider-backend-grpc -n "${NAMESPACE}" -o jsonpath='{.spec.host}' 2>/dev/null || true)"
 
 echo ""
 echo "OpenShift deploy ready (namespace ${NAMESPACE})."
-if [[ -n "${HTTP_HOST}" ]]; then
-  echo "  REST/Swagger: https://${HTTP_HOST}/docs/"
-  echo "  curl example: curl -sk https://${HTTP_HOST}/api/v1/ping"
-  echo "  Clusters:     curl -sk https://${HTTP_HOST}/api/v1/clusters"
-  echo "  Tenants:      curl -sk https://${HTTP_HOST}/api/v1/tenants"
-fi
-if [[ -n "${GRPC_HOST}" ]]; then
-  echo "  gRPC Route:   ${GRPC_HOST} (passthrough; prefer port-forward for plaintext grpcurl)"
-fi
+echo "  No Route: the API has no authentication of its own. Use port-forward:"
 echo "  Port-forward: oc -n ${NAMESPACE} port-forward svc/ai-grid-provider-backend 8080:8080 8081:8081"
 echo "  grpcurl:      grpcurl -plaintext localhost:8080 ai_grid.v1.AiGrid/Ping"
 echo "  Smoke:        make smoke-openshift"

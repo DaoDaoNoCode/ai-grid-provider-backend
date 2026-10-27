@@ -12,6 +12,7 @@ import (
 
 	clientpkg "github.com/osac-project/ai-grid-provider-backend/client"
 	aigridv1 "github.com/osac-project/ai-grid-provider-backend/gen/ai_grid/v1"
+	"github.com/osac-project/ai-grid-provider-backend/internal/gitops"
 	"github.com/osac-project/ai-grid-provider-backend/internal/keycloak"
 	"github.com/osac-project/ai-grid-provider-backend/internal/servers"
 	"google.golang.org/grpc/codes"
@@ -25,28 +26,6 @@ import (
 
 var managedClustersResource = schema.GroupVersionResource{
 	Group: "cluster.open-cluster-management.io", Version: "v1", Resource: "managedclusters",
-}
-
-var maasModelRefsResource = schema.GroupVersionResource{
-	Group: "maas.opendatahub.io", Version: "v1alpha1", Resource: "maasmodelrefs",
-}
-var maasSubscriptionsResource = schema.GroupVersionResource{
-	Group: "maas.opendatahub.io", Version: "v1alpha1", Resource: "maassubscriptions",
-}
-var maasAuthPoliciesResource = schema.GroupVersionResource{
-	Group: "maas.opendatahub.io", Version: "v1alpha1", Resource: "maasauthpolicies",
-}
-var llmInferenceServicesResource = schema.GroupVersionResource{
-	Group: "serving.kserve.io", Version: "v1alpha2", Resource: "llminferenceservices",
-}
-var placementsResource = schema.GroupVersionResource{
-	Group: "cluster.open-cluster-management.io", Version: "v1beta1", Resource: "placements",
-}
-var placementDecisionsResource = schema.GroupVersionResource{
-	Group: "cluster.open-cluster-management.io", Version: "v1beta1", Resource: "placementdecisions",
-}
-var manifestWorkReplicaSetsResource = schema.GroupVersionResource{
-	Group: "work.open-cluster-management.io", Version: "v1alpha1", Resource: "manifestworkreplicasets",
 }
 
 func TestBuilderValidation(t *testing.T) {
@@ -263,6 +242,9 @@ func TestClientModelsCRUD(t *testing.T) {
 				Requests: map[string]string{"cpu": "100m", "memory": "1Gi"},
 				Limits:   map[string]string{"cpu": "1", "memory": "2Gi"},
 			},
+			Placement: &aigridv1.ModelPlacement{LabelSelector: &aigridv1.ModelLabelSelector{
+				MatchExpressions: []*aigridv1.ModelLabelSelectorRequirement{{Key: "name", Operator: "In", Values: []string{"site-a"}}},
+			}},
 		},
 	})
 	if err != nil {
@@ -318,7 +300,8 @@ func TestClientSubscriptionsCRUD(t *testing.T) {
 		Id:       "free-subscription",
 		Metadata: &aigridv1.Metadata{Name: "free-subscription"},
 		Spec: &aigridv1.SubscriptionSpec{
-			Owner: &aigridv1.SubscriptionOwner{Groups: []string{"system:authenticated"}},
+			Organization: &aigridv1.SubscriptionOrganization{Id: "org-1"},
+			Owner:        &aigridv1.SubscriptionOwner{Groups: []string{"system:authenticated"}},
 			ModelRefs: []*aigridv1.SubscriptionModelRef{
 				{Name: "sim-model", TokenRateLimits: []*aigridv1.TokenRateLimit{{Limit: 100, Window: "1m"}}},
 			},
@@ -484,14 +467,7 @@ func startTestClient(t *testing.T, objects []runtime.Object, orgs organizationCl
 	dynamicClient := fake.NewSimpleDynamicClientWithCustomListKinds(
 		runtime.NewScheme(),
 		map[schema.GroupVersionResource]string{
-			managedClustersResource:         "ManagedClusterList",
-			maasSubscriptionsResource:       "MaaSSubscriptionList",
-			maasAuthPoliciesResource:        "MaaSAuthPolicyList",
-			maasModelRefsResource:           "MaaSModelRefList",
-			llmInferenceServicesResource:    "LLMInferenceServiceList",
-			placementsResource:              "PlacementList",
-			placementDecisionsResource:      "PlacementDecisionList",
-			manifestWorkReplicaSetsResource: "ManifestWorkReplicaSetList",
+			managedClustersResource: "ManagedClusterList",
 		},
 		objects...,
 	)
@@ -512,15 +488,20 @@ func startTestClient(t *testing.T, objects []runtime.Object, orgs organizationCl
 	if err != nil {
 		t.Fatalf("build Tenants server: %v", err)
 	}
+	// Models and Subscriptions commit to a Git repository: here an in-memory
+	// one holding only model sim-model's file, for subscriptions to refer to.
+	writer := gitops.NewMemoryWriter(map[string][]byte{
+		"catalog/models/sim-model/deployment/deployment.yaml": []byte("seed"),
+	})
 	modelsServer, err := servers.NewModelsServer().
+		SetWriter(writer).
 		SetDynamicClient(dynamicClient).
-		SetManifestWorkReplicaSetEnabled(true).
 		Build()
 	if err != nil {
 		t.Fatalf("build Models server: %v", err)
 	}
 	subscriptionsServer, err := servers.NewSubscriptionsServer().
-		SetDynamicClient(dynamicClient).
+		SetWriter(writer).
 		Build()
 	if err != nil {
 		t.Fatalf("build Subscriptions server: %v", err)
