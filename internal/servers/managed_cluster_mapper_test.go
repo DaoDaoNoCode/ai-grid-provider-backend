@@ -130,6 +130,24 @@ func TestManagedClusterID(t *testing.T) {
 	}
 }
 
+func TestReplaceStringMapPatch(t *testing.T) {
+	t.Parallel()
+	current := map[string]string{"remove-me": "x", "keep": "y", "owned": "old"}
+	next := map[string]string{"keep": "y2", "new": "z"}
+	preserve := map[string]string{"owned": "forced"}
+	got := replaceStringMapPatch(current, next, preserve)
+	if got["remove-me"] != nil {
+		t.Fatalf("remove-me = %v, want null", got["remove-me"])
+	}
+	if got["keep"] != "y2" || got["new"] != "z" || got["owned"] != "forced" {
+		t.Fatalf("got = %#v", got)
+	}
+	empty := replaceStringMapPatch(map[string]string{"remove-me": "x"}, map[string]string{}, nil)
+	if empty["remove-me"] != nil || len(empty) != 1 {
+		t.Fatalf("empty replace = %#v", empty)
+	}
+}
+
 func TestApplyListWindow(t *testing.T) {
 	t.Parallel()
 

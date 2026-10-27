@@ -7,10 +7,21 @@ import (
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	aigriddraftv1 "github.com/osac-project/ai-grid-provider-backend/gen/ai_grid/draft/v1"
 )
+
+// GetHubCapabilities implements AiGrid from the settings fixture.
+func (s *Server) GetHubCapabilities(ctx context.Context, _ *aigriddraftv1.GetHubCapabilitiesRequest) (*aigriddraftv1.GetHubCapabilitiesResponse, error) {
+	if _, err := s.begin(ctx); err != nil {
+		return nil, err
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return &aigriddraftv1.GetHubCapabilitiesResponse{Capabilities: proto.Clone(s.capabilities).(*aigriddraftv1.HubCapabilities)}, nil
+}
 
 // msgInvalidRange is the PoC's message for a range other than 1h, 6h or 24h.
 const msgInvalidRange = "Choose a time range of 1h, 6h, or 24h."

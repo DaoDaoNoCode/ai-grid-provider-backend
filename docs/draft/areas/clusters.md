@@ -54,8 +54,8 @@ name, site, region, location, enrolment, provisioned, hub acceptance, OpenShift 
 keeps working because the new fields are additive. Porting the fuller UI for this area (status,
 GPUs, console link, enrol and location editing) is out of scope here; it builds on the HTTP
 contract in `ai-grid-provider-console/docs/plan/bff-api.md`. The map belongs to the grid overview area, not started
-here; Placement recomputation and ManifestWorkReplicaSet belong to the models area
-(`docs/draft/areas/models.md`).
+here; Placement recomputation and ManifestWorkReplicaSet belong to Models in `ai_grid.v1`
+(retired from the draft; see `docs/draft/README.md`).
 
 Backend ask: ship the draft's `GetManagedCluster`, `UpdateManagedCluster` and richer
 message (`proto/ai_grid/draft/v1/managed_cluster*.proto`), with the state derived server-side.

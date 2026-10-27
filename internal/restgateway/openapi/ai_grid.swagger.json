@@ -2,7 +2,7 @@
   "swagger": "2.0",
   "info": {
     "title": "AI Grid API",
-    "description": "gRPC-Gateway REST surface for ai-grid-provider-backend (Ping, Clusters CRUD, Tenants CRUD).",
+    "description": "gRPC-Gateway REST surface for ai-grid-provider-backend (Ping, Clusters, Tenants, Models, Subscriptions CRUD).",
     "version": "0.1.0",
     "contact": {
       "name": "AI Grid",
@@ -15,6 +15,12 @@
     },
     {
       "name": "Clusters"
+    },
+    {
+      "name": "Models"
+    },
+    {
+      "name": "Subscriptions"
     },
     {
       "name": "Tenants"
@@ -232,6 +238,240 @@
         ]
       }
     },
+    "/api/v1/models": {
+      "get": {
+        "operationId": "Models_List",
+        "responses": {
+          "200": {
+            "description": "A successful response.",
+            "schema": {
+              "$ref": "#/definitions/v1ModelsListResponse"
+            }
+          },
+          "default": {
+            "description": "An unexpected error response.",
+            "schema": {
+              "$ref": "#/definitions/rpcStatus"
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "offset",
+            "description": "Index of the first result. Default zero.",
+            "in": "query",
+            "required": false,
+            "type": "integer",
+            "format": "int32"
+          },
+          {
+            "name": "limit",
+            "description": "Maximum number of results. Omitted means all; zero means count only;\nnegative is InvalidArgument.",
+            "in": "query",
+            "required": false,
+            "type": "integer",
+            "format": "int32"
+          },
+          {
+            "name": "filter",
+            "description": "CEL over `this` (a Model, proto field names) and `now` (server time),\nwith cel-go's standard library plus its strings extension. Empty means all.",
+            "in": "query",
+            "required": false,
+            "type": "string"
+          },
+          {
+            "name": "order",
+            "description": "Sort key. Empty means `id` ascending. Allowed: id, -id, metadata.name,\n-metadata.name. Any other value is InvalidArgument.",
+            "in": "query",
+            "required": false,
+            "type": "string"
+          }
+        ],
+        "tags": [
+          "Models"
+        ]
+      },
+      "post": {
+        "summary": "Creates (= deploys) a model: LLMInferenceService, optional Placement +\nManifestWorkReplicaSet, and MaaSModelRef.",
+        "operationId": "Models_Create",
+        "responses": {
+          "200": {
+            "description": "",
+            "schema": {
+              "$ref": "#/definitions/v1Model"
+            }
+          },
+          "default": {
+            "description": "An unexpected error response.",
+            "schema": {
+              "$ref": "#/definitions/rpcStatus"
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "object",
+            "description": "id / metadata.name and spec.model.uri are required. status is ignored.",
+            "in": "body",
+            "required": true,
+            "schema": {
+              "$ref": "#/definitions/v1Model"
+            }
+          }
+        ],
+        "tags": [
+          "Models"
+        ]
+      }
+    },
+    "/api/v1/models/{id}": {
+      "get": {
+        "operationId": "Models_Get",
+        "responses": {
+          "200": {
+            "description": "",
+            "schema": {
+              "$ref": "#/definitions/v1Model"
+            }
+          },
+          "default": {
+            "description": "An unexpected error response.",
+            "schema": {
+              "$ref": "#/definitions/rpcStatus"
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "id",
+            "description": "Model id (equals metadata.name).",
+            "in": "path",
+            "required": true,
+            "type": "string"
+          }
+        ],
+        "tags": [
+          "Models"
+        ]
+      },
+      "delete": {
+        "operationId": "Models_Delete",
+        "responses": {
+          "200": {
+            "description": "A successful response.",
+            "schema": {
+              "$ref": "#/definitions/v1ModelsDeleteResponse"
+            }
+          },
+          "default": {
+            "description": "An unexpected error response.",
+            "schema": {
+              "$ref": "#/definitions/rpcStatus"
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "type": "string"
+          },
+          {
+            "name": "resource_version",
+            "description": "Expected version: when set (non-zero), delete fails with Aborted unless\nit equals the stored metadata.version. Zero skips the check.",
+            "in": "query",
+            "required": false,
+            "type": "integer",
+            "format": "int32"
+          }
+        ],
+        "tags": [
+          "Models"
+        ]
+      }
+    },
+    "/api/v1/models/{object.id}": {
+      "patch": {
+        "operationId": "Models_Update",
+        "responses": {
+          "200": {
+            "description": "",
+            "schema": {
+              "$ref": "#/definitions/v1Model"
+            }
+          },
+          "default": {
+            "description": "An unexpected error response.",
+            "schema": {
+              "$ref": "#/definitions/rpcStatus"
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "object.id",
+            "description": "Unique identifier. Equals metadata.name (DNS-1123 label).",
+            "in": "path",
+            "required": true,
+            "type": "string"
+          },
+          {
+            "name": "object",
+            "in": "body",
+            "required": true,
+            "schema": {
+              "type": "object",
+              "properties": {
+                "metadata": {
+                  "$ref": "#/definitions/v1Metadata"
+                },
+                "spec": {
+                  "$ref": "#/definitions/v1ModelSpec"
+                },
+                "status": {
+                  "$ref": "#/definitions/v1ModelStatus"
+                }
+              },
+              "description": "Model is a deployable LLM inference workload on the AI Grid.\n\nIt maps to a hub LLMInferenceService (serving.kserve.io/v1alpha2) plus an\noptional ACM Placement and ManifestWorkReplicaSet that distribute the\nworkload to managed clusters, and a MaaSModelRef for catalog registration.\n\nThe `spec` contains the desired details and may be modified by the user.\nThe `status` contains the current status and is provided by the system."
+            }
+          },
+          {
+            "name": "lock",
+            "description": "When true, update fails with Aborted unless metadata.version matches.",
+            "in": "query",
+            "required": false,
+            "type": "boolean"
+          }
+        ],
+        "tags": [
+          "Models"
+        ]
+      }
+    },
+    "/api/v1/models:listLocations": {
+      "get": {
+        "summary": "Locations a model can be placed on: unique sorted `location` labels of\nManagedClusters that are AI Grid members (ai-grid/enabled and\nai-grid/provisioned \"true\") and Available.",
+        "operationId": "Models_ListLocations",
+        "responses": {
+          "200": {
+            "description": "A successful response.",
+            "schema": {
+              "$ref": "#/definitions/v1ModelsListLocationsResponse"
+            }
+          },
+          "default": {
+            "description": "An unexpected error response.",
+            "schema": {
+              "$ref": "#/definitions/rpcStatus"
+            }
+          }
+        },
+        "tags": [
+          "Models"
+        ]
+      }
+    },
     "/api/v1/ping": {
       "get": {
         "operationId": "AiGrid_Ping",
@@ -259,6 +499,218 @@
         ],
         "tags": [
           "AiGrid"
+        ]
+      }
+    },
+    "/api/v1/subscriptions": {
+      "get": {
+        "operationId": "Subscriptions_List",
+        "responses": {
+          "200": {
+            "description": "A successful response.",
+            "schema": {
+              "$ref": "#/definitions/v1SubscriptionsListResponse"
+            }
+          },
+          "default": {
+            "description": "An unexpected error response.",
+            "schema": {
+              "$ref": "#/definitions/rpcStatus"
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "offset",
+            "description": "Index of the first result. If not specified the default value will be zero.",
+            "in": "query",
+            "required": false,
+            "type": "integer",
+            "format": "int32"
+          },
+          {
+            "name": "limit",
+            "description": "Maximum number of results to be returned by the server. When not specified all\nthe results will be returned.",
+            "in": "query",
+            "required": false,
+            "type": "integer",
+            "format": "int32"
+          },
+          {
+            "name": "filter",
+            "description": "CEL over `this` (a Subscription, proto field names) and `now` (server time),\nwith cel-go's standard library plus its strings extension. Empty means all.\nEvaluated in memory before order and paging. Indexing a missing map key is\nan error (use the `in` guard), not false.",
+            "in": "query",
+            "required": false,
+            "type": "string"
+          },
+          {
+            "name": "order",
+            "description": "Sort key. Empty means `id` ascending. Allowed: id, -id, priority, -priority,\nmetadata.name, -metadata.name (`-` = descending). Any other value is\nInvalidArgument. Applied after filter and before offset/limit.",
+            "in": "query",
+            "required": false,
+            "type": "string"
+          }
+        ],
+        "tags": [
+          "Subscriptions"
+        ]
+      },
+      "post": {
+        "summary": "Creates the subscription and a managed \u003cid\u003e-policy. Full response body.",
+        "operationId": "Subscriptions_Create",
+        "responses": {
+          "200": {
+            "description": "A successful response.",
+            "schema": {
+              "$ref": "#/definitions/v1SubscriptionsCreateResponse"
+            }
+          },
+          "default": {
+            "description": "An unexpected error response.",
+            "schema": {
+              "$ref": "#/definitions/rpcStatus"
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "object",
+            "in": "body",
+            "required": true,
+            "schema": {
+              "$ref": "#/definitions/v1Subscription"
+            }
+          }
+        ],
+        "tags": [
+          "Subscriptions"
+        ]
+      }
+    },
+    "/api/v1/subscriptions/{id}": {
+      "get": {
+        "summary": "Returns the subscription plus covering auth policies and model registrations.\nFull response body (not unwrapped to object alone).",
+        "operationId": "Subscriptions_Get",
+        "responses": {
+          "200": {
+            "description": "A successful response.",
+            "schema": {
+              "$ref": "#/definitions/v1SubscriptionsGetResponse"
+            }
+          },
+          "default": {
+            "description": "An unexpected error response.",
+            "schema": {
+              "$ref": "#/definitions/rpcStatus"
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "id",
+            "description": "Subscription id (equals metadata.name).",
+            "in": "path",
+            "required": true,
+            "type": "string"
+          }
+        ],
+        "tags": [
+          "Subscriptions"
+        ]
+      },
+      "delete": {
+        "operationId": "Subscriptions_Delete",
+        "responses": {
+          "200": {
+            "description": "A successful response.",
+            "schema": {
+              "$ref": "#/definitions/v1SubscriptionsDeleteResponse"
+            }
+          },
+          "default": {
+            "description": "An unexpected error response.",
+            "schema": {
+              "$ref": "#/definitions/rpcStatus"
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "id",
+            "description": "Subscription id (equals metadata.name).",
+            "in": "path",
+            "required": true,
+            "type": "string"
+          },
+          {
+            "name": "resource_version",
+            "description": "Expected version: when set (non-zero), delete fails with Aborted unless\nit equals the stored metadata.version. Zero skips the check. Console\nIf-Match maps here (same pattern as Models Delete).",
+            "in": "query",
+            "required": false,
+            "type": "integer",
+            "format": "int32"
+          }
+        ],
+        "tags": [
+          "Subscriptions"
+        ]
+      }
+    },
+    "/api/v1/subscriptions/{object.id}": {
+      "patch": {
+        "operationId": "Subscriptions_Update",
+        "responses": {
+          "200": {
+            "description": "",
+            "schema": {
+              "$ref": "#/definitions/v1Subscription"
+            }
+          },
+          "default": {
+            "description": "An unexpected error response.",
+            "schema": {
+              "$ref": "#/definitions/rpcStatus"
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "object.id",
+            "description": "Unique identifier of the subscription. Equals metadata.name.",
+            "in": "path",
+            "required": true,
+            "type": "string"
+          },
+          {
+            "name": "object",
+            "in": "body",
+            "required": true,
+            "schema": {
+              "type": "object",
+              "properties": {
+                "metadata": {
+                  "$ref": "#/definitions/v1Metadata"
+                },
+                "spec": {
+                  "$ref": "#/definitions/v1SubscriptionSpec"
+                },
+                "status": {
+                  "$ref": "#/definitions/v1SubscriptionStatus"
+                }
+              },
+              "description": "Subscription is a MaaS entitlement that binds identity subjects to models\nwith token rate limits and a priority.\n\nIt maps to the spoke-cluster Kubernetes CR MaaSSubscription\n(apiVersion: maas.opendatahub.io/v1alpha1). It is not an OLM Subscription,\nnot an AAP license subscription, and not OSAC SERVICE_TIER_MAAS\n(\"Metal as a Service\").\n\nThe `spec` contains the desired details and may be modified by the user.\nThe `status` contains the current status and is provided by the system."
+            }
+          },
+          {
+            "name": "lock",
+            "description": "Lock enables optimistic locking against metadata.version.",
+            "in": "query",
+            "required": false,
+            "type": "boolean"
+          }
+        ],
+        "tags": [
+          "Subscriptions"
         ]
       }
     },
@@ -559,6 +1011,74 @@
         }
       }
     },
+    "v1AuthPolicy": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Resource name (equals metadata.name on the CR)."
+        },
+        "metadata": {
+          "$ref": "#/definitions/v1Metadata"
+        },
+        "subject_groups": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Groups entitled by this policy."
+        },
+        "subject_users": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Users entitled by this policy."
+        },
+        "model_refs": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "$ref": "#/definitions/v1AuthPolicyModelRef"
+          },
+          "description": "Models this policy grants."
+        },
+        "phase": {
+          "type": "string",
+          "description": "Controller phase (for example \"Active\")."
+        },
+        "conditions": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "$ref": "#/definitions/v1Condition"
+          },
+          "description": "Controller conditions."
+        }
+      },
+      "description": "AuthPolicy is a MaaSAuthPolicy: groups/users allowed to call a set of models."
+    },
+    "v1AuthPolicyModelRef": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "namespace": {
+          "type": "string"
+        }
+      },
+      "description": "AuthPolicyModelRef references a MaaSModelRef granted by an AuthPolicy."
+    },
+    "v1BillingRate": {
+      "type": "object",
+      "properties": {
+        "per_token": {
+          "type": "string"
+        }
+      },
+      "description": "BillingRate defines cost per token."
+    },
     "v1ClustersCreateResponse": {
       "type": "object",
       "properties": {
@@ -608,6 +1128,65 @@
           "$ref": "#/definitions/v1ManagedCluster"
         }
       }
+    },
+    "v1Condition": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "description": "Condition type as defined by the owning controller."
+        },
+        "status": {
+          "$ref": "#/definitions/v1ConditionStatus",
+          "description": "Whether the object is in the condition."
+        },
+        "last_transition_time": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Last time the condition changed from one status to another."
+        },
+        "reason": {
+          "type": "string",
+          "description": "Machine-readable reason in CamelCase, when the controller provides one."
+        },
+        "message": {
+          "type": "string",
+          "description": "Human-readable detail for debugging."
+        },
+        "observed_generation": {
+          "type": "string",
+          "format": "int64",
+          "description": "Generation of the object the condition was computed for; zero when unknown."
+        }
+      },
+      "description": "One entry of a Kubernetes-style status.conditions list."
+    },
+    "v1ConditionStatus": {
+      "type": "string",
+      "enum": [
+        "CONDITION_STATUS_UNSPECIFIED",
+        "CONDITION_STATUS_TRUE",
+        "CONDITION_STATUS_FALSE"
+      ],
+      "default": "CONDITION_STATUS_UNSPECIFIED",
+      "description": "Status of a condition. Kubernetes `Unknown` is reported as UNSPECIFIED.\n\n - CONDITION_STATUS_UNSPECIFIED: The system cannot decide whether the object is in the condition.\n - CONDITION_STATUS_TRUE: The object is in the condition.\n - CONDITION_STATUS_FALSE: The object is not in the condition."
+    },
+    "v1GuardrailAttachment": {
+      "type": "object",
+      "properties": {
+        "ref_name": {
+          "type": "string",
+          "description": "Name of the AIGuardrail in the tenant namespace."
+        },
+        "checks": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Selected check names; empty means all checks in the policy."
+        }
+      },
+      "description": "GuardrailAttachment attaches an AIGuardrail policy by name."
     },
     "v1ManagedCluster": {
       "type": "object",
@@ -706,6 +1285,799 @@
         }
       },
       "description": "Metadata common to all kinds of objects."
+    },
+    "v1Model": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Unique identifier. Equals metadata.name (DNS-1123 label)."
+        },
+        "metadata": {
+          "$ref": "#/definitions/v1Metadata"
+        },
+        "spec": {
+          "$ref": "#/definitions/v1ModelSpec"
+        },
+        "status": {
+          "$ref": "#/definitions/v1ModelStatus"
+        }
+      },
+      "description": "Model is a deployable LLM inference workload on the AI Grid.\n\nIt maps to a hub LLMInferenceService (serving.kserve.io/v1alpha2) plus an\noptional ACM Placement and ManifestWorkReplicaSet that distribute the\nworkload to managed clusters, and a MaaSModelRef for catalog registration.\n\nThe `spec` contains the desired details and may be modified by the user.\nThe `status` contains the current status and is provided by the system."
+    },
+    "v1ModelContainer": {
+      "type": "object",
+      "properties": {
+        "image": {
+          "type": "string",
+          "description": "Runtime image. Empty uses the preset's."
+        },
+        "requests": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "Resource requests (cpu, memory, nvidia.com/gpu, ...)."
+        },
+        "limits": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "Resource limits."
+        },
+        "env": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "$ref": "#/definitions/v1ModelEnvVar"
+          },
+          "description": "Environment variables (for example VLLM_ADDITIONAL_ARGS)."
+        }
+      },
+      "description": "Main container resources and environment."
+    },
+    "v1ModelEnvVar": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "value": {
+          "type": "string"
+        }
+      },
+      "description": "One environment variable."
+    },
+    "v1ModelGatewayRef": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "namespace": {
+          "type": "string"
+        },
+        "section_name": {
+          "type": "string"
+        }
+      },
+      "description": "One gateway reference."
+    },
+    "v1ModelKedaTrigger": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string"
+        },
+        "metadata": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        }
+      },
+      "description": "One KEDA scale trigger."
+    },
+    "v1ModelLabelSelector": {
+      "type": "object",
+      "properties": {
+        "match_labels": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "match_expressions": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "$ref": "#/definitions/v1ModelLabelSelectorRequirement"
+          }
+        }
+      },
+      "description": "Label selector for Placement predicates."
+    },
+    "v1ModelLabelSelectorRequirement": {
+      "type": "object",
+      "properties": {
+        "key": {
+          "type": "string"
+        },
+        "operator": {
+          "type": "string",
+          "description": "In, NotIn, Exists, or DoesNotExist."
+        },
+        "values": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "description": "One label selector requirement."
+    },
+    "v1ModelPhase": {
+      "type": "string",
+      "enum": [
+        "MODEL_PHASE_UNSPECIFIED",
+        "MODEL_PHASE_PENDING",
+        "MODEL_PHASE_READY",
+        "MODEL_PHASE_FAILED"
+      ],
+      "default": "MODEL_PHASE_UNSPECIFIED",
+      "description": "Derived model phase."
+    },
+    "v1ModelPlacement": {
+      "type": "object",
+      "properties": {
+        "cluster_sets": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Cluster sets to draw from. Empty means every bound set."
+        },
+        "label_selector": {
+          "$ref": "#/definitions/v1ModelLabelSelector",
+          "description": "Label selector over ManagedCluster labels."
+        },
+        "number_of_clusters": {
+          "type": "integer",
+          "format": "int32",
+          "description": "Cap on selected clusters. Unset means all matching."
+        }
+      },
+      "description": "ACM Placement desired state (subset used by the Models API)."
+    },
+    "v1ModelPlacementStatus": {
+      "type": "object",
+      "properties": {
+        "number_of_selected_clusters": {
+          "type": "integer",
+          "format": "int32",
+          "description": "Number of clusters selected."
+        },
+        "selected_clusters": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Selected cluster names."
+        },
+        "conditions": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "$ref": "#/definitions/v1Condition"
+          },
+          "description": "Placement conditions when present."
+        },
+        "locations": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Unique sorted `location` labels of decided clusters (P8). A decided\ncluster without a location label adds nothing. Output only.",
+          "readOnly": true
+        }
+      },
+      "description": "Placement observed state."
+    },
+    "v1ModelRegistration": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "namespace": {
+          "type": "string"
+        },
+        "phase": {
+          "type": "string",
+          "description": "Pending, Ready, Unhealthy, Failed, or Invalid."
+        },
+        "endpoint": {
+          "type": "string",
+          "description": "Endpoint when Ready; empty otherwise."
+        },
+        "conditions": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "$ref": "#/definitions/v1Condition"
+          }
+        }
+      },
+      "description": "ModelRegistration is a MaaSModelRef's catalog status for a referenced model."
+    },
+    "v1ModelRollout": {
+      "type": "object",
+      "properties": {
+        "strategy": {
+          "$ref": "#/definitions/v1ModelRolloutStrategy"
+        },
+        "max_concurrency": {
+          "type": "string",
+          "description": "Progressive only: clusters at once (integer or percent like \"20%\")."
+        },
+        "max_failures": {
+          "type": "string",
+          "description": "Failed/timed-out clusters tolerated (integer or percent)."
+        },
+        "progress_deadline": {
+          "type": "string",
+          "description": "Progress deadline (e.g. \"5m\", \"None\")."
+        },
+        "min_success_time": {
+          "type": "string",
+          "description": "Hold succeeded slot before next (Progressive)."
+        }
+      },
+      "description": "ManifestWorkReplicaSet rollout strategy."
+    },
+    "v1ModelRolloutStatus": {
+      "type": "object",
+      "properties": {
+        "rolled_out": {
+          "type": "boolean",
+          "description": "True when PlacementRolledOut is True."
+        },
+        "applied": {
+          "type": "boolean",
+          "description": "True when ManifestworkApplied is True."
+        },
+        "reason": {
+          "type": "string",
+          "description": "Reason from the deciding condition."
+        },
+        "works": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "$ref": "#/definitions/v1ModelWorkStatus"
+          },
+          "description": "Per-cluster work summaries when available."
+        },
+        "conditions": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "$ref": "#/definitions/v1Condition"
+          },
+          "description": "MWRS conditions."
+        }
+      },
+      "description": "ManifestWorkReplicaSet observed state."
+    },
+    "v1ModelRolloutStrategy": {
+      "type": "string",
+      "enum": [
+        "MODEL_ROLLOUT_STRATEGY_UNSPECIFIED",
+        "MODEL_ROLLOUT_STRATEGY_ALL",
+        "MODEL_ROLLOUT_STRATEGY_PROGRESSIVE",
+        "MODEL_ROLLOUT_STRATEGY_PROGRESSIVE_PER_GROUP"
+      ],
+      "default": "MODEL_ROLLOUT_STRATEGY_UNSPECIFIED",
+      "description": "Rollout strategy type."
+    },
+    "v1ModelRouter": {
+      "type": "object",
+      "properties": {
+        "gateway_refs": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "$ref": "#/definitions/v1ModelGatewayRef"
+          },
+          "description": "Gateway refs. Empty uses the product default\n(openshift-ingress/openshift-ai-inference)."
+        },
+        "managed_route": {
+          "type": "boolean",
+          "description": "When true, controller manages the HTTPRoute (spec.router.route: {})."
+        },
+        "scheduler": {
+          "type": "boolean",
+          "description": "When true, inference scheduler is created (spec.router.scheduler: {})."
+        }
+      },
+      "description": "Router configuration (spec.router)."
+    },
+    "v1ModelScaling": {
+      "type": "object",
+      "properties": {
+        "min_replicas": {
+          "type": "integer",
+          "format": "int32",
+          "description": "Minimum replicas (default 1 when unset / zero)."
+        },
+        "max_replicas": {
+          "type": "integer",
+          "format": "int32",
+          "description": "Maximum replicas (required when scaling is set)."
+        },
+        "keda": {
+          "type": "boolean",
+          "description": "Whether KEDA scaling is enabled. Must be true when scaling is set."
+        },
+        "triggers": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "$ref": "#/definitions/v1ModelKedaTrigger"
+          },
+          "description": "KEDA scale triggers (at least one required when keda is true)."
+        }
+      },
+      "description": "KEDA-based autoscaling."
+    },
+    "v1ModelSource": {
+      "type": "object",
+      "properties": {
+        "uri": {
+          "type": "string",
+          "description": "Artifact URI (hf://, oci://, s3://, pvc://, http(s)://)."
+        },
+        "name": {
+          "type": "string",
+          "description": "Identifier clients send in the request model field. Defaults to id."
+        }
+      },
+      "description": "Model artifact source (spec.model)."
+    },
+    "v1ModelSpec": {
+      "type": "object",
+      "properties": {
+        "model": {
+          "$ref": "#/definitions/v1ModelSource",
+          "description": "Where the artifact comes from and the name clients send."
+        },
+        "replicas": {
+          "type": "integer",
+          "format": "int32",
+          "description": "Static replica count. Mutually exclusive with scaling."
+        },
+        "base_refs": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "LLMInferenceServiceConfig preset names merged under the spec."
+        },
+        "runtime": {
+          "type": "string",
+          "description": "Optional ServingRuntime / ClusterServingRuntime name."
+        },
+        "router": {
+          "$ref": "#/definitions/v1ModelRouter",
+          "description": "Router / gateway configuration."
+        },
+        "main": {
+          "$ref": "#/definitions/v1ModelContainer",
+          "description": "Main container of the workload template."
+        },
+        "scaling": {
+          "$ref": "#/definitions/v1ModelScaling",
+          "description": "Autoscaling. Mutually exclusive with replicas."
+        },
+        "placement": {
+          "$ref": "#/definitions/v1ModelPlacement",
+          "description": "Where to deploy. Unset: hub-only LLMInferenceService.\nSet: ACM Placement + ManifestWorkReplicaSet named model-\u003cid\u003e."
+        },
+        "rollout": {
+          "$ref": "#/definitions/v1ModelRollout",
+          "description": "ManifestWorkReplicaSet rollout. Only meaningful with placement; unset means All."
+        }
+      },
+      "description": "Desired state of a Model (trimmed LLMInferenceService.spec + ACM placement)."
+    },
+    "v1ModelStatus": {
+      "type": "object",
+      "properties": {
+        "url": {
+          "type": "string",
+          "description": "External URL when known."
+        },
+        "conditions": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "$ref": "#/definitions/v1Condition"
+          },
+          "description": "LLMInferenceService conditions."
+        },
+        "phase": {
+          "$ref": "#/definitions/v1ModelPhase",
+          "description": "Derived summary phase."
+        },
+        "reason": {
+          "type": "string",
+          "description": "Reason of the condition that decided phase."
+        },
+        "message": {
+          "type": "string",
+          "description": "Message of the condition that decided phase."
+        },
+        "placement": {
+          "$ref": "#/definitions/v1ModelPlacementStatus",
+          "description": "Placement status when placement is set."
+        },
+        "rollout": {
+          "$ref": "#/definitions/v1ModelRolloutStatus",
+          "description": "ManifestWorkReplicaSet status when placement is set."
+        },
+        "observed_generation": {
+          "type": "string",
+          "format": "int64",
+          "description": "Observed generation from the LLMInferenceService."
+        }
+      },
+      "description": "Observed state of a Model."
+    },
+    "v1ModelWorkStatus": {
+      "type": "object",
+      "properties": {
+        "cluster": {
+          "type": "string"
+        },
+        "applied": {
+          "type": "string"
+        },
+        "available": {
+          "type": "string"
+        },
+        "progressing": {
+          "type": "string"
+        },
+        "degraded": {
+          "type": "string"
+        }
+      },
+      "description": "One generated ManifestWork summary."
+    },
+    "v1ModelsCreateResponse": {
+      "type": "object",
+      "properties": {
+        "object": {
+          "$ref": "#/definitions/v1Model"
+        }
+      }
+    },
+    "v1ModelsDeleteResponse": {
+      "type": "object"
+    },
+    "v1ModelsGetResponse": {
+      "type": "object",
+      "properties": {
+        "object": {
+          "$ref": "#/definitions/v1Model"
+        }
+      }
+    },
+    "v1ModelsListLocationsResponse": {
+      "type": "object",
+      "properties": {
+        "locations": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Unique sorted `location` labels of AI Grid member clusters that are Available."
+        }
+      },
+      "description": "Response of ListLocations (P7)."
+    },
+    "v1ModelsListResponse": {
+      "type": "object",
+      "properties": {
+        "size": {
+          "type": "integer",
+          "format": "int32"
+        },
+        "total": {
+          "type": "integer",
+          "format": "int32"
+        },
+        "items": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "$ref": "#/definitions/v1Model"
+          }
+        }
+      }
+    },
+    "v1ModelsUpdateResponse": {
+      "type": "object",
+      "properties": {
+        "object": {
+          "$ref": "#/definitions/v1Model"
+        }
+      }
+    },
+    "v1ResourceRefStatus": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "namespace": {
+          "type": "string"
+        },
+        "ready": {
+          "type": "boolean"
+        },
+        "reason": {
+          "type": "string"
+        },
+        "message": {
+          "type": "string"
+        }
+      },
+      "description": "ResourceRefStatus is the state of one object a MaaS resource references or generates."
+    },
+    "v1Subscription": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Unique identifier of the subscription. Equals metadata.name."
+        },
+        "metadata": {
+          "$ref": "#/definitions/v1Metadata"
+        },
+        "spec": {
+          "$ref": "#/definitions/v1SubscriptionSpec"
+        },
+        "status": {
+          "$ref": "#/definitions/v1SubscriptionStatus"
+        }
+      },
+      "description": "Subscription is a MaaS entitlement that binds identity subjects to models\nwith token rate limits and a priority.\n\nIt maps to the spoke-cluster Kubernetes CR MaaSSubscription\n(apiVersion: maas.opendatahub.io/v1alpha1). It is not an OLM Subscription,\nnot an AAP license subscription, and not OSAC SERVICE_TIER_MAAS\n(\"Metal as a Service\").\n\nThe `spec` contains the desired details and may be modified by the user.\nThe `status` contains the current status and is provided by the system."
+    },
+    "v1SubscriptionModelRef": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "Model name (DNS-1123 label)."
+        },
+        "namespace": {
+          "type": "string",
+          "description": "Model namespace. Empty means the platform default model namespace."
+        },
+        "token_rate_limits": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "$ref": "#/definitions/v1TokenRateLimit"
+          },
+          "description": "Token rate limits for this model. Required unless unlimited is true.\nMust be empty when unlimited is true."
+        },
+        "unlimited": {
+          "type": "boolean",
+          "description": "Access without a token budget. Mutually exclusive with token_rate_limits."
+        },
+        "billing_rate": {
+          "$ref": "#/definitions/v1BillingRate",
+          "description": "Cost per token, when set."
+        },
+        "guardrails": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "$ref": "#/definitions/v1GuardrailAttachment"
+          },
+          "description": "Guardrails for this model within the subscription."
+        },
+        "display_name": {
+          "type": "string",
+          "description": "Output enrichment from MaaSModelRef annotations. Ignored on write."
+        },
+        "description": {
+          "type": "string",
+          "description": "Output enrichment from MaaSModelRef annotations. Ignored on write."
+        }
+      },
+      "description": "SubscriptionModelRef references a model and optional token rate limits."
+    },
+    "v1SubscriptionOrganization": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Organization identifier. Non-empty; immutable once set."
+        }
+      },
+      "description": "SubscriptionOrganization identifies the organization that administers a subscription."
+    },
+    "v1SubscriptionOwner": {
+      "type": "object",
+      "properties": {
+        "groups": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "IdP / Kubernetes group names."
+        },
+        "users": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "User names (for example service accounts)."
+        }
+      },
+      "description": "SubscriptionOwner names the groups and users that own the entitlement."
+    },
+    "v1SubscriptionSpec": {
+      "type": "object",
+      "properties": {
+        "owner": {
+          "$ref": "#/definitions/v1SubscriptionOwner",
+          "description": "Identity subjects entitled by this subscription."
+        },
+        "model_refs": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "$ref": "#/definitions/v1SubscriptionModelRef"
+          },
+          "description": "Models this subscription applies to, with optional per-model rate limits."
+        },
+        "priority": {
+          "type": "integer",
+          "format": "int32",
+          "description": "Relative priority among subscriptions (higher wins when policies conflict)."
+        },
+        "organization": {
+          "$ref": "#/definitions/v1SubscriptionOrganization",
+          "description": "Stable organization association. May be set once; then immutable."
+        },
+        "token_metadata": {
+          "$ref": "#/definitions/v1TokenMetadata",
+          "description": "Metadata for token attribution and metering."
+        },
+        "inference_priority": {
+          "type": "integer",
+          "format": "int32",
+          "description": "Scheduling priority for inference under this subscription. Distinct from\npriority. When unset, no InferenceObjective is created."
+        },
+        "guardrails": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "$ref": "#/definitions/v1GuardrailAttachment"
+          },
+          "description": "Guardrail policies attached to every model accessed through this subscription."
+        }
+      },
+      "description": "Desired state of a MaaS Subscription."
+    },
+    "v1SubscriptionStatus": {
+      "type": "object",
+      "properties": {
+        "phase": {
+          "type": "string",
+          "description": "Controller-reported phase (for example \"Active\"). Empty until reconciled."
+        },
+        "conditions": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "$ref": "#/definitions/v1Condition"
+          },
+          "description": "Controller conditions (Ready, SpecPriorityDuplicate, ...)."
+        },
+        "model_ref_statuses": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "$ref": "#/definitions/v1ResourceRefStatus"
+          },
+          "description": "Per referenced model reconciliation status."
+        },
+        "token_rate_limit_statuses": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "$ref": "#/definitions/v1TokenRateLimitStatus"
+          },
+          "description": "Per generated TokenRateLimitPolicy status."
+        }
+      },
+      "description": "Observed state of a MaaS Subscription."
+    },
+    "v1SubscriptionsCreateResponse": {
+      "type": "object",
+      "properties": {
+        "object": {
+          "$ref": "#/definitions/v1Subscription"
+        },
+        "auth_policy": {
+          "$ref": "#/definitions/v1AuthPolicy",
+          "description": "Managed MaaSAuthPolicy created with the subscription (\u003cid\u003e-policy)."
+        }
+      }
+    },
+    "v1SubscriptionsDeleteResponse": {
+      "type": "object"
+    },
+    "v1SubscriptionsGetResponse": {
+      "type": "object",
+      "properties": {
+        "object": {
+          "$ref": "#/definitions/v1Subscription"
+        },
+        "auth_policies": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "$ref": "#/definitions/v1AuthPolicy"
+          },
+          "description": "AuthPolicies in the subscription namespace whose modelRefs intersect the\nsubscription's models (includes the managed \u003cid\u003e-policy when present)."
+        },
+        "model_registrations": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "$ref": "#/definitions/v1ModelRegistration"
+          },
+          "description": "MaaSModelRef status for each referenced model that exists."
+        }
+      }
+    },
+    "v1SubscriptionsListResponse": {
+      "type": "object",
+      "properties": {
+        "size": {
+          "type": "integer",
+          "format": "int32",
+          "description": "Actual number of items returned."
+        },
+        "total": {
+          "type": "integer",
+          "format": "int32",
+          "description": "Total number of items that match the search criteria."
+        },
+        "items": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "$ref": "#/definitions/v1Subscription"
+          },
+          "description": "List of results."
+        }
+      }
+    },
+    "v1SubscriptionsUpdateResponse": {
+      "type": "object",
+      "properties": {
+        "object": {
+          "$ref": "#/definitions/v1Subscription"
+        }
+      }
     },
     "v1Tenant": {
       "type": "object",
@@ -842,6 +2214,52 @@
           "$ref": "#/definitions/v1Tenant"
         }
       }
+    },
+    "v1TokenMetadata": {
+      "type": "object",
+      "properties": {
+        "organization_id": {
+          "type": "string",
+          "description": "Legacy organization id for metering when organization.id is unset."
+        },
+        "cost_center": {
+          "type": "string"
+        },
+        "labels": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        }
+      },
+      "description": "TokenMetadata contains metadata for token attribution and metering."
+    },
+    "v1TokenRateLimit": {
+      "type": "object",
+      "properties": {
+        "limit": {
+          "type": "string",
+          "format": "int64",
+          "description": "Maximum tokens allowed in the window. CRD range is typically 1..1e9."
+        },
+        "window": {
+          "type": "string",
+          "description": "Window duration, e.g. \"1m\", \"30s\", \"2h\". Pattern: ^[1-9]\\d{0,3}(s|m|h)$."
+        }
+      },
+      "description": "TokenRateLimit caps token usage over a time window."
+    },
+    "v1TokenRateLimitStatus": {
+      "type": "object",
+      "properties": {
+        "ref": {
+          "$ref": "#/definitions/v1ResourceRefStatus"
+        },
+        "model": {
+          "type": "string"
+        }
+      },
+      "description": "TokenRateLimitStatus reports a generated TokenRateLimitPolicy and its model."
     }
   }
 }

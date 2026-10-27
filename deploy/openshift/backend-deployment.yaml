@@ -54,6 +54,11 @@ spec:
                 secretKeyRef:
                   name: ai-grid-provider-backend-keycloak
                   key: password
+            # Match Kind / binary defaults (cmd/ai-grid-provider-backend).
+            - name: AI_GRID_MODELS_NAMESPACE
+              value: ai-grid-models
+            - name: AI_GRID_SUBSCRIPTION_NAMESPACE
+              value: models-as-a-service
           ports:
             - name: grpc
               containerPort: 8080

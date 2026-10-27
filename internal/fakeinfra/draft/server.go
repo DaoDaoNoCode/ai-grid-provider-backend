@@ -40,7 +40,6 @@ import (
 	"google.golang.org/grpc/reflection"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
-	"google.golang.org/protobuf/types/known/timestamppb"
 
 	aigriddraftv1 "github.com/osac-project/ai-grid-provider-backend/gen/ai_grid/draft/v1"
 )
@@ -54,39 +53,15 @@ type Server struct {
 	// Services whose shape is drafted but not agreed answer Unimplemented, as
 	// the real server does for a stub; see proto/ai_grid/draft/v1/*_service.proto.
 	aigriddraftv1.UnimplementedGridServer
-	aigriddraftv1.UnimplementedModelsServer
 	aigriddraftv1.UnimplementedCatalogItemsServer
-	aigriddraftv1.UnimplementedSubscriptionsServer
 
 	mu       sync.RWMutex
 	clusters map[string]*aigriddraftv1.ManagedCluster
 	tenants  map[string]*aigriddraftv1.Tenant
-	models   map[string]*model
 	access   Access
 
-	// subscriptions and authPolicies are the MaaS objects, stored without
-	// status (it is derived on every read, see subscriptionStatus);
-	// managedPolicies are the policies CreateSubscription made, which
-	// DeleteSubscription removes with their subscription, and policyCreated
-	// when it made them (wall time). liveSubscriptions are the fixture
-	// subscriptions without createTime, created when the fake starts.
-	subscriptions     map[string]*aigriddraftv1.Subscription
-	authPolicies      map[string]*aigriddraftv1.AuthPolicy
-	managedPolicies   map[string]bool
-	policyCreated     map[string]time.Time
-	liveSubscriptions map[string]bool
-
-	// presets are the installed LLMInferenceServiceConfigs baseRefs resolve
-	// against; bindings the ManagedClusterSets bound per model namespace
-	// (absent namespace: `global`); capabilities what GetHubCapabilities
-	// answers and what gates a placed model.
-	presets      *Presets
-	bindings     map[string][]string
+	// capabilities is what GetHubCapabilities answers (MWRS gate, observability, ACM version).
 	capabilities *aigriddraftv1.HubCapabilities
-	// newSuffix draws generated ManifestWork name suffixes; referencedBy is
-	// DeleteModel's in-use check (see SetReferencedBy).
-	newSuffix    func() string
-	referencedBy func(namespace, name string) []string
 	// resourceVersion is the last value handed out, like etcd's revision:
 	// one counter for the whole store, bumped on every write.
 	resourceVersion int64
@@ -132,31 +107,16 @@ func New(fx *Fixtures, logger *slog.Logger) (*Server, error) {
 	s := &Server{
 		clusters:     map[string]*aigriddraftv1.ManagedCluster{},
 		tenants:      map[string]*aigriddraftv1.Tenant{},
-		models:       map[string]*model{},
 		access:       fx.Access,
-		presets:      fx.Presets,
-		bindings:     fx.ModelBindings,
 		capabilities: &aigriddraftv1.HubCapabilities{ManifestWorkReplicaSetEnabled: true, ObservabilityInstalled: fx.ObservabilityInstalled, AcmVersion: fx.ACMVersion},
 		speed:        fx.Speed,
 		clock:        time.Now,
 		newID:        newUUID,
-		newSuffix:    newWorkSuffix,
 		Latency:      fx.Latency.Duration(),
 		logger:       logger,
-
-		subscriptions:     map[string]*aigriddraftv1.Subscription{},
-		authPolicies:      map[string]*aigriddraftv1.AuthPolicy{},
-		managedPolicies:   map[string]bool{},
-		policyCreated:     map[string]time.Time{},
-		liveSubscriptions: map[string]bool{},
 	}
-	// A model is in use while a subscription or an auth policy references it.
-	s.referencedBy = s.maasReferencing
 	if s.speed <= 0 {
 		s.speed = 1
-	}
-	if s.presets == nil {
-		s.presets = defaultPresets()
 	}
 	if fx.ManifestWorkReplicaSetEnabled != nil {
 		s.capabilities.ManifestWorkReplicaSetEnabled = *fx.ManifestWorkReplicaSetEnabled
@@ -207,38 +167,6 @@ func New(fx *Fixtures, logger *slog.Logger) (*Server, error) {
 	}
 	s.realmMissing = fx.TenantsRealmMissing
 	s.orgsDisabled = fx.TenantsOrgsDisabled
-	for _, m := range fx.Models {
-		if err := s.seedModel(m); err != nil {
-			return nil, err
-		}
-	}
-	s.reconcileModels(s.start)
-	for _, sub := range fx.Subscriptions {
-		if sub.GetName() == "" {
-			return nil, fmt.Errorf("fixture subscription without a name")
-		}
-		if _, dup := s.subscriptions[sub.GetName()]; dup {
-			return nil, fmt.Errorf("fixture subscription %q listed twice", sub.GetName())
-		}
-		sub = proto.Clone(sub).(*aigriddraftv1.Subscription)
-		if sub.GetResourceVersion() == "" {
-			sub.ResourceVersion = "1"
-		}
-		if sub.GetCreateTime() == nil {
-			sub.CreateTime = timestamppb.New(s.start)
-			s.liveSubscriptions[sub.GetName()] = true
-		}
-		s.subscriptions[sub.GetName()] = sub
-	}
-	for _, p := range fx.AuthPolicies {
-		if p.GetName() == "" {
-			return nil, fmt.Errorf("fixture auth policy without a name")
-		}
-		if _, dup := s.authPolicies[p.GetName()]; dup {
-			return nil, fmt.Errorf("fixture auth policy %q listed twice", p.GetName())
-		}
-		s.authPolicies[p.GetName()] = proto.Clone(p).(*aigriddraftv1.AuthPolicy)
-	}
 	return s, nil
 }
 
@@ -255,26 +183,12 @@ func (s *Server) SetIDGenerator(next func() string) {
 }
 
 // SetClock replaces the time source and restarts the scenario clock from it,
-// so tests drive transitions deterministically. The fixture models and
-// subscriptions restart from the new clock (a fixture without
-// creationTimestamp or createTime is created at the new start); objects
-// created through the API keep their times.
+// so tests drive transitions deterministically.
 func (s *Server) SetClock(clock func() time.Time) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.clock = clock
 	s.start = clock()
-	for _, m := range s.models {
-		if m.live || m.obj.GetMetadata().GetCreationTimestamp().AsTime().Before(s.start) {
-			s.resetSeeded(m)
-		}
-	}
-	s.reconcileModels(s.start)
-	for name := range s.liveSubscriptions {
-		if sub, ok := s.subscriptions[name]; ok {
-			sub.CreateTime = timestamppb.New(s.start)
-		}
-	}
 }
 
 // Register attaches every service of the draft proto, the health service and
@@ -285,9 +199,7 @@ func (s *Server) Register(srv *grpc.Server) {
 	aigriddraftv1.RegisterManagedClustersServer(srv, s)
 	aigriddraftv1.RegisterTenantsServer(srv, s)
 	aigriddraftv1.RegisterGridServer(srv, s)
-	aigriddraftv1.RegisterModelsServer(srv, s)
 	aigriddraftv1.RegisterCatalogItemsServer(srv, s)
-	aigriddraftv1.RegisterSubscriptionsServer(srv, s)
 	h := health.NewServer()
 	h.SetServingStatus("", healthv1.HealthCheckResponse_SERVING)
 	healthv1.RegisterHealthServer(srv, h)
@@ -436,8 +348,8 @@ func (s *Server) rejected(token string) error {
 // The conventions fix only the code; the message text is the console's
 // proposal (keycloak.md 8.2), nothing on the hub or in Keycloak produces it.
 //
-// The message names what the caller tried to change (`what`: "tenants",
-// "models") and then the rule, so a viewer who creates a tenant is not told
+// The message names what the caller tried to change (`what`: "tenants")
+// and then the rule, so a viewer who creates a tenant is not told
 // about a resource they never touched.
 func (s *Server) authorizeProviderAdmin(ctx context.Context, token, what string) error {
 	user, allowed, err := s.isProviderAdmin(ctx, token)

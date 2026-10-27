@@ -13,6 +13,13 @@ import (
 	aigriddraftv1 "github.com/osac-project/ai-grid-provider-backend/gen/ai_grid/draft/v1"
 )
 
+// Condition status short names used by setCondition and the cluster tests.
+const (
+	cTrue    = aigriddraftv1.ConditionStatus_CONDITION_STATUS_TRUE
+	cFalse   = aigriddraftv1.ConditionStatus_CONDITION_STATUS_FALSE
+	cUnknown = aigriddraftv1.ConditionStatus_CONDITION_STATUS_UNSPECIFIED
+)
+
 // Strings the hub writes on a ManagedCluster. Each group cites the upstream
 // source that writes it (repo:path Lline, clones of open-cluster-management-io
 // ocm and api, stolostron managedcluster-import-controller,
@@ -145,9 +152,13 @@ const (
 	LabelOpenShiftMajor    = "openshiftVersion-major"
 	LabelOpenShiftMajorMin = "openshiftVersion-major-minor"
 	LabelClusterSet        = "cluster.open-cluster-management.io/clusterset"
-	LabelLocalCluster      = "local-cluster"
-	LabelAddonPrefix       = "feature.open-cluster-management.io/addon-"
-	LabelAutoDetect        = "auto-detect"
+	// ClusterSetDefault is the hub's built-in set (acm.md): clusters whose
+	// clusterset label is "default". Kept after draft Models/Placement retirement
+	// because the ManagedCluster mutating webhook still fills an empty label.
+	ClusterSetDefault = "default"
+	LabelLocalCluster = "local-cluster"
+	LabelAddonPrefix  = "feature.open-cluster-management.io/addon-"
+	LabelAutoDetect   = "auto-detect"
 	// LabelManagedBy accompanies the OpenShiftDedicated -> OpenShift vendor
 	// rewrite (autodetect_controller.go L75-79).
 	LabelManagedBy = "managed-by"

@@ -1,0 +1,125 @@
+syntax = "proto3";
+
+package ai_grid.v1;
+
+import "ai_grid/v1/subscription_type.proto";
+import "google/api/annotations.proto";
+import "google/protobuf/field_mask.proto";
+
+option go_package = "github.com/osac-project/ai-grid-provider-backend/gen/ai_grid/v1;aigridv1";
+
+message SubscriptionsListRequest {
+  // Index of the first result. If not specified the default value will be zero.
+  optional int32 offset = 1;
+
+  // Maximum number of results to be returned by the server. When not specified all
+  // the results will be returned.
+  optional int32 limit = 2;
+
+  // CEL over `this` (a Subscription, proto field names) and `now` (server time),
+  // with cel-go's standard library plus its strings extension. Empty means all.
+  // Evaluated in memory before order and paging. Indexing a missing map key is
+  // an error (use the `in` guard), not false.
+  optional string filter = 3;
+
+  // Sort key. Empty means `id` ascending. Allowed: id, -id, priority, -priority,
+  // metadata.name, -metadata.name (`-` = descending). Any other value is
+  // InvalidArgument. Applied after filter and before offset/limit.
+  optional string order = 4;
+}
+
+message SubscriptionsListResponse {
+  // Actual number of items returned.
+  int32 size = 1;
+
+  // Total number of items that match the search criteria.
+  int32 total = 2;
+
+  // List of results.
+  repeated Subscription items = 3;
+}
+
+message SubscriptionsGetRequest {
+  // Subscription id (equals metadata.name).
+  string id = 1;
+}
+
+message SubscriptionsGetResponse {
+  Subscription object = 1;
+
+  // AuthPolicies in the subscription namespace whose modelRefs intersect the
+  // subscription's models (includes the managed <id>-policy when present).
+  repeated AuthPolicy auth_policies = 2;
+
+  // MaaSModelRef status for each referenced model that exists.
+  repeated ModelRegistration model_registrations = 3;
+}
+
+message SubscriptionsCreateRequest {
+  Subscription object = 1;
+}
+
+message SubscriptionsCreateResponse {
+  Subscription object = 1;
+
+  // Managed MaaSAuthPolicy created with the subscription (<id>-policy).
+  AuthPolicy auth_policy = 2;
+}
+
+message SubscriptionsUpdateRequest {
+  Subscription object = 1;
+  google.protobuf.FieldMask update_mask = 2;
+
+  // Lock enables optimistic locking against metadata.version.
+  bool lock = 3;
+}
+
+message SubscriptionsUpdateResponse {
+  Subscription object = 1;
+}
+
+message SubscriptionsDeleteRequest {
+  // Subscription id (equals metadata.name).
+  string id = 1;
+
+  // Expected version: when set (non-zero), delete fails with Aborted unless
+  // it equals the stored metadata.version. Zero skips the check. Console
+  // If-Match maps here (same pattern as Models Delete).
+  int32 resource_version = 2;
+}
+
+message SubscriptionsDeleteResponse {}
+
+// Subscriptions manage MaaS entitlements (namespaced MaaSSubscription CRs).
+// Create/Update/Delete also maintain a managed MaaSAuthPolicy named <id>-policy.
+service Subscriptions {
+  rpc List(SubscriptionsListRequest) returns (SubscriptionsListResponse) {
+    option (google.api.http) = {get: "/api/v1/subscriptions"};
+  }
+
+  // Returns the subscription plus covering auth policies and model registrations.
+  // Full response body (not unwrapped to object alone).
+  rpc Get(SubscriptionsGetRequest) returns (SubscriptionsGetResponse) {
+    option (google.api.http) = {get: "/api/v1/subscriptions/{id}"};
+  }
+
+  // Creates the subscription and a managed <id>-policy. Full response body.
+  rpc Create(SubscriptionsCreateRequest) returns (SubscriptionsCreateResponse) {
+    option (google.api.http) = {
+      post: "/api/v1/subscriptions"
+      body: "object"
+    };
+  }
+
+  rpc Update(SubscriptionsUpdateRequest) returns (SubscriptionsUpdateResponse) {
+    option (google.api.http) = {
+      patch: "/api/v1/subscriptions/{object.id}"
+      body: "object"
+      response_body: "object"
+    };
+  }
+
+  rpc Delete(SubscriptionsDeleteRequest) returns (SubscriptionsDeleteResponse) {
+    option (google.api.http) = {delete: "/api/v1/subscriptions/{id}"};
+  }
+}

@@ -1,0 +1,84 @@
+{
+  "_comment": "MaaSSubscription CRs for Subscriptions CRUD against make dev-fake. Namespace models-as-a-service matches AI_GRID_SUBSCRIPTION_NAMESPACE. Model refs use llm (backend default). Content adapted from the console's engineering/onboarding fixtures.",
+  "apiVersion": "maas.opendatahub.io/v1alpha1",
+  "kind": "MaaSSubscriptionList",
+  "metadata": {},
+  "items": [
+    {
+      "apiVersion": "maas.opendatahub.io/v1alpha1",
+      "kind": "MaaSSubscription",
+      "metadata": {
+        "name": "engineering",
+        "namespace": "models-as-a-service",
+        "uid": "a1000001-0000-4000-8000-000000000001",
+        "resourceVersion": "1",
+        "generation": 1,
+        "creationTimestamp": "2026-09-01T09:00:00Z",
+        "annotations": {
+          "openshift.io/display-name": "Engineering",
+          "openshift.io/description": "Production models for the engineering team."
+        }
+      },
+      "spec": {
+        "owner": {
+          "groups": [{ "name": "engineering" }],
+          "users": []
+        },
+        "modelRefs": [
+          {
+            "name": "granite-8b-instruct",
+            "namespace": "llm",
+            "tokenRateLimits": [
+              { "limit": 100000, "window": "1h" },
+              { "limit": 10000, "window": "1m" }
+            ]
+          }
+        ],
+        "priority": 100,
+        "tokenMetadata": {
+          "organizationId": "3f1c9a72-5b6e-4d2a-8c01-2d3e4f5a6b7c",
+          "costCenter": "engineering",
+          "labels": { "environment": "production" }
+        }
+      },
+      "status": {
+        "phase": "Active"
+      }
+    },
+    {
+      "apiVersion": "maas.opendatahub.io/v1alpha1",
+      "kind": "MaaSSubscription",
+      "metadata": {
+        "name": "onboarding",
+        "namespace": "models-as-a-service",
+        "uid": "a1000001-0000-4000-8000-000000000002",
+        "resourceVersion": "1",
+        "generation": 1,
+        "creationTimestamp": "2026-09-04T09:00:00Z",
+        "annotations": {
+          "openshift.io/display-name": "Onboarding",
+          "openshift.io/description": "Trial access for new teams."
+        }
+      },
+      "spec": {
+        "owner": {
+          "groups": [{ "name": "onboarding" }],
+          "users": []
+        },
+        "modelRefs": [
+          {
+            "name": "tiny-llm",
+            "namespace": "llm",
+            "tokenRateLimits": [
+              { "limit": 100, "window": "1m" }
+            ]
+          }
+        ],
+        "priority": 1
+      },
+      "status": {
+        "phase": "Active"
+      }
+    }
+  ]
+}

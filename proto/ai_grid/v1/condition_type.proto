@@ -1,0 +1,38 @@
+syntax = "proto3";
+
+package ai_grid.v1;
+
+import "google/protobuf/timestamp.proto";
+
+option go_package = "github.com/osac-project/ai-grid-provider-backend/gen/ai_grid/v1;aigridv1";
+
+// Status of a condition. Kubernetes `Unknown` is reported as UNSPECIFIED.
+enum ConditionStatus {
+  // The system cannot decide whether the object is in the condition.
+  CONDITION_STATUS_UNSPECIFIED = 0;
+  // The object is in the condition.
+  CONDITION_STATUS_TRUE = 1;
+  // The object is not in the condition.
+  CONDITION_STATUS_FALSE = 2;
+}
+
+// One entry of a Kubernetes-style status.conditions list.
+message Condition {
+  // Condition type as defined by the owning controller.
+  string type = 1;
+
+  // Whether the object is in the condition.
+  ConditionStatus status = 2;
+
+  // Last time the condition changed from one status to another.
+  google.protobuf.Timestamp last_transition_time = 3;
+
+  // Machine-readable reason in CamelCase, when the controller provides one.
+  optional string reason = 4;
+
+  // Human-readable detail for debugging.
+  optional string message = 5;
+
+  // Generation of the object the condition was computed for; zero when unknown.
+  int64 observed_generation = 6;
+}

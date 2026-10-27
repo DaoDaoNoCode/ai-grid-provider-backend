@@ -8,16 +8,22 @@ import (
 	"os"
 	"path/filepath"
 	"time"
+
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 )
 
 // Fixture files the hub reads from a fixtures directory (fixtures/README.md
 // describes each one). A missing file leaves its part empty or at its
 // default; the directory itself must exist.
 const (
-	ManagedClustersFile = "managedclusters.json"
-	AccessFile          = "access.json"
-	ScenariosFile       = "scenarios.json"
-	SettingsFile        = "settings.json"
+	ManagedClustersFile      = "managedclusters.json"
+	AccessFile               = "access.json"
+	ScenariosFile            = "scenarios.json"
+	SettingsFile             = "settings.json"
+	MaaSSubscriptionsFile    = "maassubscriptions.json"
+	MaaSAuthPoliciesFile     = "maasauthpolicies.json"
+	MaaSModelRefsFile        = "maasmodelrefs.json"
+	LLMInferenceServicesFile = "llminferenceservices.json"
 )
 
 // Defaults for the backend's ServiceAccount when access.json names none: the
@@ -43,6 +49,12 @@ type Fixtures struct {
 	Settings Settings
 	// Scenarios are the timed transitions applied to Clusters.
 	Scenarios []ScenarioEvent
+	// MaaS CRs for Subscriptions (optional; missing files leave empty stores).
+	MaaSSubscriptions []unstructured.Unstructured
+	MaaSAuthPolicies  []unstructured.Unstructured
+	MaaSModelRefs     []unstructured.Unstructured
+	// LLMInferenceService CRs for Models (optional; missing means empty List).
+	LLMInferenceServices []unstructured.Unstructured
 }
 
 // Access decides who the fake hub accepts. It is the console fake's
@@ -141,7 +153,55 @@ func LoadFixtures(dir string) (*Fixtures, error) {
 		return nil, err
 	}
 	fx.Scenarios = scenarios.Events
+
+	if items, err := loadMAASList(filepath.Join(dir, MaaSSubscriptionsFile), maasSubscriptionKind); err != nil {
+		return nil, err
+	} else {
+		fx.MaaSSubscriptions = items
+	}
+	if items, err := loadMAASList(filepath.Join(dir, MaaSAuthPoliciesFile), maasAuthPolicyKind); err != nil {
+		return nil, err
+	} else {
+		fx.MaaSAuthPolicies = items
+	}
+	if items, err := loadMAASList(filepath.Join(dir, MaaSModelRefsFile), maasModelRefKind); err != nil {
+		return nil, err
+	} else {
+		fx.MaaSModelRefs = items
+	}
+	if items, err := loadUnstructuredList(filepath.Join(dir, LLMInferenceServicesFile), llmInferenceAPIVersion, llmInferenceKind); err != nil {
+		return nil, err
+	} else {
+		fx.LLMInferenceServices = items
+	}
 	return fx, nil
+}
+
+func loadMAASList(path, kind string) ([]unstructured.Unstructured, error) {
+	return loadUnstructuredList(path, maasAPIVersion, kind)
+}
+
+func loadUnstructuredList(path, apiVersion, kind string) ([]unstructured.Unstructured, error) {
+	var envelope struct {
+		Comment    string                      `json:"_comment,omitempty"`
+		APIVersion string                      `json:"apiVersion"`
+		Kind       string                      `json:"kind"`
+		Metadata   map[string]any              `json:"metadata"`
+		Items      []unstructured.Unstructured `json:"items"`
+	}
+	ok, err := readStrict(path, &envelope)
+	if err != nil {
+		return nil, err
+	}
+	if !ok {
+		return nil, nil
+	}
+	wantKind := kind + "List"
+	if envelope.APIVersion != apiVersion || envelope.Kind != wantKind {
+		return nil, fmt.Errorf("%s: want apiVersion %s and kind %s, got %q and %q",
+			filepath.Base(path), apiVersion, wantKind, envelope.APIVersion, envelope.Kind)
+	}
+	return envelope.Items, nil
 }
 
 // readStrict decodes path into v, rejecting unknown fields and trailing data.

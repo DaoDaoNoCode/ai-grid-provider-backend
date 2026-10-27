@@ -27,6 +27,28 @@ var managedClustersResource = schema.GroupVersionResource{
 	Group: "cluster.open-cluster-management.io", Version: "v1", Resource: "managedclusters",
 }
 
+var maasModelRefsResource = schema.GroupVersionResource{
+	Group: "maas.opendatahub.io", Version: "v1alpha1", Resource: "maasmodelrefs",
+}
+var maasSubscriptionsResource = schema.GroupVersionResource{
+	Group: "maas.opendatahub.io", Version: "v1alpha1", Resource: "maassubscriptions",
+}
+var maasAuthPoliciesResource = schema.GroupVersionResource{
+	Group: "maas.opendatahub.io", Version: "v1alpha1", Resource: "maasauthpolicies",
+}
+var llmInferenceServicesResource = schema.GroupVersionResource{
+	Group: "serving.kserve.io", Version: "v1alpha2", Resource: "llminferenceservices",
+}
+var placementsResource = schema.GroupVersionResource{
+	Group: "cluster.open-cluster-management.io", Version: "v1beta1", Resource: "placements",
+}
+var placementDecisionsResource = schema.GroupVersionResource{
+	Group: "cluster.open-cluster-management.io", Version: "v1beta1", Resource: "placementdecisions",
+}
+var manifestWorkReplicaSetsResource = schema.GroupVersionResource{
+	Group: "work.open-cluster-management.io", Version: "v1alpha1", Resource: "manifestworkreplicasets",
+}
+
 func TestBuilderValidation(t *testing.T) {
 	t.Parallel()
 
@@ -206,6 +228,136 @@ func TestClientListTenants(t *testing.T) {
 	}
 }
 
+func TestClientModelsCRUD(t *testing.T) {
+	t.Parallel()
+
+	c, cleanup := startTestClient(t, nil, fakeOrganizationLister{})
+	defer cleanup()
+	ctx := context.Background()
+
+	items, err := c.ListModels(ctx)
+	if err != nil {
+		t.Fatalf("ListModels() error = %v", err)
+	}
+	if len(items) != 0 {
+		t.Fatalf("ListModels() len = %d, want 0", len(items))
+	}
+
+	replicas := int32(1)
+	created, err := c.CreateModel(ctx, &aigridv1.Model{
+		Id: "client-opt",
+		Metadata: &aigridv1.Metadata{
+			Name: "client-opt",
+			Annotations: map[string]string{
+				"openshift.io/display-name": "Client OPT",
+			},
+		},
+		Spec: &aigridv1.ModelSpec{
+			Model: &aigridv1.ModelSource{
+				Uri:  "hf://facebook/opt-125m",
+				Name: "facebook/opt-125m",
+			},
+			Replicas: &replicas,
+			Main: &aigridv1.ModelContainer{
+				Image:    "quay.io/example/vllm:test",
+				Requests: map[string]string{"cpu": "100m", "memory": "1Gi"},
+				Limits:   map[string]string{"cpu": "1", "memory": "2Gi"},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("CreateModel() error = %v", err)
+	}
+	if created.GetId() != "client-opt" {
+		t.Fatalf("CreateModel id = %q", created.GetId())
+	}
+
+	got, err := c.GetModel(ctx, "client-opt")
+	if err != nil {
+		t.Fatalf("GetModel() error = %v", err)
+	}
+	if got.GetSpec().GetModel().GetUri() != "hf://facebook/opt-125m" {
+		t.Fatalf("uri = %q", got.GetSpec().GetModel().GetUri())
+	}
+
+	replicas = 2
+	got.Spec.Replicas = &replicas
+	updated, err := c.UpdateModel(ctx, got, &fieldmaskpb.FieldMask{Paths: []string{"spec.replicas"}})
+	if err != nil {
+		t.Fatalf("UpdateModel() error = %v", err)
+	}
+	if updated.GetSpec().GetReplicas() != 2 {
+		t.Fatalf("updated replicas = %v", updated.GetSpec().Replicas)
+	}
+
+	if err := c.DeleteModel(ctx, "client-opt"); err != nil {
+		t.Fatalf("DeleteModel() error = %v", err)
+	}
+	_, err = c.GetModel(ctx, "client-opt")
+	if status.Code(err) != codes.NotFound {
+		t.Fatalf("Get after delete code = %v (%v)", status.Code(err), err)
+	}
+}
+
+func TestClientSubscriptionsCRUD(t *testing.T) {
+	t.Parallel()
+
+	c, cleanup := startTestClient(t, nil, fakeOrganizationLister{})
+	defer cleanup()
+	ctx := context.Background()
+
+	items, err := c.ListSubscriptions(ctx)
+	if err != nil {
+		t.Fatalf("ListSubscriptions() error = %v", err)
+	}
+	if len(items) != 0 {
+		t.Fatalf("ListSubscriptions() len = %d, want 0", len(items))
+	}
+
+	created, err := c.CreateSubscription(ctx, &aigridv1.Subscription{
+		Id:       "free-subscription",
+		Metadata: &aigridv1.Metadata{Name: "free-subscription"},
+		Spec: &aigridv1.SubscriptionSpec{
+			Owner: &aigridv1.SubscriptionOwner{Groups: []string{"system:authenticated"}},
+			ModelRefs: []*aigridv1.SubscriptionModelRef{
+				{Name: "sim-model", TokenRateLimits: []*aigridv1.TokenRateLimit{{Limit: 100, Window: "1m"}}},
+			},
+			Priority: 10,
+		},
+	})
+	if err != nil {
+		t.Fatalf("CreateSubscription() error = %v", err)
+	}
+	if created.GetId() != "free-subscription" {
+		t.Fatalf("CreateSubscription id = %q", created.GetId())
+	}
+
+	got, err := c.GetSubscription(ctx, "free-subscription")
+	if err != nil {
+		t.Fatalf("GetSubscription() error = %v", err)
+	}
+	if got.GetSpec().GetPriority() != 10 {
+		t.Fatalf("priority = %d", got.GetSpec().GetPriority())
+	}
+
+	got.Spec.Priority = 20
+	updated, err := c.UpdateSubscription(ctx, got, nil)
+	if err != nil {
+		t.Fatalf("UpdateSubscription() error = %v", err)
+	}
+	if updated.GetSpec().GetPriority() != 20 {
+		t.Fatalf("updated priority = %d", updated.GetSpec().GetPriority())
+	}
+
+	if err := c.DeleteSubscription(ctx, "free-subscription"); err != nil {
+		t.Fatalf("DeleteSubscription() error = %v", err)
+	}
+	_, err = c.GetSubscription(ctx, "free-subscription")
+	if status.Code(err) != codes.NotFound {
+		t.Fatalf("Get after delete code = %v (%v)", status.Code(err), err)
+	}
+}
+
 func TestClientTenantCRUD(t *testing.T) {
 	t.Parallel()
 
@@ -332,7 +484,14 @@ func startTestClient(t *testing.T, objects []runtime.Object, orgs organizationCl
 	dynamicClient := fake.NewSimpleDynamicClientWithCustomListKinds(
 		runtime.NewScheme(),
 		map[schema.GroupVersionResource]string{
-			managedClustersResource: "ManagedClusterList",
+			managedClustersResource:         "ManagedClusterList",
+			maasSubscriptionsResource:       "MaaSSubscriptionList",
+			maasAuthPoliciesResource:        "MaaSAuthPolicyList",
+			maasModelRefsResource:           "MaaSModelRefList",
+			llmInferenceServicesResource:    "LLMInferenceServiceList",
+			placementsResource:              "PlacementList",
+			placementDecisionsResource:      "PlacementDecisionList",
+			manifestWorkReplicaSetsResource: "ManifestWorkReplicaSetList",
 		},
 		objects...,
 	)
@@ -353,6 +512,19 @@ func startTestClient(t *testing.T, objects []runtime.Object, orgs organizationCl
 	if err != nil {
 		t.Fatalf("build Tenants server: %v", err)
 	}
+	modelsServer, err := servers.NewModelsServer().
+		SetDynamicClient(dynamicClient).
+		SetManifestWorkReplicaSetEnabled(true).
+		Build()
+	if err != nil {
+		t.Fatalf("build Models server: %v", err)
+	}
+	subscriptionsServer, err := servers.NewSubscriptionsServer().
+		SetDynamicClient(dynamicClient).
+		Build()
+	if err != nil {
+		t.Fatalf("build Subscriptions server: %v", err)
+	}
 
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -364,6 +536,8 @@ func startTestClient(t *testing.T, objects []runtime.Object, orgs organizationCl
 	aigridv1connect.RegisterAiGridHandler(server, aiGridServer)
 	aigridv1connect.RegisterClustersHandler(server, clustersServer)
 	aigridv1connect.RegisterTenantsHandler(server, tenantsServer)
+	aigridv1connect.RegisterModelsHandler(server, modelsServer)
+	aigridv1connect.RegisterSubscriptionsHandler(server, subscriptionsServer)
 	mux := http.NewServeMux()
 	connecthttp.Mount(mux, server)
 	apiServer := h2cServer(mux)

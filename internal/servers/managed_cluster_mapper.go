@@ -4,6 +4,7 @@ import (
 	"strconv"
 	"strings"
 
+	connect "connectrpc.com/connect/v2"
 	aigridv1 "github.com/osac-project/ai-grid-provider-backend/gen/ai_grid/v1"
 	"google.golang.org/protobuf/types/known/timestamppb"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -89,6 +90,32 @@ func stringMapToInterfaceMap(in map[string]string) map[string]interface{} {
 		out[k] = v
 	}
 	return out
+}
+
+// replaceStringMapPatch builds a JSON Merge Patch map that replaces current
+// with next as a whole field: keys present only in current become null (delete),
+// keys in next are set, and preserve keys are always written (backend-owned).
+func replaceStringMapPatch(current, next, preserve map[string]string) map[string]interface{} {
+	out := make(map[string]interface{}, len(current)+len(next)+len(preserve))
+	for k, v := range next {
+		out[k] = v
+	}
+	for k, v := range preserve {
+		out[k] = v
+	}
+	for k := range current {
+		if _, ok := out[k]; !ok {
+			out[k] = nil
+		}
+	}
+	return out
+}
+
+func validateListLimit(limit *int32) error {
+	if limit != nil && *limit < 0 {
+		return connect.NewError(connect.CodeInvalidArgument, "limit must not be negative")
+	}
+	return nil
 }
 
 func applyListWindow[T any](items []T, offset, limit *int32) (page []T, total int32) {

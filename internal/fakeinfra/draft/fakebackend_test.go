@@ -633,9 +633,7 @@ func TestUnimplementedMethodsCatchesStubs(t *testing.T) {
 	aigriddraftv1.RegisterManagedClustersServer(srv, aigriddraftv1.UnimplementedManagedClustersServer{})
 	aigriddraftv1.RegisterTenantsServer(srv, aigriddraftv1.UnimplementedTenantsServer{})
 	aigriddraftv1.RegisterGridServer(srv, aigriddraftv1.UnimplementedGridServer{})
-	aigriddraftv1.RegisterModelsServer(srv, aigriddraftv1.UnimplementedModelsServer{})
 	aigriddraftv1.RegisterCatalogItemsServer(srv, aigriddraftv1.UnimplementedCatalogItemsServer{})
-	aigriddraftv1.RegisterSubscriptionsServer(srv, aigriddraftv1.UnimplementedSubscriptionsServer{})
 	missing, called := unimplementedMethods(t, srv)
 	if len(called) == 0 || !slices.Equal(missing, called) {
 		t.Errorf("stub-only server: got missing %v, want every method %v", missing, called)
