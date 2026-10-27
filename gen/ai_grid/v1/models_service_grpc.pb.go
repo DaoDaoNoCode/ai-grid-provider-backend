@@ -44,9 +44,10 @@ type ModelsClient interface {
 	Update(ctx context.Context, in *ModelsUpdateRequest, opts ...grpc.CallOption) (*ModelsUpdateResponse, error)
 	Delete(ctx context.Context, in *ModelsDeleteRequest, opts ...grpc.CallOption) (*ModelsDeleteResponse, error)
 	// Locations a model can be placed on: unique sorted names of the
-	// ManagedClusters that are AI Grid members (ai-grid/enabled and
-	// ai-grid/provisioned "true") and Available. A location is a cluster: the
-	// values a placement's `name In [...]` takes.
+	// ManagedClusters labelled ai-grid/enabled "true" and ai-grid/role
+	// inference or combined that are Available and Compliant with the ready
+	// Policy (AI_GRID_READY_POLICY). A location is a cluster: the values a
+	// placement's `name In [...]` takes.
 	ListLocations(ctx context.Context, in *ModelsListLocationsRequest, opts ...grpc.CallOption) (*ModelsListLocationsResponse, error)
 }
 
@@ -135,9 +136,10 @@ type ModelsServer interface {
 	Update(context.Context, *ModelsUpdateRequest) (*ModelsUpdateResponse, error)
 	Delete(context.Context, *ModelsDeleteRequest) (*ModelsDeleteResponse, error)
 	// Locations a model can be placed on: unique sorted names of the
-	// ManagedClusters that are AI Grid members (ai-grid/enabled and
-	// ai-grid/provisioned "true") and Available. A location is a cluster: the
-	// values a placement's `name In [...]` takes.
+	// ManagedClusters labelled ai-grid/enabled "true" and ai-grid/role
+	// inference or combined that are Available and Compliant with the ready
+	// Policy (AI_GRID_READY_POLICY). A location is a cluster: the values a
+	// placement's `name In [...]` takes.
 	ListLocations(context.Context, *ModelsListLocationsRequest) (*ModelsListLocationsResponse, error)
 	mustEmbedUnimplementedModelsServer()
 }

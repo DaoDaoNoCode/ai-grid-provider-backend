@@ -31,6 +31,7 @@ type ModelsServerBuilder struct {
 	gridNamespace         string
 	namespace             string
 	subscriptionNamespace string
+	readyPolicy           string
 }
 
 // ModelsServer implements ai_grid.v1.Models over a Git repository: each model
@@ -48,6 +49,8 @@ type ModelsServer struct {
 	gridNamespace         string
 	namespace             string
 	subscriptionNamespace string
+	readyPolicyNamespace  string
+	readyPolicyName       string
 }
 
 var _ aigridv1connect.ModelsHandler = (*ModelsServer)(nil)
@@ -109,6 +112,13 @@ func (b *ModelsServerBuilder) SetSubscriptionNamespace(namespace string) *Models
 }
 
 // Build creates the ModelsServer.
+// SetReadyPolicy sets the hub Policy, as namespace/name, whose compliance says
+// a cluster is provisioned. Optional; DefaultReadyPolicy when empty.
+func (b *ModelsServerBuilder) SetReadyPolicy(namespacedName string) *ModelsServerBuilder {
+	b.readyPolicy = namespacedName
+	return b
+}
+
 func (b *ModelsServerBuilder) Build() (*ModelsServer, error) {
 	if b.writer == nil {
 		return nil, errors.New("git writer is mandatory")
@@ -129,7 +139,13 @@ func (b *ModelsServerBuilder) Build() (*ModelsServer, error) {
 	if gridNS == "" {
 		gridNS = defaultGridNamespace
 	}
+	readyNS, readyName, err := splitReadyPolicy(b.readyPolicy)
+	if err != nil {
+		return nil, err
+	}
 	return &ModelsServer{
+		readyPolicyNamespace:  readyNS,
+		readyPolicyName:       readyName,
 		logger:                logger,
 		client:                b.client,
 		writer:                b.writer,
@@ -260,9 +276,11 @@ func listModelItems(ctx context.Context, req *aigridv1.ModelsListRequest, items 
 	}, nil
 }
 
-// ListLocations returns the unique sorted names of the Available AI Grid
-// member clusters: the values a placement's name In [...] takes, since git
-// mode places a model by cluster name.
+// ListLocations returns the unique sorted names of the clusters a model can
+// be placed on: the values a placement's name In [...] takes, since git mode
+// places a model by cluster name. A cluster qualifies when it is labelled
+// ai-grid/enabled=true and ai-grid/role inference or combined, is Available,
+// and is Compliant with the ready Policy (provisioned).
 func (s *ModelsServer) ListLocations(ctx context.Context, _ *aigridv1.ModelsListLocationsRequest) (*aigridv1.ModelsListLocationsResponse, error) {
 	if s.client == nil {
 		return &aigridv1.ModelsListLocationsResponse{}, nil
@@ -274,9 +292,10 @@ func (s *ModelsServer) ListLocations(ctx context.Context, _ *aigridv1.ModelsList
 		}
 		return nil, mapModelAPIError("list locations", "", err)
 	}
+	provisioned := readProvisioning(ctx, s.client, s.logger, s.readyPolicyNamespace, s.readyPolicyName)
 	var names []string
 	for i := range list.Items {
-		if isAIGridMemberCluster(list.Items[i]) {
+		if isModelLocation(list.Items[i], provisioned) {
 			names = append(names, list.Items[i].GetName())
 		}
 	}
@@ -284,9 +303,12 @@ func (s *ModelsServer) ListLocations(ctx context.Context, _ *aigridv1.ModelsList
 	return &aigridv1.ModelsListLocationsResponse{Locations: slices.Compact(names)}, nil
 }
 
-func isAIGridMemberCluster(item unstructured.Unstructured) bool {
+func isModelLocation(item unstructured.Unstructured, provisioned map[string]string) bool {
 	labels := item.GetLabels()
-	if labels["ai-grid/enabled"] != "true" || labels["ai-grid/provisioned"] != "true" {
+	if labels["ai-grid/enabled"] != "true" || provisioned[item.GetName()] != "Compliant" {
+		return false
+	}
+	if role := labels["ai-grid/role"]; role != "inference" && role != "combined" {
 		return false
 	}
 	status := managedClusterStatusFromUnstructured(item)

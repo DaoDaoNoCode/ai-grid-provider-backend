@@ -91,6 +91,7 @@ func main() {
 		SetNamespace(getEnv("AI_GRID_MODELS_NAMESPACE", "ai-grid-models")).
 		SetSubscriptionNamespace(subscriptionNamespace).
 		SetGridNamespace(getEnv("AI_GRID_GRID_NAMESPACE", "redhat-ai-grid")).
+		SetReadyPolicy(getEnv("AI_GRID_READY_POLICY", servers.DefaultReadyPolicy)).
 		Build()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "build Models server: %v\n", err)

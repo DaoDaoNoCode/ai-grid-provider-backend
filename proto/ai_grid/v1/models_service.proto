@@ -120,9 +120,10 @@ service Models {
   }
 
   // Locations a model can be placed on: unique sorted names of the
-  // ManagedClusters that are AI Grid members (ai-grid/enabled and
-  // ai-grid/provisioned "true") and Available. A location is a cluster: the
-  // values a placement's `name In [...]` takes.
+  // ManagedClusters labelled ai-grid/enabled "true" and ai-grid/role
+  // inference or combined that are Available and Compliant with the ready
+  // Policy (AI_GRID_READY_POLICY). A location is a cluster: the values a
+  // placement's `name In [...]` takes.
   rpc ListLocations(ModelsListLocationsRequest) returns (ModelsListLocationsResponse) {
     option (google.api.http) = {get: "/api/v1/models:listLocations"};
   }

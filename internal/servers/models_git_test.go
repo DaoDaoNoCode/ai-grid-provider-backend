@@ -394,14 +394,34 @@ func TestModelsGitLocations(t *testing.T) {
 // label, unique and sorted.
 func TestModelsListLocationsAnswersClusterNames(t *testing.T) {
 	t.Parallel()
-	member := map[string]string{"ai-grid/enabled": "true", "ai-grid/provisioned": "true"}
 	available := []map[string]interface{}{{"type": "ManagedClusterConditionAvailable", "status": "True"}}
+	unavailable := []map[string]interface{}{{"type": "ManagedClusterConditionAvailable", "status": "False"}}
+	member := func(role string) map[string]string {
+		return map[string]string{"ai-grid/enabled": "true", "ai-grid/role": role}
+	}
+	ready := &unstructured.Unstructured{Object: map[string]interface{}{
+		"apiVersion": "policy.open-cluster-management.io/v1",
+		"kind":       "Policy",
+		"metadata":   map[string]interface{}{"name": "ai-grid-ready", "namespace": "ai-grid-policies"},
+		"status": map[string]interface{}{"status": []interface{}{
+			map[string]interface{}{"clustername": "site-a", "compliant": "Compliant"},
+			map[string]interface{}{"clustername": "site-b", "compliant": "Compliant"},
+			map[string]interface{}{"clustername": "site-c", "compliant": "Compliant"},
+			map[string]interface{}{"clustername": "site-d", "compliant": "NonCompliant"},
+			map[string]interface{}{"clustername": "site-e", "compliant": "Compliant"},
+			map[string]interface{}{"clustername": "site-f", "compliant": "Compliant"},
+		}},
+	}}
 	client := newManagedClusterClient(
-		managedClusterUnstructured("site-b", map[string]string{"ai-grid/enabled": "true", "ai-grid/provisioned": "true", "location": "us-west"}, nil, true, available),
-		managedClusterUnstructured("site-a", member, nil, true, available),
-		managedClusterUnstructured("site-c", map[string]string{"ai-grid/enabled": "true", "location": "us-east"}, nil, true, available),
-		managedClusterUnstructured("site-d", member, nil, true, []map[string]interface{}{{"type": "ManagedClusterConditionAvailable", "status": "False"}}),
-		managedClusterUnstructured("site-e", map[string]string{"ai-grid/provisioned": "true"}, nil, true, available),
+		// Ready inference members, with or without a location label; no ai-grid/provisioned label (D3).
+		managedClusterUnstructured("site-b", map[string]string{"ai-grid/enabled": "true", "ai-grid/role": "inference", "location": "us-west"}, nil, true, available),
+		managedClusterUnstructured("site-a", member("combined"), nil, true, available),
+		managedClusterUnstructured("site-c", member("ingress"), nil, true, available),   // serves no models
+		managedClusterUnstructured("site-d", member("inference"), nil, true, available), // not provisioned yet
+		managedClusterUnstructured("site-e", member("inference"), nil, true, unavailable),
+		managedClusterUnstructured("site-f", map[string]string{"ai-grid/role": "inference"}, nil, true, available), // not enabled
+		managedClusterUnstructured("site-g", member("inference"), nil, true, available),                            // not placed by the Policy
+		ready,
 	)
 	srv, err := NewModelsServer().SetWriter(gitops.NewMemoryWriter(nil)).SetDynamicClient(client).Build()
 	if err != nil {

@@ -451,7 +451,7 @@
     },
     "/api/v1/models:listLocations": {
       "get": {
-        "summary": "Locations a model can be placed on: unique sorted names of the\nManagedClusters that are AI Grid members (ai-grid/enabled and\nai-grid/provisioned \"true\") and Available. A location is a cluster: the\nvalues a placement's `name In [...]` takes.",
+        "summary": "Locations a model can be placed on: unique sorted names of the\nManagedClusters labelled ai-grid/enabled \"true\" and ai-grid/role\ninference or combined that are Available and Compliant with the ready\nPolicy (AI_GRID_READY_POLICY). A location is a cluster: the values a\nplacement's `name In [...]` takes.",
         "operationId": "Models_ListLocations",
         "responses": {
           "200": {
