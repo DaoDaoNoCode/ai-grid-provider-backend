@@ -471,8 +471,10 @@ make dev-fake
 ├── bin/ai-grid-fake-infra --fixtures fixtures/default --draft-fixtures fixtures/draft/default
 │   ├── fake hub API   127.0.0.1:9091  ManagedClusters + SelfSubjectAccessReview
 │   │                                  (TLS for the backend, plain HTTP for the console BFF)
+│   │                                  + the status Policies (fixtures/default/policies.json)
 │   ├── fake Keycloak  127.0.0.1:9093  token endpoint + Organizations Admin API
 │   └── draft fake     127.0.0.1:9094  gRPC ai_grid.draft.v1, the console's draft API (own state)
+├── bin/dev-catalog.git                bare Git repository Models and Subscriptions commit to
 └── bin/ai-grid-provider-backend --kubeconfig bin/fake-kubeconfig
     ├── gRPC           127.0.0.1:9090  (what the console BFF dials by default)
     └── REST + Swagger 127.0.0.1:9092  (/api/v1/clusters, /api/v1/tenants, /docs/)
@@ -489,7 +491,7 @@ preset contains and where it comes from.
 
 ```sh
 make dev-fake                         # fixtures/default: ten clusters in every ACM state, six organizations,
-                                      # MaaS subscriptions/auth policies/model refs, and a timeline
+                                      # status Policies, and a timeline
                                       # (a cluster joins at 20s, one detaches at 30s, ...)
 make dev-fake-poc                     # fixtures/poc: the PoC's four sites and three organizations, static
                                       # (and fixtures/draft/poc for the draft fake)
@@ -501,10 +503,11 @@ curl -s http://127.0.0.1:9092/api/v1/tenants
 curl -s http://127.0.0.1:9092/api/v1/subscriptions
 curl -s http://127.0.0.1:9092/api/v1/models
 grpcurl -plaintext -d '{"id":"site-paris-1"}' 127.0.0.1:9090 ai_grid.v1.Clusters/Get
-grpcurl -plaintext -d '{"id":"engineering"}' 127.0.0.1:9090 ai_grid.v1.Subscriptions/Get
 ```
 
-Writes go to the fakes' memory and are gone on restart. A cluster deleted
+Writes to clusters and organizations go to the fakes' memory and are gone on
+restart. Models and Subscriptions commit to `bin/dev-catalog.git`, which
+stays; see [Developing](#developing). A cluster deleted
 through the API stays detaching for 30 seconds (divided by `speed` in
 `settings.json`) while the hub controllers drain it; then they remove their
 own finalizers, and the cluster disappears unless a finalizer of someone
@@ -544,6 +547,61 @@ it makes for clusters and tenants answer `Unimplemented` and those pages show
 fake. The draft fake on 9094 serves the console's draft services
 (`ai_grid.draft.v1`); pointing the console's BFF at it is the console's side of
 the move.
+
+## Developing
+
+Models and Subscriptions write only to Git, so a change to them is tested by
+reading what the backend committed, and then, on a cluster, what Argo CD
+delivered.
+
+### Level 1: laptop only
+
+`make dev-fake` commits to `bin/dev-catalog.git` (`DEV_CATALOG`), a bare
+repository that it creates on first run with one seed commit holding
+`catalog/subscriptions/README`. `bin/` is git-ignored, and the repository
+survives restarts. The fake hub serves the status Policies from
+`fixtures/default/policies.json`, so models and subscriptions named there show
+status.
+
+```sh
+make dev-fake                         # terminal 1
+# terminal 2: a model on two sites, then a subscription to it
+curl -s -X POST http://127.0.0.1:9092/api/v1/models -H 'Content-Type: application/json' -d '{
+  "id": "granite-3b",
+  "metadata": {"annotations": {"openshift.io/display-name": "Granite 3B"}},
+  "spec": {"model": {"uri": "hf://ibm-granite/granite-3b"}, "replicas": 1,
+    "placement": {"label_selector": {"match_expressions": [{"key": "name", "operator": "In", "values": ["site-paris-1", "site-madrid-1"]}]}}}}'
+curl -s -X POST http://127.0.0.1:9092/api/v1/subscriptions -H 'Content-Type: application/json' -d '{
+  "id": "team-a",
+  "spec": {"organization": {"id": "org-a"}, "owner": {"groups": ["team-a"]},
+    "model_refs": [{"name": "granite-3b", "unlimited": true}]}}'
+make dev-catalog-log                  # the commits and the files at the branch head
+make dev-catalog-reset                # delete the repository and start from the seed commit again
+```
+
+`granite-3b` shows `PENDING`: the fixtures report it not ready on
+`site-madrid-1`. Any other name shows `SavedToGit`. `make run` commits to the
+same repository. To commit somewhere else, such as a clone you push from, set
+`AI_GRID_GIT_URL` (and `AI_GRID_GIT_BRANCH`); it overrides the default.
+
+### Level 2: a dev cluster
+
+Point the backend at a branch of your own fork of the catalog repository, and
+point the dev cluster's Argo CD at that branch, so your commits reach real
+spokes without touching anyone else's:
+
+1. Fork the repository the environment's Argo CD reads the catalog from, and
+   create a branch.
+2. Change the catalog Applications or ApplicationSets on your dev cluster to
+   follow your fork and branch (in the environment repository, or by hand on a
+   cluster only you use).
+3. Run the backend with `AI_GRID_GIT_URL` set to your fork,
+   `AI_GRID_GIT_BRANCH` to your branch and `AI_GRID_GIT_TOKEN_FILE` to a file
+   holding a fine-grained token with `contents: write` on the fork only:
+   locally with `make run` against the dev cluster's kubeconfig, or deployed
+   with `make openshift-up`.
+4. Create a model or subscription, then watch Argo CD sync it and the status
+   Policies report it.
 
 ## The console's draft API (ai_grid.draft.v1)
 
@@ -689,6 +747,7 @@ gen/ai_grid/v1/                  generated protobuf, gRPC, and Connect code
 docs/UI_API_REFERENCE.md         REST payloads for UI/BFF consumers
 docs/openapi/                    generated OpenAPI (Swagger 2.0) JSON
 internal/servers/                Per-resource connect-go handlers (OSAC-style builders)
+internal/gitops/                 Git writer the Models and Subscriptions servers commit through (go-git)
 internal/servers/clusters_server.go         Kubernetes-backed Clusters API
 internal/servers/tenants_server.go Keycloak-backed tenant API
 internal/keycloak/               Keycloak Admin API client
@@ -712,6 +771,7 @@ gen/ai_grid/draft/v1/            generated draft protobuf and gRPC code
 fixtures/                        fake infrastructure fixtures (default, poc; draft/ for the draft fake)
 docs/draft/                      the draft's docs, research and per-area pages
 hack/dev-fake.sh                 runs the fakes and the backend for make dev-fake
+hack/dev-catalog.sh              creates, resets and shows bin/dev-catalog.git, the dev Git catalog
 hack/convert-console-fixtures/   regenerates fixtures/ from the console's fixtures
 Makefile                         build, test, lint, generate, Kind, OpenShift, ACM targets
 ```

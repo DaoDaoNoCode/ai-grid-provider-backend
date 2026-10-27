@@ -37,6 +37,7 @@ them through the real Kubernetes and Keycloak clients.
 | `maasauthpolicies.json` | fake hub | A `MaaSAuthPolicyList` paired with the seeded subscriptions (`<id>-policy`). Optional. | hand-authored |
 | `maasmodelrefs.json` | fake hub | A `MaaSModelRefList` (often in namespace `llm`) for Get enrichment / model registrations; also pairs Models fixtures in `ai-grid-models`. Optional. | hand-authored |
 | `llminferenceservices.json` | fake hub | An `LLMInferenceServiceList` (`serving.kserve.io/v1alpha2`) in `ai-grid-models` for Models List/Get. Optional; missing means empty Models List until Create. | hand-authored |
+| `policies.json` | fake hub | A `PolicyList` (`policy.open-cluster-management.io/v1`) of ACM Policies served as is by namespace and name: the status Policies `ai-grid-models-status` and `ai-grid-catalog-status` in `ai-grid-policies` and each cluster's copy, which the backend reads models' and subscriptions' status from. Optional; missing means no reports, so everything shows Saved to Git. The `ai-grid-ready` Policy is computed from the clusters instead and must not be listed. | hand-authored |
 
 Every file is decoded strictly: a misspelled key stops the fake with an error.
 A missing file leaves its part empty or at its default (no `access.json`

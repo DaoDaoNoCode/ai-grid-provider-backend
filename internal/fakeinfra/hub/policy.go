@@ -1,6 +1,7 @@
 package hub
 
 import (
+	"fmt"
 	"net/http"
 	"sort"
 	"strconv"
@@ -14,8 +15,10 @@ import (
 // The env repository's ai-grid-ready Policy (apps/ai-grid-policies): placed
 // on every ManagedCluster labelled ai-grid/enabled=true (Placement
 // ai-grid-spokes), Compliant once the cluster's DataScienceCluster is Ready
-// and its grid operator runs. The fake serves only this root Policy and only
-// its per-cluster status.
+// and its grid operator runs. The fake computes this root Policy's
+// per-cluster status from the clusters. Every other Policy it serves, such as
+// the status Policies ai-grid-models-status and ai-grid-catalog-status and
+// their per-cluster copies, comes as is from policies.json.
 const (
 	policiesPath         = "/apis/policy.open-cluster-management.io/v1/namespaces"
 	ReadyPolicyNamespace = "ai-grid-policies"
@@ -29,6 +32,9 @@ const (
 	// installs take about 20 minutes.
 	DefaultEvaluateAfter  = 5 * time.Second
 	DefaultProvisionAfter = 20 * time.Second
+
+	policyAPIVersion = "policy.open-cluster-management.io/v1"
+	policyKind       = "Policy"
 
 	labelEnabled     = "ai-grid/enabled"
 	labelProvisioned = "ai-grid/provisioned"
@@ -80,7 +86,14 @@ func (h *Hub) getPolicy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if namespace != ReadyPolicyNamespace || name != ReadyPolicyName {
-		writeStatus(w, apierrors.NewNotFound(policyGroupResource, name))
+		h.mu.Lock()
+		policy, ok := h.policies[namespace+"/"+name]
+		h.mu.Unlock()
+		if !ok {
+			writeStatus(w, apierrors.NewNotFound(policyGroupResource, name))
+			return
+		}
+		writeJSON(w, http.StatusOK, policy.Object)
 		return
 	}
 	h.mu.Lock()
@@ -111,4 +124,28 @@ func (h *Hub) getPolicy(w http.ResponseWriter, r *http.Request) {
 		"spec":   map[string]any{"remediationAction": "inform", "disabled": false},
 		"status": map[string]any{"status": entries},
 	})
+}
+
+// seedPolicyFixtures stores the fixture Policies by namespace and name. Each
+// needs a name and a namespace; a missing resourceVersion becomes "1".
+func seedPolicyFixtures(h *Hub, fx *Fixtures) error {
+	for i := range fx.Policies {
+		p := fx.Policies[i].DeepCopy()
+		name, namespace := p.GetName(), p.GetNamespace()
+		if name == "" || namespace == "" {
+			return fmt.Errorf("fixture Policy %d: metadata.name and metadata.namespace are required", i)
+		}
+		if namespace == ReadyPolicyNamespace && name == ReadyPolicyName {
+			return fmt.Errorf("fixture Policy %s/%s: the hub computes this Policy from the clusters", namespace, name)
+		}
+		key := namespace + "/" + name
+		if _, dup := h.policies[key]; dup {
+			return fmt.Errorf("fixture Policy %s listed twice", key)
+		}
+		if p.GetResourceVersion() == "" {
+			p.SetResourceVersion("1")
+		}
+		h.policies[key] = p
+	}
+	return nil
 }

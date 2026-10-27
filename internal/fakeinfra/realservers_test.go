@@ -24,6 +24,7 @@ import (
 	"github.com/osac-project/ai-grid-provider-backend/internal/fakeinfra/devserve"
 	"github.com/osac-project/ai-grid-provider-backend/internal/fakeinfra/hub"
 	fakekeycloak "github.com/osac-project/ai-grid-provider-backend/internal/fakeinfra/keycloak"
+	"github.com/osac-project/ai-grid-provider-backend/internal/gitops"
 	"github.com/osac-project/ai-grid-provider-backend/internal/keycloak"
 	"github.com/osac-project/ai-grid-provider-backend/internal/servers"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
@@ -610,5 +611,67 @@ func TestRealSubscriptionsServerOnFakeHub(t *testing.T) {
 	}
 	if _, err := s.Get(ctx, &aigridv1.SubscriptionsGetRequest{Id: "team-smoke"}); connect.CodeOf(err) != connect.CodeNotFound {
 		t.Fatalf("Get after delete = %v, want NotFound", err)
+	}
+}
+
+// The real Models and Subscriptions servers, committing to an in-memory
+// repository, read status from the fake hub's status Policies
+// (fixtures/default/policies.json), as in make dev-fake.
+func TestRealCatalogStatusOnFakeHub(t *testing.T) {
+	h, srv := startHub(t)
+	cfg := &rest.Config{Host: srv.URL, BearerToken: h.ServiceAccountToken(), QPS: 1000, Burst: 1000}
+	client, err := dynamic.NewForConfig(cfg)
+	if err != nil {
+		t.Fatalf("dynamic.NewForConfig() error = %v", err)
+	}
+	status := servers.NewCatalogStatusReader(client, "")
+	writer := gitops.NewMemoryWriter(nil)
+	ctx := context.Background()
+
+	models, err := servers.NewModelsServer().SetLogger(slog.New(slog.DiscardHandler)).
+		SetWriter(writer).SetCatalogStatus(status).SetDynamicClient(client).Build()
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+	replicas := int32(1)
+	created, err := models.Create(ctx, &aigridv1.ModelsCreateRequest{Object: &aigridv1.Model{
+		Id: "granite-3b",
+		Spec: &aigridv1.ModelSpec{
+			Model:    &aigridv1.ModelSource{Uri: "hf://ibm-granite/granite-3b"},
+			Replicas: &replicas,
+			Placement: &aigridv1.ModelPlacement{LabelSelector: &aigridv1.ModelLabelSelector{
+				MatchExpressions: []*aigridv1.ModelLabelSelectorRequirement{{Key: "name", Operator: "In", Values: []string{"site-paris-1", "site-madrid-1"}}},
+			}},
+		},
+	}})
+	if err != nil {
+		t.Fatalf("Models Create() error = %v", err)
+	}
+	st := created.GetObject().GetStatus()
+	if st.GetPhase() != aigridv1.ModelPhase_MODEL_PHASE_PENDING || st.GetMessage() != "Not ready on site-madrid-1; ready on site-ashburn-1, site-paris-1" {
+		t.Fatalf("model status = %v, %q", st.GetPhase(), st.GetMessage())
+	}
+	if got := st.GetPlacement().GetLocations(); !slices.Equal(got, []string{"madrid", "paris"}) {
+		t.Fatalf("model locations = %v", got)
+	}
+
+	subscriptions, err := servers.NewSubscriptionsServer().SetLogger(slog.New(slog.DiscardHandler)).
+		SetWriter(writer).SetCatalogStatus(status).Build()
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+	sub, err := subscriptions.Create(ctx, &aigridv1.SubscriptionsCreateRequest{Object: &aigridv1.Subscription{
+		Id: "team-a",
+		Spec: &aigridv1.SubscriptionSpec{
+			Organization: &aigridv1.SubscriptionOrganization{Id: "org-a"},
+			Owner:        &aigridv1.SubscriptionOwner{Groups: []string{"team-a"}},
+			ModelRefs:    []*aigridv1.SubscriptionModelRef{{Name: "granite-3b", Unlimited: true}},
+		},
+	}})
+	if err != nil {
+		t.Fatalf("Subscriptions Create() error = %v", err)
+	}
+	if phase := sub.GetObject().GetStatus().GetPhase(); phase != "Active" {
+		t.Fatalf("subscription phase = %q, want Active", phase)
 	}
 }

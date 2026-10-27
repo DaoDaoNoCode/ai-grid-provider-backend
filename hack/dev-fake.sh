@@ -3,7 +3,9 @@
 # Keycloak and the fake of the console's draft API, ai_grid.draft.v1) and the
 # real, unmodified ai-grid-provider-backend against it, in one terminal. Ctrl-C or SIGTERM stops both. `make dev-fake` and
 # `make dev-fake-poc` build both binaries and call this script; the DEV_*
-# variables come from the Makefile.
+# variables come from the Makefile. The backend commits Models and
+# Subscriptions to AI_GRID_GIT_URL, by default the bare repository DEV_CATALOG
+# (bin/dev-catalog.git), created on first run (hack/dev-catalog.sh).
 set -euo pipefail
 
 DEV_HOST="${DEV_HOST:-127.0.0.1}"
@@ -19,6 +21,12 @@ DEV_DRAFT_FIXTURES="${DEV_DRAFT_FIXTURES:-fixtures/draft/default}"
 DEV_KUBECONFIG="${DEV_KUBECONFIG:-bin/fake-kubeconfig}"
 FAKE_INFRA_BIN="${FAKE_INFRA_BIN:-bin/ai-grid-fake-infra}"
 BACKEND_BIN="${BACKEND_BIN:-bin/ai-grid-provider-backend}"
+DEV_CATALOG="${DEV_CATALOG:-bin/dev-catalog.git}"
+AI_GRID_GIT_URL="${AI_GRID_GIT_URL:-}"
+if [[ -z "$AI_GRID_GIT_URL" ]]; then
+  DEV_CATALOG="$DEV_CATALOG" bash "$(dirname "$0")/dev-catalog.sh" init
+  AI_GRID_GIT_URL="file://$PWD/$DEV_CATALOG"
+fi
 
 # The fake Keycloak's realms and admin credentials. Local fake only; the
 # backend gets the same values below, never the caller's KEYCLOAK_* settings.
@@ -88,6 +96,7 @@ KEYCLOAK_ADMIN_REALM="$KC_ADMIN_REALM" \
 KEYCLOAK_REALM="$KC_REALM" \
 KEYCLOAK_ADMIN_USERNAME="$KC_ADMIN_USERNAME" \
 KEYCLOAK_ADMIN_PASSWORD="$KC_ADMIN_PASSWORD" \
+AI_GRID_GIT_URL="$AI_GRID_GIT_URL" \
 "$BACKEND_BIN" \
   --listen-address "$DEV_HOST:$DEV_GRPC_PORT" \
   --http-listen-address "$DEV_HOST:$DEV_HTTP_PORT" \
@@ -101,6 +110,7 @@ dev-fake: fixtures $DEV_FIXTURES, draft fixtures $DEV_DRAFT_FIXTURES
   fake hub API      https://$DEV_HOST:$DEV_HUB_PORT for the backend ($DEV_KUBECONFIG),
                     http://$DEV_HOST:$DEV_HUB_PORT for the console BFF (same port)
   fake Keycloak     http://$DEV_HOST:$DEV_KEYCLOAK_PORT
+  catalog (Git)     $AI_GRID_GIT_URL  (make dev-catalog-log; make dev-catalog-reset starts over)
   draft API (fake)  ${DEV_DRAFT_ADDRESS:-off}  gRPC ai_grid.draft.v1, own state from $DEV_DRAFT_FIXTURES
 Press Ctrl-C to stop both.
 EOF
