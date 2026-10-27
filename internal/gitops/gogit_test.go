@@ -214,10 +214,20 @@ func TestNewRepoWriterRequiresConfig(t *testing.T) {
 		"no url":    {Branch: "main", AuthorName: "a", AuthorEmail: "a@example.com"},
 		"no branch": {URL: "file:///nowhere", AuthorName: "a", AuthorEmail: "a@example.com"},
 		"no author": {URL: "file:///nowhere", Branch: "main"},
+		// A token goes only over https, never in the clear.
+		"token over http": {URL: "http://127.0.0.1:1/catalog.git", Branch: "main", Token: "t", AuthorName: "a", AuthorEmail: "a@example.com"},
+		"token over file": {URL: "file:///nowhere", Branch: "main", Token: "t", AuthorName: "a", AuthorEmail: "a@example.com"},
 	} {
+		if err := cfg.Validate(); err == nil {
+			t.Errorf("%s: Validate() succeeded", name)
+		}
 		if _, err := NewRepoWriter(context.Background(), cfg); err == nil {
 			t.Errorf("%s: NewRepoWriter() succeeded", name)
 		}
+	}
+	ok := RepoConfig{URL: "https://github.com/example/catalog.git", Branch: "main", Token: "t", AuthorName: "a", AuthorEmail: "a@example.com"}
+	if err := ok.Validate(); err != nil {
+		t.Errorf("Validate(https with token) error = %v", err)
 	}
 }
 

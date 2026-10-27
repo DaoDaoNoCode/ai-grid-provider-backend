@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/url"
 	"path"
 	"sort"
 	"strings"
@@ -61,14 +62,28 @@ type RepoWriter struct {
 
 var _ Writer = (*RepoWriter)(nil)
 
+// Validate checks that cfg names a repository, a branch and an author, and
+// that a token is sent only over https.
+func (cfg RepoConfig) Validate() error {
+	if cfg.URL == "" || cfg.Branch == "" {
+		return errors.New("gitops: repository URL and branch are required")
+	}
+	if cfg.AuthorName == "" || cfg.AuthorEmail == "" {
+		return errors.New("gitops: commit author name and email are required")
+	}
+	if cfg.Token != "" {
+		if u, err := url.Parse(cfg.URL); err != nil || u.Scheme != "https" {
+			return errors.New("gitops: a token is sent only over https; the repository URL must start with https://")
+		}
+	}
+	return nil
+}
+
 // NewRepoWriter clones cfg.Branch of cfg.URL into memory. The branch must
 // exist and have at least one commit.
 func NewRepoWriter(ctx context.Context, cfg RepoConfig) (*RepoWriter, error) {
-	if cfg.URL == "" || cfg.Branch == "" {
-		return nil, errors.New("gitops: repository URL and branch are required")
-	}
-	if cfg.AuthorName == "" || cfg.AuthorEmail == "" {
-		return nil, errors.New("gitops: commit author name and email are required")
+	if err := cfg.Validate(); err != nil {
+		return nil, err
 	}
 	w := &RepoWriter{
 		cfg:    cfg,

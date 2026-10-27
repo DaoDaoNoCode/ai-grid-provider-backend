@@ -229,6 +229,9 @@ func newGitWriter() (gitops.Writer, error) {
 		}
 		cfg.Token = strings.TrimSpace(string(token))
 	}
+	if err := cfg.Validate(); err != nil {
+		return nil, err
+	}
 	slog.Info("git write mode", "url", cfg.URL, "branch", cfg.Branch)
 	return gitops.StartBackgroundWriter(context.Background(), func(ctx context.Context) (gitops.Writer, error) {
 		ctx, cancel := context.WithTimeout(ctx, time.Minute)
