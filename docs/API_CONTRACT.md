@@ -124,9 +124,9 @@ enough.
 ## Versions, validation and errors
 
 - **Optimistic locking.** Update and Delete carry the version the caller last read; a
-  mismatch answers `Aborted`. `Metadata.version` is `int32` today. The console's ADR-0003
-  makes it a string, because a Kubernetes `resourceVersion` is opaque. That change follows
-  path 1 above.
+  mismatch answers `Aborted`. `Metadata.version` is `int32` today. The console's proposed ADR-0003
+  recommends a string, because a Kubernetes `resourceVersion` is opaque. If agreed, that
+  change follows path 1 above; clients continue to use the shipped integer contract.
 - **Validation.** Field rules belong in `buf.validate` annotations. Cross-resource checks
   stay in server code and answer `InvalidArgument`, `FailedPrecondition` or
   `AlreadyExists`.
@@ -136,9 +136,10 @@ enough.
 
 ## Pinning and releases
 
-The console pins a full commit SHA of this repository and generates its types from that
-commit. A nightly job in the console proposes moving the pin to the newest `main`; its PR
-fails if a page uses something that changed. So:
+The console foundation pins a full commit SHA of this repository and generates its types
+from that commit. Pin updates are manual today: each update regenerates the clients and
+runs the console checks. A nightly job to propose updates to the newest `main` is planned
+but not implemented yet. So:
 
 - Everything merged to `main` must pass the breaking check, or carry an approved break
   from path 1.
