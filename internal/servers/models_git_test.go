@@ -248,6 +248,28 @@ func TestModelsGitValidation(t *testing.T) {
 	if got := gitModelClusters(created.GetObject()); !slices.Equal(got, []string{"site-c"}) {
 		t.Fatalf("match_labels clusters = %v", got)
 	}
+
+	// A label selector ANDs its requirements, so two name requirements would
+	// select the clusters in both, not either: refused rather than guessed.
+	for name, selector := range map[string]*aigridv1.ModelLabelSelector{
+		"match_labels and In": {
+			MatchLabels:      map[string]string{"name": "site-a"},
+			MatchExpressions: []*aigridv1.ModelLabelSelectorRequirement{{Key: "name", Operator: "In", Values: []string{"site-b"}}},
+		},
+		"two In expressions": {
+			MatchExpressions: []*aigridv1.ModelLabelSelectorRequirement{
+				{Key: "name", Operator: "In", Values: []string{"site-a"}},
+				{Key: "name", Operator: "In", Values: []string{"site-b"}},
+			},
+		},
+	} {
+		twice := gitSampleModel("twice")
+		twice.Spec.Placement = &aigridv1.ModelPlacement{LabelSelector: selector}
+		_, err := srv.Create(ctx, &aigridv1.ModelsCreateRequest{Object: twice})
+		if connect.CodeOf(err) != connect.CodeInvalidArgument {
+			t.Errorf("Create(%s) error = %v, want InvalidArgument", name, err)
+		}
+	}
 }
 
 func TestModelsGitDeleteReferenced(t *testing.T) {

@@ -483,6 +483,11 @@ func gitPlacementClusters(spec *aigridv1.ModelSpec) ([]string, error) {
 	}
 	var clusters []string
 	selector := placement.GetLabelSelector()
+	// A label selector ANDs its requirements, so two name requirements would
+	// select only the clusters in both.
+	if len(selector.GetMatchLabels())+len(selector.GetMatchExpressions()) > 1 {
+		return nil, connect.Errorf(connect.CodeInvalidArgument, "spec.placement must use one %q requirement in git mode: a label selector ANDs them", clusterNameLabelKey)
+	}
 	for key, value := range selector.GetMatchLabels() {
 		if key != clusterNameLabelKey {
 			return nil, connect.Errorf(connect.CodeInvalidArgument, "spec.placement label %q is not supported in git mode; use %q", key, clusterNameLabelKey)
