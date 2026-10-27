@@ -519,6 +519,9 @@ func subscriptionGitError(op, id string, err error) error {
 		return connect.Errorf(connect.CodeNotFound, "Subscription %q not found", id).WithCause(err)
 	case errors.Is(err, gitops.ErrConflict):
 		return staleSubscriptionError(op, id).WithCause(err)
+	case errors.Is(err, gitops.ErrNotConfigured):
+		// Not one subscription's problem, so the message names the API, not the id.
+		return connect.Errorf(connect.CodeFailedPrecondition, "Subscriptions: %v", err).WithCause(err)
 	default:
 		return connect.Errorf(connect.CodeUnavailable, "%s Subscription %q: git: %v", op, id, err).WithCause(err)
 	}

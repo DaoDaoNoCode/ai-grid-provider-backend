@@ -228,9 +228,9 @@ func getEnv(name, fallback string) string {
 // newGitWriter clones the repository Models and Subscriptions commit to, in
 // the background: a Git host that is down, or a wrong token, makes Models and
 // Subscriptions answer Unavailable until a retry succeeds, and leaves the other
-// APIs serving. Missing or bad settings are still an error at startup. The
-// token is read from a file, a mounted Secret, so it never appears in the
-// environment or in logs.
+// APIs serving. Without AI_GRID_GIT_URL they answer FailedPrecondition
+// instead; bad settings are still an error at startup. The token is read from
+// a file, a mounted Secret, so it never appears in the environment or in logs.
 func newGitWriter() (gitops.Writer, error) {
 	cfg := gitops.RepoConfig{
 		URL:         os.Getenv("AI_GRID_GIT_URL"),
@@ -239,7 +239,12 @@ func newGitWriter() (gitops.Writer, error) {
 		AuthorEmail: "ai-grid-provider-backend@noreply.invalid",
 	}
 	if cfg.URL == "" {
-		return nil, errors.New("AI_GRID_GIT_URL is required")
+		// Without a repository, Models and Subscriptions answer
+		// FailedPrecondition and the other APIs serve as usual, so a
+		// deployment that hasn't set it up yet (the console's chart test, an
+		// older install) still serves Clusters and Tenants.
+		slog.Warn("AI_GRID_GIT_URL is not set: Models and Subscriptions are unavailable until it is")
+		return gitops.Unconfigured{}, nil
 	}
 	if u, err := neturl.Parse(cfg.URL); err != nil || u.User != nil {
 		return nil, errors.New("AI_GRID_GIT_URL must be a URL without credentials; put the token in AI_GRID_GIT_TOKEN_FILE")

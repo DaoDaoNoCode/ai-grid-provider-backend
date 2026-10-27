@@ -592,3 +592,18 @@ func TestSubscriptionsGitMetadataValues(t *testing.T) {
 		t.Fatalf("commits = %d, want none", n)
 	}
 }
+
+// A backend started without AI_GRID_GIT_URL answers FailedPrecondition for
+// every Subscriptions call, which all read or write the catalog, naming the
+// setting, rather than not starting.
+func TestSubscriptionsGitUnconfigured(t *testing.T) {
+	ctx := context.Background()
+	srv := mustGitSubscriptionsServer(t, gitops.Unconfigured{})
+	_, err := srv.List(ctx, &aigridv1.SubscriptionsListRequest{})
+	assertConnectCode(t, err, connect.CodeFailedPrecondition)
+	if err == nil || !strings.Contains(err.Error(), "AI_GRID_GIT_URL") {
+		t.Errorf("List() error = %v, want it to name AI_GRID_GIT_URL", err)
+	}
+	_, err = srv.Create(ctx, &aigridv1.SubscriptionsCreateRequest{Object: gitSampleSubscription("team-a")})
+	assertConnectCode(t, err, connect.CodeFailedPrecondition)
+}
