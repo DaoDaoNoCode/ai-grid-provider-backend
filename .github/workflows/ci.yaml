@@ -71,6 +71,10 @@ jobs:
         uses: bufbuild/buf-setup-action@a47c93e0b1648d5651a065437926377d060baa99 # v1
         with:
           version: ${{ env.BUF_VERSION }}
+          # The action asks GitHub's API for the download URL. Anonymously that
+          # counts against the runner IP's shared limit and fails at random;
+          # the job's own read-only token has its own limit.
+          github_token: ${{ github.token }}
 
       - name: Lint protobuf
         run: buf lint proto
