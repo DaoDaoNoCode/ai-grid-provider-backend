@@ -1,8 +1,11 @@
 package servers
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
+	"log/slog"
 	"path"
 	"slices"
 	"strings"
@@ -850,8 +853,7 @@ func TestSubscriptionsGitModelRefCatalogJoin(t *testing.T) {
 // model_id follows the MaaSModelRef a ref names on the ingress clusters, not
 // the backend's settings: a ref is joined only when the model's catalog entry
 // has a MaaSModelRef of that name in that namespace. A model without a
-// catalog entry has none; a broken catalog entry is Internal, as a broken
-// subscription file is.
+// catalog entry has none.
 func TestSubscriptionsGitModelIDFollowsTheCatalogEntry(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -891,19 +893,148 @@ func TestSubscriptionsGitModelIDFollowsTheCatalogEntry(t *testing.T) {
 			t.Fatalf("model_id = %q, want empty: the repository has no catalog entry", id)
 		}
 	})
+}
 
-	t.Run("broken catalog entry", func(t *testing.T) {
-		t.Parallel()
-		seed := gitModelSeed("sim-model")
-		seed[path.Join(modelCatalogGitDir("sim-model"), "model.yaml")] = []byte("kind: [")
-		writer := gitops.NewMemoryWriter(seed)
-		srv := mustGitSubscriptionsServer(t, writer)
-		// The entry is read before the commit, so a write that can't answer
-		// commits nothing.
-		_, err := srv.Create(ctx, &aigridv1.SubscriptionsCreateRequest{Object: gitSampleSubscription("team-a")})
-		assertConnectCode(t, err, connect.CodeInternal)
-		if n := len(writer.Messages()); n != 0 {
-			t.Fatalf("commits = %d, want none", n)
-		}
-	})
+// The join only decorates: a model's catalog entry that can't be read or
+// parsed leaves the refs to that model without model_id, display_name and
+// description, and List, Get and Update of every subscription still answer,
+// with the other refs joined, so a subscription can still be edited around
+// the broken model.
+func TestSubscriptionsGitBrokenCatalogEntryOnlyUnjoinsItsRefs(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	brokenPath := path.Join(modelCatalogGitDir("broken"), "model.yaml")
+	for name, breakEntry := range map[string]func(t *testing.T, w *unreadableWriter){
+		"bad YAML": func(t *testing.T, w *unreadableWriter) {
+			t.Helper()
+			head, err := w.Head(ctx)
+			if err != nil {
+				t.Fatalf("Head() error = %v", err)
+			}
+			if _, err := w.Commit(ctx, head.Revision(), gitops.Change{
+				Put:     map[string][]byte{brokenPath: []byte("kind: [")},
+				Message: "hand edit",
+			}); err != nil {
+				t.Fatalf("Commit(hand edit) error = %v", err)
+			}
+		},
+		"read error": func(_ *testing.T, w *unreadableWriter) { w.unreadable = brokenPath },
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			writer := &unreadableWriter{MemoryWriter: gitops.NewMemoryWriter(nil)}
+			models := mustGitModelsServer(t, writer)
+			var logs bytes.Buffer
+			srv, err := NewSubscriptionsServer().SetWriter(writer).SetLogger(slog.New(slog.NewJSONHandler(&logs, nil))).Build()
+			if err != nil {
+				t.Fatalf("Build() error = %v", err)
+			}
+			for _, id := range []string{"broken", "plain"} {
+				model := gitSampleModel(id, "site-a")
+				model.Metadata.Annotations = map[string]string{annotationDisplayName: id + " model"}
+				if _, err := models.Create(ctx, &aigridv1.ModelsCreateRequest{Object: model}); err != nil {
+					t.Fatalf("Create model %s error = %v", id, err)
+				}
+			}
+			both := gitSampleSubscription("team-a")
+			limits := both.Spec.ModelRefs[0].TokenRateLimits
+			both.Spec.ModelRefs = []*aigridv1.SubscriptionModelRef{
+				{Name: "broken", TokenRateLimits: limits},
+				{Name: "plain", TokenRateLimits: limits},
+			}
+			plainOnly := gitSampleSubscription("team-b")
+			plainOnly.Spec.ModelRefs[0].Name = "plain"
+			for _, sub := range []*aigridv1.Subscription{both, plainOnly} {
+				if _, err := srv.Create(ctx, &aigridv1.SubscriptionsCreateRequest{Object: sub}); err != nil {
+					t.Fatalf("Create(%s) error = %v", sub.GetId(), err)
+				}
+			}
+			breakEntry(t, writer)
+
+			check := func(op string, sub *aigridv1.Subscription) {
+				t.Helper()
+				for _, ref := range sub.GetSpec().GetModelRefs() {
+					wantID, wantName := "", ""
+					if ref.GetName() == "plain" {
+						wantID, wantName = "plain", "plain model"
+					}
+					if ref.GetModelId() != wantID || ref.GetDisplayName() != wantName || ref.GetDescription() != "" {
+						t.Errorf("%s %s ref %s = {model_id %q, display_name %q, description %q}, want {%q, %q, \"\"}",
+							op, sub.GetId(), ref.GetName(), ref.GetModelId(), ref.GetDisplayName(), ref.GetDescription(), wantID, wantName)
+					}
+				}
+			}
+
+			list, err := srv.List(ctx, &aigridv1.SubscriptionsListRequest{})
+			if err != nil {
+				t.Fatalf("List() error = %v, want an answer", err)
+			}
+			if len(list.GetItems()) != 2 {
+				t.Fatalf("List items = %d, want 2", len(list.GetItems()))
+			}
+			for _, item := range list.GetItems() {
+				check("List", item)
+			}
+			got, err := srv.Get(ctx, &aigridv1.SubscriptionsGetRequest{Id: "team-a"})
+			if err != nil {
+				t.Fatalf("Get() error = %v, want an answer", err)
+			}
+			check("Get", got.GetObject())
+			relabel := gitSampleSubscription("team-a")
+			relabel.Metadata.Labels = map[string]string{"team": "a"}
+			updated, err := srv.Update(ctx, &aigridv1.SubscriptionsUpdateRequest{
+				Object:     relabel,
+				UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"metadata.labels"}},
+			})
+			if err != nil {
+				t.Fatalf("Update(labels) error = %v, want an answer", err)
+			}
+			if updated.GetObject().GetMetadata().GetLabels()["team"] != "a" {
+				t.Fatalf("Update(labels) labels = %v", updated.GetObject().GetMetadata().GetLabels())
+			}
+			check("Update", updated.GetObject())
+			// Each call logs the broken entry once, naming the model and file.
+			var warned int
+			for _, line := range strings.Split(strings.TrimSpace(logs.String()), "\n") {
+				var entry map[string]any
+				if err := json.Unmarshal([]byte(line), &entry); err != nil {
+					t.Fatalf("log line %q: %v", line, err)
+				}
+				if entry["level"] != "WARN" || entry["model"] != "broken" || entry["file"] != brokenPath || entry["error"] == "" {
+					t.Errorf("log = %v, want a warning naming model broken and %s", entry, brokenPath)
+				}
+				warned++
+			}
+			if warned != 3 {
+				t.Errorf("warnings = %d, want one each for List, Get and Update", warned)
+			}
+		})
+	}
+}
+
+// unreadableWriter is a MemoryWriter whose snapshots fail to read one path
+// with an error other than ErrNotFound, as a Git read can.
+type unreadableWriter struct {
+	*gitops.MemoryWriter
+	unreadable string
+}
+
+func (w *unreadableWriter) Head(ctx context.Context) (gitops.Snapshot, error) {
+	head, err := w.MemoryWriter.Head(ctx)
+	if err != nil || w.unreadable == "" {
+		return head, err
+	}
+	return unreadableSnapshot{Snapshot: head, unreadable: w.unreadable}, nil
+}
+
+type unreadableSnapshot struct {
+	gitops.Snapshot
+	unreadable string
+}
+
+func (s unreadableSnapshot) Read(p string) ([]byte, error) {
+	if p == s.unreadable {
+		return nil, errors.New("object not readable")
+	}
+	return s.Snapshot.Read(p)
 }

@@ -231,7 +231,8 @@ For subscriptions:
   `model_id`, the model's id, and `display_name` and `description` from that
   `MaaSModelRef`'s `openshift.io/display-name` and `openshift.io/description`
   annotations (the model's own, which the Models API copies there). A ref to
-  anything else has none of them. They're output only: never written to the
+  anything else has none of them, and neither has a ref to a model whose entry
+  can't be read or parsed: that is logged, and the call still answers. They're output only: never written to the
   file, and ignored on write. A client finds a ref's model by
   `model_id == Model.id`, and the subscriptions using a model with the List
   filter `this.spec.model_refs.exists(r, r.model_id == "<id>")`, without
