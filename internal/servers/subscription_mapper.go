@@ -29,8 +29,11 @@ const (
 	// then logs an error and leaves the subscription out of the model's
 	// TokenRateLimitPolicy (lines 736-741).
 	maxTokenWindowSeconds = 366 * 24 * 3600
-	maxTokenWindow        = "8784h"
 )
+
+// maxTokenWindow is maxTokenWindowSeconds written as a window, "8784h", for
+// error messages; derived so the two can't disagree.
+var maxTokenWindow = strconv.FormatInt(maxTokenWindowSeconds/3600, 10) + "h"
 
 var (
 	subscriptionNameRE = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$`)
