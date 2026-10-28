@@ -708,7 +708,7 @@ Subscription ids must leave room for the `-policy` suffix (max 56 chars).
 | `owner.users` | string[] | Optional user names |
 | `model_refs[]` | object | See below |
 | `priority` | int32 | Relative priority among subscriptions |
-| `organization.id` | string | Optional; set once, then immutable |
+| `organization.id` | string | Required: the organization's id (the Tenant `id`, a Keycloak organization UUID), a DNS label, else `InvalidArgument`. Immutable: an Update that changes or removes it is `InvalidArgument` |
 | `token_metadata` | object | `organization_id`, `cost_center`, `labels` |
 | `inference_priority` | int32 (optional) | Inference scheduling priority |
 | `guardrails[]` | object | `{ ref_name, checks[] }` |

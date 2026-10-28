@@ -42,7 +42,8 @@ message SubscriptionSpec {
   // Relative priority among subscriptions (higher wins when policies conflict).
   int32 priority = 3;
 
-  // Stable organization association. May be set once; then immutable.
+  // The organization that administers the subscription. Required: Create
+  // and Update answer InvalidArgument without it. Immutable once set.
   SubscriptionOrganization organization = 4;
 
   // Metadata for token attribution and metering.
@@ -58,7 +59,9 @@ message SubscriptionSpec {
 
 // SubscriptionOrganization identifies the organization that administers a subscription.
 message SubscriptionOrganization {
-  // Organization identifier. Non-empty; immutable once set.
+  // Organization identifier: the Tenant's id. Required, and an RFC 1123 DNS
+  // label, because the backend qualifies owner groups as <id>/<group>;
+  // immutable once set.
   string id = 1 [(buf.validate.field).string = {
     min_len: 1
     max_len: 253

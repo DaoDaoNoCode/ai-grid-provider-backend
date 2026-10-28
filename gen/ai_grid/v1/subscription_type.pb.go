@@ -110,7 +110,8 @@ type SubscriptionSpec struct {
 	ModelRefs []*SubscriptionModelRef `protobuf:"bytes,2,rep,name=model_refs,json=modelRefs,proto3" json:"model_refs,omitempty"`
 	// Relative priority among subscriptions (higher wins when policies conflict).
 	Priority int32 `protobuf:"varint,3,opt,name=priority,proto3" json:"priority,omitempty"`
-	// Stable organization association. May be set once; then immutable.
+	// The organization that administers the subscription. Required: Create
+	// and Update answer InvalidArgument without it. Immutable once set.
 	Organization *SubscriptionOrganization `protobuf:"bytes,4,opt,name=organization,proto3" json:"organization,omitempty"`
 	// Metadata for token attribution and metering.
 	TokenMetadata *TokenMetadata `protobuf:"bytes,5,opt,name=token_metadata,json=tokenMetadata,proto3" json:"token_metadata,omitempty"`
@@ -205,7 +206,9 @@ func (x *SubscriptionSpec) GetGuardrails() []*GuardrailAttachment {
 // SubscriptionOrganization identifies the organization that administers a subscription.
 type SubscriptionOrganization struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// Organization identifier. Non-empty; immutable once set.
+	// Organization identifier: the Tenant's id. Required, and an RFC 1123 DNS
+	// label, because the backend qualifies owner groups as <id>/<group>;
+	// immutable once set.
 	Id            string `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache

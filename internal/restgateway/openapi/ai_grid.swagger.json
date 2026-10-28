@@ -2241,7 +2241,7 @@
       "properties": {
         "id": {
           "type": "string",
-          "description": "Organization identifier. Non-empty; immutable once set."
+          "description": "Organization identifier: the Tenant's id. Required, and an RFC 1123 DNS\nlabel, because the backend qualifies owner groups as \u003cid\u003e/\u003cgroup\u003e;\nimmutable once set."
         }
       },
       "description": "SubscriptionOrganization identifies the organization that administers a subscription."
@@ -2288,7 +2288,7 @@
         },
         "organization": {
           "$ref": "#/definitions/v1SubscriptionOrganization",
-          "description": "Stable organization association. May be set once; then immutable."
+          "description": "The organization that administers the subscription. Required: Create\nand Update answer InvalidArgument without it. Immutable once set."
         },
         "token_metadata": {
           "$ref": "#/definitions/v1TokenMetadata",
