@@ -100,8 +100,8 @@ dev-fake-poc: ## dev-fake on the PoC preset (fixtures/poc, fixtures/draft/poc)
 	@$(MAKE) --no-print-directory dev-fake DEV_FIXTURES=fixtures/poc DEV_DRAFT_FIXTURES=fixtures/draft/poc
 
 # One cluster per edge case of status.location (fixtures/locations).
-dev-fake-locations: ## dev-fake on the cluster location edge cases (fixtures/locations)
-	@$(MAKE) --no-print-directory dev-fake DEV_FIXTURES=fixtures/locations
+dev-fake-locations: ## dev-fake on the cluster location edge cases (fixtures/locations, fixtures/draft/default)
+	@$(MAKE) --no-print-directory dev-fake DEV_FIXTURES=fixtures/locations DEV_DRAFT_FIXTURES=fixtures/draft/default
 
 dev-catalog-reset: ## Delete the dev catalog repository (bin/dev-catalog.git) and create it again
 	@DEV_CATALOG="$(DEV_CATALOG)" bash hack/dev-catalog.sh reset
