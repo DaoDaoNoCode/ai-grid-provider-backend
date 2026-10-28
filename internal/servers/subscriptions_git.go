@@ -133,10 +133,7 @@ func withAuthPolicyStatus(policy *aigridv1.AuthPolicy, active ObjectReports) *ai
 		return policy
 	}
 	condition := clustersReadyCondition(objectClusters(active, policy.GetId()))
-	policy.Phase = "Active"
-	if condition.GetStatus() != aigridv1.ConditionStatus_CONDITION_STATUS_TRUE {
-		policy.Phase = "Pending"
-	}
+	policy.Phase = phaseFromCondition(condition, "Active")
 	policy.Conditions = []*aigridv1.Condition{condition}
 	return policy
 }
@@ -159,6 +156,15 @@ func clustersReadyCondition(ready, notReady, missing []string) *aigridv1.Conditi
 	return condition
 }
 
+// phaseFromCondition is the phase a clustersReadyCondition gives: readyPhase
+// when it is True, Pending otherwise.
+func phaseFromCondition(condition *aigridv1.Condition, readyPhase string) string {
+	if condition.GetStatus() == aigridv1.ConditionStatus_CONDITION_STATUS_TRUE {
+		return readyPhase
+	}
+	return "Pending"
+}
+
 // gitModelRegistrations stands in for the MaaSModelRef status a cluster
 // reports, from the ingress clusters' model-refs-ready reports: phase Ready
 // when every cluster the Policy is placed on has the MaaSModelRef ready, and
@@ -174,13 +180,13 @@ func gitModelRegistrations(sub *aigridv1.Subscription, namespace string, modelRe
 			ready, notReady, missing = objectClusters(modelRefs, ref.GetName())
 		}
 		if len(ready)+len(notReady)+len(missing) > 0 {
-			reg := &aigridv1.ModelRegistration{Name: ref.GetName(), Namespace: ref.GetNamespace(), Phase: "Ready"}
 			condition := clustersReadyCondition(ready, notReady, missing)
-			if condition.GetStatus() != aigridv1.ConditionStatus_CONDITION_STATUS_TRUE {
-				reg.Phase = "Pending"
-			}
-			reg.Conditions = []*aigridv1.Condition{condition}
-			out = append(out, reg)
+			out = append(out, &aigridv1.ModelRegistration{
+				Name:       ref.GetName(),
+				Namespace:  ref.GetNamespace(),
+				Phase:      phaseFromCondition(condition, "Ready"),
+				Conditions: []*aigridv1.Condition{condition},
+			})
 			continue
 		}
 		out = append(out, &aigridv1.ModelRegistration{
