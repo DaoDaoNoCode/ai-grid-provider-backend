@@ -6,10 +6,13 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 
+	"buf.build/go/protovalidate"
 	aigridv1 "github.com/osac-project/ai-grid-provider-backend/gen/ai_grid/v1"
 	"github.com/osac-project/ai-grid-provider-backend/internal/gitops"
+	"google.golang.org/protobuf/proto"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -40,14 +43,30 @@ func forbidPolicies(client *fake.FakeDynamicClient) {
 	})
 }
 
+// clusterStatus is a ModelClusterStatus a test expects.
+func clusterStatus(cluster string, phase aigridv1.ModelPhase, reason, message string) *aigridv1.ModelClusterStatus {
+	return &aigridv1.ModelClusterStatus{Cluster: cluster, Phase: phase, Reason: reason, Message: message}
+}
+
+const (
+	phaseReady   = aigridv1.ModelPhase_MODEL_PHASE_READY
+	phasePending = aigridv1.ModelPhase_MODEL_PHASE_PENDING
+	phasePartial = aigridv1.ModelPhase_MODEL_PHASE_PARTIALLY_AVAILABLE
+)
+
+// TestModelsGitStatus checks the phase, reason and message of a model placed
+// on site-a and site-b, and its status on each of them (status.clusters),
+// from the status Policies' reports. Every ModelClusterStatus must pass the
+// buf.validate rules declared on it.
 func TestModelsGitStatus(t *testing.T) {
 	t.Parallel()
 	for name, tc := range map[string]struct {
-		objects     []runtime.Object
-		forbid      bool
-		wantPhase   aigridv1.ModelPhase
-		wantReason  string
-		wantMessage string
+		objects      []runtime.Object
+		forbid       bool
+		wantPhase    aigridv1.ModelPhase
+		wantReason   string
+		wantMessage  string
+		wantClusters []*aigridv1.ModelClusterStatus
 	}{
 		"ready": {
 			objects: []runtime.Object{
@@ -57,7 +76,25 @@ func TestModelsGitStatus(t *testing.T) {
 				rootPolicy(catalogStatusPolicy, "hub"),
 				clusterPolicy("hub", catalogStatusPolicy, modelRefReady(true)),
 			},
-			wantPhase: aigridv1.ModelPhase_MODEL_PHASE_READY, wantReason: "Ready", wantMessage: "Ready on hub, site-a, site-b",
+			wantPhase: phaseReady, wantReason: "Ready", wantMessage: "Ready on hub, site-a, site-b",
+			wantClusters: []*aigridv1.ModelClusterStatus{
+				clusterStatus("site-a", phaseReady, "Ready", "LLMInferenceService ready"),
+				clusterStatus("site-b", phaseReady, "Ready", "LLMInferenceService ready"),
+			},
+		},
+		"ready on a combined cluster": {
+			objects: []runtime.Object{
+				rootPolicy(modelsStatusPolicy, "site-a", "site-b"),
+				clusterPolicy("site-a", modelsStatusPolicy, modelReady(true)),
+				clusterPolicy("site-b", modelsStatusPolicy, modelReady(true)),
+				rootPolicy(catalogStatusPolicy, "site-a"),
+				clusterPolicy("site-a", catalogStatusPolicy, modelRefReady(true)),
+			},
+			wantPhase: phaseReady, wantReason: "Ready", wantMessage: "Ready on site-a, site-b",
+			wantClusters: []*aigridv1.ModelClusterStatus{
+				clusterStatus("site-a", phaseReady, "Ready", "LLMInferenceService ready; MaaSModelRef ready"),
+				clusterStatus("site-b", phaseReady, "Ready", "LLMInferenceService ready"),
+			},
 		},
 		"not ready on one cluster": {
 			objects: []runtime.Object{
@@ -65,7 +102,51 @@ func TestModelsGitStatus(t *testing.T) {
 				clusterPolicy("site-a", modelsStatusPolicy, modelReady(false)),
 				clusterPolicy("site-b", modelsStatusPolicy, modelReady(true)),
 			},
-			wantPhase: aigridv1.ModelPhase_MODEL_PHASE_PENDING, wantReason: "NotReady", wantMessage: "Not ready on site-a; ready on site-b",
+			wantPhase: phasePartial, wantReason: "PartiallyAvailable", wantMessage: "Not ready on site-a; ready on site-b",
+			wantClusters: []*aigridv1.ModelClusterStatus{
+				clusterStatus("site-a", phasePending, "NotReady", "LLMInferenceService not ready"),
+				clusterStatus("site-b", phaseReady, "Ready", "LLMInferenceService ready"),
+			},
+		},
+		"not ready on one cluster, ready on the ingress": {
+			objects: []runtime.Object{
+				rootPolicy(modelsStatusPolicy, "site-a", "site-b"),
+				clusterPolicy("site-a", modelsStatusPolicy, modelReady(false)),
+				clusterPolicy("site-b", modelsStatusPolicy, modelReady(true)),
+				rootPolicy(catalogStatusPolicy, "hub"),
+				clusterPolicy("hub", catalogStatusPolicy, modelRefReady(true)),
+			},
+			wantPhase: phasePartial, wantReason: "PartiallyAvailable", wantMessage: "Not ready on site-a; ready on hub, site-b",
+			wantClusters: []*aigridv1.ModelClusterStatus{
+				clusterStatus("site-a", phasePending, "NotReady", "LLMInferenceService not ready"),
+				clusterStatus("site-b", phaseReady, "Ready", "LLMInferenceService ready"),
+			},
+		},
+		"not ready on one cluster and on the ingress": {
+			objects: []runtime.Object{
+				rootPolicy(modelsStatusPolicy, "site-a", "site-b"),
+				clusterPolicy("site-a", modelsStatusPolicy, modelReady(false)),
+				clusterPolicy("site-b", modelsStatusPolicy, modelReady(true)),
+				rootPolicy(catalogStatusPolicy, "hub"),
+				clusterPolicy("hub", catalogStatusPolicy, modelRefReady(false)),
+			},
+			wantPhase: phasePending, wantReason: "NotReady", wantMessage: "Not ready on hub, site-a; ready on site-b",
+			wantClusters: []*aigridv1.ModelClusterStatus{
+				clusterStatus("site-a", phasePending, "NotReady", "LLMInferenceService not ready"),
+				clusterStatus("site-b", phaseReady, "Ready", "LLMInferenceService ready"),
+			},
+		},
+		"not ready anywhere": {
+			objects: []runtime.Object{
+				rootPolicy(modelsStatusPolicy, "site-a", "site-b"),
+				clusterPolicy("site-a", modelsStatusPolicy, modelReady(false)),
+				clusterPolicy("site-b", modelsStatusPolicy, modelReady(false)),
+			},
+			wantPhase: phasePending, wantReason: "NotReady", wantMessage: "Not ready on site-a, site-b",
+			wantClusters: []*aigridv1.ModelClusterStatus{
+				clusterStatus("site-a", phasePending, "NotReady", "LLMInferenceService not ready"),
+				clusterStatus("site-b", phasePending, "NotReady", "LLMInferenceService not ready"),
+			},
 		},
 		"MaaSModelRef not ready on a combined cluster": {
 			objects: []runtime.Object{
@@ -75,7 +156,11 @@ func TestModelsGitStatus(t *testing.T) {
 				rootPolicy(catalogStatusPolicy, "site-a"),
 				clusterPolicy("site-a", catalogStatusPolicy, modelRefReady(false)),
 			},
-			wantPhase: aigridv1.ModelPhase_MODEL_PHASE_PENDING, wantReason: "NotReady", wantMessage: "Not ready on site-a; ready on site-b",
+			wantPhase: phasePending, wantReason: "NotReady", wantMessage: "Not ready on site-a; ready on site-b",
+			wantClusters: []*aigridv1.ModelClusterStatus{
+				clusterStatus("site-a", phasePending, "NotReady", "LLMInferenceService ready; MaaSModelRef not ready"),
+				clusterStatus("site-b", phaseReady, "Ready", "LLMInferenceService ready"),
+			},
 		},
 		"a placed cluster hasn't reported": {
 			objects: []runtime.Object{
@@ -83,7 +168,36 @@ func TestModelsGitStatus(t *testing.T) {
 				clusterPolicy("site-a", modelsStatusPolicy, modelReady(true)),
 				clusterPolicy("site-b", modelsStatusPolicy, map[string]string{modelsReadyCheck: "models-ready contains no object templates to check, and thus has no violations"}),
 			},
-			wantPhase: aigridv1.ModelPhase_MODEL_PHASE_PENDING, wantReason: "NotReady", wantMessage: "Ready on site-a; no report from site-b",
+			wantPhase: phasePartial, wantReason: "PartiallyAvailable", wantMessage: "Ready on site-a; no report from site-b",
+			wantClusters: []*aigridv1.ModelClusterStatus{
+				clusterStatus("site-a", phaseReady, "Ready", "LLMInferenceService ready"),
+				clusterStatus("site-b", phasePending, "NoReport", "No LLMInferenceService report"),
+			},
+		},
+		"a placed cluster the Policy isn't placed on": {
+			objects: []runtime.Object{
+				rootPolicy(modelsStatusPolicy, "site-a"),
+				clusterPolicy("site-a", modelsStatusPolicy, modelReady(true)),
+			},
+			wantPhase: phasePartial, wantReason: "PartiallyAvailable", wantMessage: "Ready on site-a; no report from site-b",
+			wantClusters: []*aigridv1.ModelClusterStatus{
+				clusterStatus("site-a", phaseReady, "Ready", "LLMInferenceService ready"),
+				clusterStatus("site-b", phasePending, "NoReport", "No LLMInferenceService report"),
+			},
+		},
+		"MaaSModelRef not reported on a combined cluster": {
+			objects: []runtime.Object{
+				rootPolicy(modelsStatusPolicy, "site-a", "site-b"),
+				clusterPolicy("site-a", modelsStatusPolicy, modelReady(true)),
+				clusterPolicy("site-b", modelsStatusPolicy, modelReady(true)),
+				rootPolicy(catalogStatusPolicy, "site-a"),
+				clusterPolicy("site-a", catalogStatusPolicy, map[string]string{modelRefsReadyCheck: msgEmpty}),
+			},
+			wantPhase: phasePending, wantReason: "NotReady", wantMessage: "Ready on site-b; no report from site-a",
+			wantClusters: []*aigridv1.ModelClusterStatus{
+				clusterStatus("site-a", phasePending, "NoReport", "LLMInferenceService ready; no MaaSModelRef report"),
+				clusterStatus("site-b", phaseReady, "Ready", "LLMInferenceService ready"),
+			},
 		},
 		"MaaSModelRef missing on an ingress cluster": {
 			objects: []runtime.Object{
@@ -94,7 +208,11 @@ func TestModelsGitStatus(t *testing.T) {
 				clusterPolicy("hub", catalogStatusPolicy, modelRefReady(true)),
 				clusterPolicy("edge", catalogStatusPolicy, map[string]string{modelRefsReadyCheck: msgEmpty}),
 			},
-			wantPhase: aigridv1.ModelPhase_MODEL_PHASE_PENDING, wantReason: "NotReady", wantMessage: "Ready on hub, site-a, site-b; no report from edge",
+			wantPhase: phasePending, wantReason: "NotReady", wantMessage: "Ready on hub, site-a, site-b; no report from edge",
+			wantClusters: []*aigridv1.ModelClusterStatus{
+				clusterStatus("site-a", phaseReady, "Ready", "LLMInferenceService ready"),
+				clusterStatus("site-b", phaseReady, "Ready", "LLMInferenceService ready"),
+			},
 		},
 		"no reports": {
 			objects:    []runtime.Object{rootPolicy(modelsStatusPolicy, "site-a")},
@@ -141,6 +259,44 @@ func TestModelsGitStatus(t *testing.T) {
 				if st.GetPlacement().GetNumberOfSelectedClusters() != 2 {
 					t.Errorf("%s placement = %v, want site-a and site-b", op, st.GetPlacement())
 				}
+				if !slices.EqualFunc(st.GetClusters(), tc.wantClusters, func(a, b *aigridv1.ModelClusterStatus) bool { return proto.Equal(a, b) }) {
+					t.Errorf("%s status.clusters = %v; want %v", op, st.GetClusters(), tc.wantClusters)
+				}
+				for _, cluster := range st.GetClusters() {
+					if err := protovalidate.Validate(cluster); err != nil {
+						t.Errorf("%s status.clusters[%s] fails its buf.validate rules: %v", op, cluster.GetCluster(), err)
+					}
+				}
+			}
+		})
+	}
+}
+
+// TestModelClusterStatusValidationRules checks the buf.validate rules on
+// ModelClusterStatus refuse what the server never writes: a cluster that is
+// not a DNS label, an UNSPECIFIED, PARTIALLY_AVAILABLE or undefined phase,
+// and an empty reason.
+func TestModelClusterStatusValidationRules(t *testing.T) {
+	t.Parallel()
+	valid := clusterStatus("site-a", phaseReady, "Ready", "LLMInferenceService ready")
+	if err := protovalidate.Validate(valid); err != nil {
+		t.Fatalf("protovalidate(%v) error = %v, want none", valid, err)
+	}
+	for name, mutate := range map[string]func(*aigridv1.ModelClusterStatus){
+		"empty cluster":       func(c *aigridv1.ModelClusterStatus) { c.Cluster = "" },
+		"cluster not a label": func(c *aigridv1.ModelClusterStatus) { c.Cluster = "Site_A" },
+		"unspecified phase":   func(c *aigridv1.ModelClusterStatus) { c.Phase = aigridv1.ModelPhase_MODEL_PHASE_UNSPECIFIED },
+		"partial phase":       func(c *aigridv1.ModelClusterStatus) { c.Phase = phasePartial },
+		"undefined phase":     func(c *aigridv1.ModelClusterStatus) { c.Phase = 99 },
+		"empty reason":        func(c *aigridv1.ModelClusterStatus) { c.Reason = "" },
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			c := proto.Clone(valid).(*aigridv1.ModelClusterStatus)
+			mutate(c)
+			var verr *protovalidate.ValidationError
+			if err := protovalidate.Validate(c); !errors.As(err, &verr) {
+				t.Fatalf("protovalidate(%v) error = %v, want a ValidationError", c, err)
 			}
 		})
 	}

@@ -32,6 +32,7 @@ import (
 	"github.com/osac-project/ai-grid-provider-backend/internal/keycloak"
 	"github.com/osac-project/ai-grid-provider-backend/internal/servers"
 	"google.golang.org/genproto/googleapis/rpc/errdetails"
+	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -643,9 +644,19 @@ func TestRealCatalogStatusOnFakeHub(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Models Create() error = %v", err)
 	}
+	// Ready on site-paris-1 and not on site-madrid-1, with the MaaSModelRef
+	// ready on the ingress site-ashburn-1: partially available (P13).
 	st := created.GetObject().GetStatus()
-	if st.GetPhase() != aigridv1.ModelPhase_MODEL_PHASE_PENDING || st.GetMessage() != "Not ready on site-madrid-1; ready on site-ashburn-1, site-paris-1" {
-		t.Fatalf("model status = %v, %q", st.GetPhase(), st.GetMessage())
+	if st.GetPhase() != aigridv1.ModelPhase_MODEL_PHASE_PARTIALLY_AVAILABLE || st.GetReason() != "PartiallyAvailable" ||
+		st.GetMessage() != "Not ready on site-madrid-1; ready on site-ashburn-1, site-paris-1" {
+		t.Fatalf("model status = %v, %q, %q", st.GetPhase(), st.GetReason(), st.GetMessage())
+	}
+	wantClusters := []*aigridv1.ModelClusterStatus{
+		{Cluster: "site-madrid-1", Phase: aigridv1.ModelPhase_MODEL_PHASE_PENDING, Reason: "NotReady", Message: "LLMInferenceService not ready"},
+		{Cluster: "site-paris-1", Phase: aigridv1.ModelPhase_MODEL_PHASE_READY, Reason: "Ready", Message: "LLMInferenceService ready"},
+	}
+	if !slices.EqualFunc(st.GetClusters(), wantClusters, func(a, b *aigridv1.ModelClusterStatus) bool { return proto.Equal(a, b) }) {
+		t.Fatalf("model status.clusters = %v, want %v", st.GetClusters(), wantClusters)
 	}
 	if got := st.GetPlacement().GetLocations(); !slices.Equal(got, []string{"madrid", "paris"}) {
 		t.Fatalf("model locations = %v", got)
