@@ -563,8 +563,10 @@ type ModelContainer struct {
 	// request that differs from its limit. Such a resource with a request and
 	// no limit is saved with the request as its limit, as Kubernetes requires
 	// the limit (validateResourceRequirements in kubernetes/kubernetes
-	// pkg/apis/core/validation). A rule across the two maps is checked by the
-	// server only.
+	// pkg/apis/core/validation). An Update that replaces requests and not
+	// limits drops each such limit that equalled its saved request, so the
+	// limit follows the new request, and a removed request takes its limit
+	// with it. A rule across the two maps is checked by the server only.
 	Requests map[string]string `protobuf:"bytes,2,rep,name=requests,proto3" json:"requests,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
 	// Resource limits: Kubernetes quantities, as requests.
 	Limits map[string]string `protobuf:"bytes,3,rep,name=limits,proto3" json:"limits,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`

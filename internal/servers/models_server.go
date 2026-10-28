@@ -581,6 +581,9 @@ func mergeModelUpdate(current, incoming *aigridv1.Model, paths modelUpdatePaths)
 			main.Env = inMain.GetEnv()
 		}
 		if paths.mainRequests {
+			if !paths.mainLimits {
+				dropDerivedLimits(out.Spec.GetMain(), main)
+			}
 			main.Requests = inMain.GetRequests()
 		}
 		if paths.mainLimits {

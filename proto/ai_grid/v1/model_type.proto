@@ -133,8 +133,10 @@ message ModelContainer {
   // request that differs from its limit. Such a resource with a request and
   // no limit is saved with the request as its limit, as Kubernetes requires
   // the limit (validateResourceRequirements in kubernetes/kubernetes
-  // pkg/apis/core/validation). A rule across the two maps is checked by the
-  // server only.
+  // pkg/apis/core/validation). An Update that replaces requests and not
+  // limits drops each such limit that equalled its saved request, so the
+  // limit follows the new request, and a removed request takes its limit
+  // with it. A rule across the two maps is checked by the server only.
   map<string, string> requests = 2 [(buf.validate.field).map = {
     keys: {
       string: {min_len: 1}

@@ -186,9 +186,12 @@ func TestModelsGitResources(t *testing.T) {
 }
 
 // TestModelsGitResourcesUpdate checks the same rules on Update, on the
-// merged spec: a mask that changes only the GPU request leaves the saved
-// limit, so the two must still agree; a missing limit is filled as on
-// Create.
+// merged spec. A mask with spec.main.requests and not spec.main.limits keeps
+// the saved limits, except the limit of a resource that can't be
+// overcommitted whose saved limit equalled its saved request: that limit came
+// from the request (normalizeModelResources), so it follows the new request.
+// The GPU count can change, and removing the GPU request removes its limit.
+// A mask with both maps, or spec.main, replaces them as sent.
 func TestModelsGitResourcesUpdate(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -196,6 +199,7 @@ func TestModelsGitResourcesUpdate(t *testing.T) {
 	srv := mustGitModelsServer(t, writer)
 	model := gitSampleModel("res", "site-a")
 	model.Spec.Main.Requests = map[string]string{"cpu": "2", "nvidia.com/gpu": "1"}
+	model.Spec.Main.Limits = map[string]string{"cpu": "4"}
 	if _, err := srv.Create(ctx, &aigridv1.ModelsCreateRequest{Object: model}); err != nil {
 		t.Fatalf("Create() error = %v", err)
 	}
@@ -205,34 +209,52 @@ func TestModelsGitResourcesUpdate(t *testing.T) {
 		object.Spec.Main.Limits = limits
 		return srv.Update(ctx, &aigridv1.ModelsUpdateRequest{Object: object, UpdateMask: &fieldmaskpb.FieldMask{Paths: paths}})
 	}
+	check := func(op string, got *aigridv1.ModelsUpdateResponse, err error, wantLimits map[string]string) {
+		t.Helper()
+		if err != nil {
+			t.Fatalf("%s error = %v", op, err)
+		}
+		if limits := got.GetObject().GetSpec().GetMain().GetLimits(); !maps.Equal(limits, wantLimits) {
+			t.Fatalf("%s limits = %v, want %v", op, limits, wantLimits)
+		}
+		if limits := committedLimits(t, writer, "res"); !maps.Equal(limits, wantLimits) {
+			t.Fatalf("%s committed limits = %v, want %v", op, limits, wantLimits)
+		}
+	}
 
+	// The GPU count changes; the cpu limit the caller set stays.
+	got, err := update(map[string]string{"cpu": "2", "nvidia.com/gpu": "2"}, nil, "spec.main.requests")
+	check("Update(requests: 2 GPUs)", got, err, map[string]string{"cpu": "4", "nvidia.com/gpu": "2"})
+	// Removing the GPU request removes the GPU, not just the request.
+	got, err = update(map[string]string{"cpu": "2"}, nil, "spec.main.requests")
+	check("Update(requests: no GPU)", got, err, map[string]string{"cpu": "4"})
+	got, err = update(map[string]string{}, nil, "object.spec.main.requests")
+	check("Update(requests: none)", got, err, map[string]string{"cpu": "4"})
+
+	got, err = update(map[string]string{"nvidia.com/gpu": "2"}, map[string]string{"nvidia.com/gpu": "2"}, "spec.main.requests", "spec.main.limits")
+	check("Update(requests and limits)", got, err, map[string]string{"nvidia.com/gpu": "2"})
+	got, err = update(map[string]string{"nvidia.com/gpu": "4"}, nil, "spec.main")
+	check("Update(spec.main)", got, err, map[string]string{"nvidia.com/gpu": "4"})
+
+	// A GPU limit with no request (Kubernetes defaults the request to it)
+	// didn't come from a request, so a requests-only update keeps it.
+	got, err = update(nil, map[string]string{"nvidia.com/gpu": "1"}, "spec.main")
+	check("Update(spec.main: GPU limit only)", got, err, map[string]string{"nvidia.com/gpu": "1"})
+	got, err = update(map[string]string{"cpu": "1"}, nil, "spec.main.requests")
+	check("Update(requests: cpu, GPU limit only)", got, err, map[string]string{"nvidia.com/gpu": "1"})
+
+	// A limits-only update is checked against the saved requests.
+	if _, err := update(map[string]string{"nvidia.com/gpu": "1"}, map[string]string{"nvidia.com/gpu": "1"}, "spec.main"); err != nil {
+		t.Fatalf("Update(spec.main: 1 GPU) error = %v", err)
+	}
 	commits := len(writer.Messages())
-	_, err := update(map[string]string{"cpu": "2", "nvidia.com/gpu": "2"}, nil, "spec.main.requests")
+	_, err = update(nil, map[string]string{"nvidia.com/gpu": "2"}, "spec.main.limits")
 	assertConnectCode(t, err, connect.CodeInvalidArgument)
 	if !strings.Contains(err.Error(), `"nvidia.com/gpu"`) {
-		t.Fatalf("Update(requests only) error = %v, want it to name nvidia.com/gpu", err)
+		t.Fatalf("Update(limits only) error = %v, want it to name nvidia.com/gpu", err)
 	}
 	if n := len(writer.Messages()); n != commits {
-		t.Fatalf("Update(requests only) commits = %d, want %d", n, commits)
-	}
-
-	got, err := update(map[string]string{"cpu": "2", "nvidia.com/gpu": "2"}, map[string]string{"nvidia.com/gpu": "2"}, "spec.main.requests", "spec.main.limits")
-	if err != nil {
-		t.Fatalf("Update(requests and limits) error = %v", err)
-	}
-	if limits := got.GetObject().GetSpec().GetMain().GetLimits(); !maps.Equal(limits, map[string]string{"nvidia.com/gpu": "2"}) {
-		t.Fatalf("Update(requests and limits) limits = %v", limits)
-	}
-
-	got, err = update(map[string]string{"nvidia.com/gpu": "4"}, nil, "spec.main")
-	if err != nil {
-		t.Fatalf("Update(spec.main) error = %v", err)
-	}
-	if limits := got.GetObject().GetSpec().GetMain().GetLimits(); !maps.Equal(limits, map[string]string{"nvidia.com/gpu": "4"}) {
-		t.Fatalf("Update(spec.main) limits = %v, want the request filled in", limits)
-	}
-	if limits := committedLimits(t, writer, "res"); !maps.Equal(limits, map[string]string{"nvidia.com/gpu": "4"}) {
-		t.Fatalf("committed limits = %v, want the request filled in", limits)
+		t.Fatalf("Update(limits only) commits = %d, want %d", n, commits)
 	}
 }
 

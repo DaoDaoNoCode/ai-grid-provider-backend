@@ -74,6 +74,39 @@ func normalizeModelResources(main *aigridv1.ModelContainer) {
 	}
 }
 
+// dropDerivedLimits prepares an update that replaces spec.main.requests and
+// keeps spec.main.limits: it removes from merged the limit of each resource
+// that can't be overcommitted whose saved limit equals its saved request.
+// Such a limit follows the request (normalizeModelResources set it, or the
+// caller set it to the only value Kubernetes allows), so it must follow the
+// new request: normalizeModelResources then gives it the new request, and a
+// removed request takes its limit with it. Without this, a GPU count could
+// not change through the requests alone, and removing the GPU request would
+// keep the GPU, because Kubernetes defaults a missing request to the limit.
+// A limit with no saved request stays.
+func dropDerivedLimits(saved, merged *aigridv1.ModelContainer) {
+	for name, request := range saved.GetRequests() {
+		if overcommitAllowed(name) {
+			continue
+		}
+		limit, ok := merged.GetLimits()[name]
+		if ok && sameQuantity(request, limit) {
+			delete(merged.Limits, name)
+		}
+	}
+}
+
+// sameQuantity reports whether two quantities are equal ("1" and "1000m"),
+// or, when either doesn't parse, the same string.
+func sameQuantity(a, b string) bool {
+	qa, errA := resource.ParseQuantity(a)
+	qb, errB := resource.ParseQuantity(b)
+	if errA != nil || errB != nil {
+		return a == b
+	}
+	return qa.Cmp(qb) == 0
+}
+
 // validateModelResources refuses the requests and limits Kubernetes would
 // refuse: a quantity that doesn't parse or is negative, an extended resource
 // that isn't a whole number, a request above its limit, and a request that
