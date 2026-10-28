@@ -225,6 +225,18 @@ For subscriptions:
   (`models-as-a-service` by default). A ref in that namespace must name a
   model in the repository, or Create and Update answer `FailedPrecondition`;
   a ref to another namespace isn't checked.
+- Every read and every write's answer joins each model ref to the model's
+  catalog entry (`catalog/models/<id>/catalog/model.yaml`): when the ref's
+  name and namespace are those of the entry's `MaaSModelRef`, the ref gets
+  `model_id`, the model's id, and `display_name` and `description` from that
+  `MaaSModelRef`'s `openshift.io/display-name` and `openshift.io/description`
+  annotations (the model's own, which the Models API copies there). A ref to
+  anything else has none of them, and neither has a ref to a model whose entry
+  can't be read or parsed: that is logged, and the call still answers. They're output only: never written to the
+  file, and ignored on write. A client finds a ref's model by
+  `model_id == Model.id`, and the subscriptions using a model with the List
+  filter `this.spec.model_refs.exists(r, r.model_id == "<id>")`, without
+  knowing any namespace.
 - `status.phase` comes from the spokes (see "Status from the spokes" below):
   `Active` when every ingress cluster the status Policy is placed on has it
   active; `Pending` when any has it not active, doesn't have it yet, or hasn't
@@ -717,7 +729,9 @@ make dev-catalog-reset                # delete the repository and start from the
 the ingress `site-ashburn-1`, and `status.clusters` has an entry for each of
 the two placed clusters. Any other name shows `SavedToGit`. On
 `make dev-fake-poc`, place `granite-3b` on `site1` and `site2` instead:
-`fixtures/poc/policies.json` reports it the same way. `make run` commits to the
+`fixtures/poc/policies.json` reports it the same way. `team-a`'s model ref
+reads back joined to the model: `namespace` `models-as-a-service`,
+`model_id` `granite-3b` and `display_name` `Granite 3B`. `make run` commits to the
 same repository. To commit somewhere else, such as a clone you push from, set
 `AI_GRID_GIT_URL` (and `AI_GRID_GIT_BRANCH`); it overrides the default.
 

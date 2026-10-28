@@ -2228,7 +2228,7 @@
         },
         "namespace": {
           "type": "string",
-          "description": "Model namespace. Empty means the platform default model namespace."
+          "description": "Model namespace. Empty means the platform default model namespace: the\nsubscription's own namespace, where the Models API publishes each\nmodel's MaaSModelRef (not the namespace its LLMInferenceService runs in).\nThe backend writes it filled in, so reads return it."
         },
         "token_rate_limits": {
           "type": "array",
@@ -2256,11 +2256,15 @@
         },
         "display_name": {
           "type": "string",
-          "description": "Output enrichment from MaaSModelRef annotations. Ignored on write."
+          "description": "Output enrichment from MaaSModelRef annotations. Ignored on write.\nThe openshift.io/display-name annotation of the MaaSModelRef this ref\nnames, which the Models API copies from the Model's own annotation. Set\nonly with model_id; empty when the model has no display name."
         },
         "description": {
           "type": "string",
-          "description": "Output enrichment from MaaSModelRef annotations. Ignored on write."
+          "description": "Output enrichment from MaaSModelRef annotations. Ignored on write.\nThe openshift.io/description annotation of the same MaaSModelRef, as\ndisplay_name."
+        },
+        "model_id": {
+          "type": "string",
+          "description": "Output only; ignored on write. The id of the Model (ai_grid.v1.Models)\nthis ref names: set when name and namespace are those of the MaaSModelRef\nthe Models API publishes for that model, the one in its catalog entry.\nEmpty when the ref names a MaaSModelRef the Models API didn't write: in\nanother namespace, or for a model the catalog doesn't have. A client\njoins a ref to its model by model_id == Model.id, with no namespace of\nits own; on write it sends the model's id as name and leaves namespace\nempty."
         }
       },
       "description": "SubscriptionModelRef references a model and optional token rate limits."
@@ -2270,7 +2274,7 @@
       "properties": {
         "id": {
           "type": "string",
-          "description": "Organization identifier. Non-empty; immutable once set."
+          "description": "Organization identifier: the Tenant's id. Required, and an RFC 1123 DNS\nlabel, because the backend qualifies owner groups as \u003cid\u003e/\u003cgroup\u003e;\nimmutable once set."
         }
       },
       "description": "SubscriptionOrganization identifies the organization that administers a subscription."
@@ -2317,7 +2321,7 @@
         },
         "organization": {
           "$ref": "#/definitions/v1SubscriptionOrganization",
-          "description": "Stable organization association. May be set once; then immutable."
+          "description": "The organization that administers the subscription. Required: Create\nand Update answer InvalidArgument without it. Immutable once set."
         },
         "token_metadata": {
           "$ref": "#/definitions/v1TokenMetadata",

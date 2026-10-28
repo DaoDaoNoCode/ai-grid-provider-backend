@@ -42,7 +42,8 @@ message SubscriptionSpec {
   // Relative priority among subscriptions (higher wins when policies conflict).
   int32 priority = 3;
 
-  // Stable organization association. May be set once; then immutable.
+  // The organization that administers the subscription. Required: Create
+  // and Update answer InvalidArgument without it. Immutable once set.
   SubscriptionOrganization organization = 4;
 
   // Metadata for token attribution and metering.
@@ -58,7 +59,9 @@ message SubscriptionSpec {
 
 // SubscriptionOrganization identifies the organization that administers a subscription.
 message SubscriptionOrganization {
-  // Organization identifier. Non-empty; immutable once set.
+  // Organization identifier: the Tenant's id. Required, and an RFC 1123 DNS
+  // label, because the backend qualifies owner groups as <id>/<group>;
+  // immutable once set.
   string id = 1 [(buf.validate.field).string = {
     min_len: 1
     max_len: 253
@@ -83,7 +86,10 @@ message SubscriptionModelRef {
     pattern: "^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$"
   }];
 
-  // Model namespace. Empty means the platform default model namespace.
+  // Model namespace. Empty means the platform default model namespace: the
+  // subscription's own namespace, where the Models API publishes each
+  // model's MaaSModelRef (not the namespace its LLMInferenceService runs in).
+  // The backend writes it filled in, so reads return it.
   string namespace = 2;
 
   // Token rate limits for this model. Required unless unlimited is true.
@@ -100,10 +106,31 @@ message SubscriptionModelRef {
   repeated GuardrailAttachment guardrails = 6;
 
   // Output enrichment from MaaSModelRef annotations. Ignored on write.
+  // The openshift.io/display-name annotation of the MaaSModelRef this ref
+  // names, which the Models API copies from the Model's own annotation. Set
+  // only with model_id; empty when the model has no display name.
   string display_name = 7;
 
   // Output enrichment from MaaSModelRef annotations. Ignored on write.
+  // The openshift.io/description annotation of the same MaaSModelRef, as
+  // display_name.
   string description = 8;
+
+  // Output only; ignored on write. The id of the Model (ai_grid.v1.Models)
+  // this ref names: set when name and namespace are those of the MaaSModelRef
+  // the Models API publishes for that model, the one in its catalog entry.
+  // Empty when the ref names a MaaSModelRef the Models API didn't write: in
+  // another namespace, or for a model the catalog doesn't have. A client
+  // joins a ref to its model by model_id == Model.id, with no namespace of
+  // its own; on write it sends the model's id as name and leaves namespace
+  // empty.
+  string model_id = 9 [(buf.validate.field) = {
+    ignore: IGNORE_IF_ZERO_VALUE
+    string: {
+      max_len: 63
+      pattern: "^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$"
+    }
+  }];
 }
 
 // TokenRateLimit caps token usage over a time window.

@@ -638,7 +638,8 @@ func TestRealCatalogStatusOnFakeHub(t *testing.T) {
 
 	replicas := int32(1)
 	created, err := models.Create(ctx, &aigridv1.ModelsCreateRequest{Object: &aigridv1.Model{
-		Id: "granite-3b",
+		Id:       "granite-3b",
+		Metadata: &aigridv1.Metadata{Annotations: map[string]string{"openshift.io/display-name": "Granite 3B"}},
 		Spec: &aigridv1.ModelSpec{
 			Model:    &aigridv1.ModelSource{Uri: "hf://ibm-granite/granite-3b"},
 			Replicas: &replicas,
@@ -684,6 +685,11 @@ func TestRealCatalogStatusOnFakeHub(t *testing.T) {
 	}
 	if phase := sub.GetAuthPolicy().GetPhase(); phase != "Active" {
 		t.Fatalf("auth policy %q phase = %q, want Active", sub.GetAuthPolicy().GetId(), phase)
+	}
+	// As the README says: the ref reads back joined to the model.
+	ref := sub.GetObject().GetSpec().GetModelRefs()[0]
+	if ref.GetNamespace() != "models-as-a-service" || ref.GetModelId() != "granite-3b" || ref.GetDisplayName() != "Granite 3B" {
+		t.Fatalf("model ref = %v, want namespace models-as-a-service, model_id granite-3b, display_name Granite 3B", ref)
 	}
 }
 

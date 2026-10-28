@@ -655,7 +655,9 @@ a placement that names a location is `InvalidArgument`.
 Without `placement`, the model is on no cluster (only its catalog entry is
 delivered). Gateway defaults to
 `openshift-ingress/openshift-ai-inference`. Display name / description live in
-`openshift.io/display-name` and `openshift.io/description` annotations.
+`openshift.io/display-name` and `openshift.io/description` annotations, which
+subscriptions show on their model refs. A subscription's model ref names this
+model when its `model_id` equals the model's `id` (section 5).
 
 gRPC: `ai_grid.v1.Models/{List,Get,Create,Update,Delete,ListPlacementClusters}`,
 and the deprecated `ai_grid.v1.Models/ListLocations`.
@@ -678,6 +680,15 @@ a namespace gets the subscription namespace, and a ref in that namespace must
 name an existing model (`FailedPrecondition` otherwise). Labels and annotations take only
 unprefixed keys plus `openshift.io/display-name` and
 `openshift.io/description`.
+
+**Which model a ref names:** every read, and the answer of every Create and
+Update, sets `model_id` on each model ref that names a model's catalog entry
+(the `MaaSModelRef` the Models API publishes for it, in the subscription
+namespace), with that entry's `display_name` and `description`. Join a ref to
+its model by `model_id == Model.id`; a ref with an empty `model_id` names no
+model of the Models API. The UI needs no namespace of its own: to add a model,
+send its `id` as `name` and leave `namespace` empty. To list the subscriptions
+that use a model, filter: `this.spec.model_refs.exists(r, r.model_id == "<id>")`.
 
 **AuthPolicy pairing (server side-effect):** the same file holds a managed
 `MaaSAuthPolicy` named `<id>-policy` (subjects from `owner`, model refs
@@ -737,7 +748,7 @@ Subscription ids must leave room for the `-policy` suffix (max 56 chars).
 | `owner.users` | string[] | Optional user names |
 | `model_refs[]` | object | See below |
 | `priority` | int32 | Relative priority among subscriptions |
-| `organization.id` | string | Optional; set once, then immutable |
+| `organization.id` | string | Required: the organization's id (the Tenant `id`, a Keycloak organization UUID), a DNS label, else `InvalidArgument`. Immutable: an Update that changes or removes it is `InvalidArgument` |
 | `token_metadata` | object | `organization_id`, `cost_center`, `labels` |
 | `inference_priority` | int32 (optional) | Inference scheduling priority |
 | `guardrails[]` | object | `{ ref_name, checks[] }` |
@@ -746,8 +757,11 @@ Subscription ids must leave room for the `-policy` suffix (max 56 chars).
 
 | Field | Type | Notes |
 | --- | --- | --- |
-| `name` | string | MaaSModelRef name |
-| `namespace` | string | Defaults to the subscription namespace on write |
+| `name` | string | MaaSModelRef name; for a model of the Models API, its `id` |
+| `namespace` | string | Defaults to the subscription namespace on write (where the Models API publishes each model's MaaSModelRef, not `AI_GRID_MODELS_NAMESPACE`); reads return it set |
+| `model_id` | string | Output only, ignored on write. The `id` of the Model whose catalog entry this ref names; empty for a ref to any other MaaSModelRef |
+| `display_name` | string | Output only, ignored on write. The model's `openshift.io/display-name` annotation, from its MaaSModelRef; set only with `model_id`, empty when the model has none |
+| `description` | string | Output only, ignored on write. The model's `openshift.io/description` annotation, as `display_name` |
 | `token_rate_limits[]` | object | Required unless `unlimited`. `{ limit, window }`: `limit` 1 to 1000000000; `window` matches `^[1-9]\d{0,3}(s\|m\|h)$` and is at most `8784h` (366 days, the MaaS maximum), else `InvalidArgument` |
 | `unlimited` | bool | Mutually exclusive with `token_rate_limits` |
 | `billing_rate.per_token` | string | Optional |
