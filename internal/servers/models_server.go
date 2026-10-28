@@ -11,10 +11,12 @@ import (
 	"time"
 
 	connect "connectrpc.com/connect/v2"
+	"connectrpc.com/connect/v2/connectproto"
 	aigridv1 "github.com/osac-project/ai-grid-provider-backend/gen/ai_grid/v1"
 	"github.com/osac-project/ai-grid-provider-backend/gen/ai_grid/v1/aigridv1connect"
 	"github.com/osac-project/ai-grid-provider-backend/internal/celfilter"
 	"github.com/osac-project/ai-grid-provider-backend/internal/gitops"
+	"google.golang.org/genproto/googleapis/rpc/errdetails"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -347,6 +349,11 @@ func (s *ModelsServer) listManagedClusters(ctx context.Context) ([]unstructured.
 // update adds are checked, so a model on a cluster that has since left the
 // hub can still be changed or moved off it. Without a dynamic client there is
 // nothing to check against.
+//
+// The error carries a google.rpc.ResourceInfo detail for each unknown cluster,
+// in the order of added (resource_type managedClusterResourceType,
+// resource_name the cluster), so a client can find the names without parsing
+// the message.
 func (s *ModelsServer) checkPlacementClusters(ctx context.Context, added []string) error {
 	if s.client == nil || len(added) == 0 {
 		return nil
@@ -359,21 +366,40 @@ func (s *ModelsServer) checkPlacementClusters(ctx context.Context, added []strin
 	for i := range items {
 		known[items[i].GetName()] = true
 	}
-	var unknown []string
+	var unknown, quoted []string
 	for _, cluster := range added {
 		if !known[cluster] {
-			unknown = append(unknown, strconv.Quote(cluster))
+			unknown = append(unknown, cluster)
+			quoted = append(quoted, strconv.Quote(cluster))
 		}
 	}
+	var cerr *connect.Error
 	switch len(unknown) {
 	case 0:
 		return nil
 	case 1:
-		return connect.Errorf(connect.CodeInvalidArgument, "spec.placement names cluster %s, which is not a ManagedCluster on the hub; a placement takes cluster names (Models/ListPlacementClusters), not location labels", unknown[0])
+		cerr = connect.Errorf(connect.CodeInvalidArgument, "spec.placement names cluster %s, which is not a ManagedCluster on the hub; a placement takes cluster names (Models/ListPlacementClusters), not location labels", quoted[0])
 	default:
-		return connect.Errorf(connect.CodeInvalidArgument, "spec.placement names clusters %s, which are not ManagedClusters on the hub; a placement takes cluster names (Models/ListPlacementClusters), not location labels", strings.Join(unknown, ", "))
+		cerr = connect.Errorf(connect.CodeInvalidArgument, "spec.placement names clusters %s, which are not ManagedClusters on the hub; a placement takes cluster names (Models/ListPlacementClusters), not location labels", strings.Join(quoted, ", "))
 	}
+	for _, cluster := range unknown {
+		// Marshalling a ResourceInfo does not fail; if it did, the message
+		// still names the cluster.
+		if detail, err := connectproto.NewErrorDetail(&errdetails.ResourceInfo{
+			ResourceType: managedClusterResourceType,
+			ResourceName: cluster,
+			Description:  "not a ManagedCluster on the hub",
+		}); err == nil {
+			cerr = cerr.WithDetail(detail)
+		}
+	}
+	return cerr
 }
+
+// managedClusterResourceType is the google.rpc.ResourceInfo resource_type of
+// a cluster: the type URL of ai_grid.v1.ManagedCluster, whose id is the
+// cluster name.
+var managedClusterResourceType = "type.googleapis.com/" + string((&aigridv1.ManagedCluster{}).ProtoReflect().Descriptor().FullName())
 
 // isPlacementCluster reports whether a model can be placed on the cluster
 // item, by the rules ListPlacementClusters documents.

@@ -161,8 +161,10 @@ For models:
   `spec.rollout` other than strategy `All` alone. Argo CD delivers to every
   cluster at once, which is `All`, so that rollout is accepted and not stored.
 - Each cluster a create or update adds to the placement must be a
-  ManagedCluster on the hub, or the call answers `InvalidArgument` naming it:
-  a name no cluster has, such as a `location` label, would be committed and
+  ManagedCluster on the hub, or the call answers `InvalidArgument` naming it,
+  with a `google.rpc.ResourceInfo` detail per unknown cluster
+  (`resource_type` `type.googleapis.com/ai_grid.v1.ManagedCluster`,
+  `resource_name` the cluster): a name no cluster has, such as a `location` label, would be committed and
   delivered nowhere. A cluster the model is already on is not checked again,
   so a model on a cluster that has left the hub can still be changed or moved
   off it. `Models/ListPlacementClusters` lists the clusters a model can run

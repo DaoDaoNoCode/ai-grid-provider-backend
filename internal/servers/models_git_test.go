@@ -9,8 +9,10 @@ import (
 	"time"
 
 	connect "connectrpc.com/connect/v2"
+	"connectrpc.com/connect/v2/connectproto"
 	aigridv1 "github.com/osac-project/ai-grid-provider-backend/gen/ai_grid/v1"
 	"github.com/osac-project/ai-grid-provider-backend/internal/gitops"
+	"google.golang.org/genproto/googleapis/rpc/errdetails"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -510,13 +512,13 @@ func TestModelsGitPlacementNamesKnownClusters(t *testing.T) {
 	// The location labels are not cluster names.
 	_, err = srv.Create(ctx, &aigridv1.ModelsCreateRequest{Object: gitSampleModel("copy", locations...)})
 	assertConnectCode(t, err, connect.CodeInvalidArgument)
-	if !strings.Contains(err.Error(), `"us-east"`) {
-		t.Fatalf("Create(us-east) error = %v, want it to name us-east", err)
+	if got := unknownPlacementClusters(t, err); !slices.Equal(got, []string{"us-east"}) {
+		t.Fatalf("Create(us-east) unknown clusters = %v, want [us-east] (%v)", got, err)
 	}
 	_, err = srv.Create(ctx, &aigridv1.ModelsCreateRequest{Object: gitSampleModel("mixed", "site-a", "madrid", "paris")})
 	assertConnectCode(t, err, connect.CodeInvalidArgument)
-	if msg := err.Error(); !strings.Contains(msg, `"madrid"`) || !strings.Contains(msg, `"paris"`) || strings.Contains(msg, `"site-a"`) {
-		t.Fatalf("Create(site-a, madrid, paris) error = %v, want it to name madrid and paris only", err)
+	if got := unknownPlacementClusters(t, err); !slices.Equal(got, []string{"madrid", "paris"}) {
+		t.Fatalf("Create(site-a, madrid, paris) unknown clusters = %v, want [madrid paris] (%v)", got, err)
 	}
 	if _, err := srv.Get(ctx, &aigridv1.ModelsGetRequest{Id: "copy"}); connect.CodeOf(err) != connect.CodeNotFound {
 		t.Fatalf("Get(copy) error = %v, want NotFound: a refused create commits nothing", err)
@@ -528,8 +530,8 @@ func TestModelsGitPlacementNamesKnownClusters(t *testing.T) {
 	placement := &fieldmaskpb.FieldMask{Paths: []string{"spec.placement"}}
 	_, err = srv.Update(ctx, &aigridv1.ModelsUpdateRequest{Object: gitSampleModel("sim", "site-a", "us-east"), UpdateMask: placement})
 	assertConnectCode(t, err, connect.CodeInvalidArgument)
-	if !strings.Contains(err.Error(), `"us-east"`) {
-		t.Fatalf("Update(us-east) error = %v, want it to name us-east", err)
+	if got := unknownPlacementClusters(t, err); !slices.Equal(got, []string{"us-east"}) {
+		t.Fatalf("Update(us-east) unknown clusters = %v, want [us-east] (%v)", got, err)
 	}
 
 	// site-b leaves the hub: the model can still be changed, and moved off it.
@@ -555,6 +557,30 @@ func TestModelsGitPlacementNamesKnownClusters(t *testing.T) {
 	// Moving back onto the removed cluster adds it again, so it is checked.
 	_, err = srv.Update(ctx, &aigridv1.ModelsUpdateRequest{Object: gitSampleModel("sim", "site-a", "site-b"), UpdateMask: placement})
 	assertConnectCode(t, err, connect.CodeInvalidArgument)
+	if got := unknownPlacementClusters(t, err); !slices.Equal(got, []string{"site-b"}) {
+		t.Fatalf("Update(site-a, site-b) unknown clusters = %v, want [site-b] (%v)", got, err)
+	}
+}
+
+// unknownPlacementClusters returns the names in the google.rpc.ResourceInfo
+// details of err that name an ai_grid.v1.ManagedCluster, in order.
+func unknownPlacementClusters(t *testing.T, err error) []string {
+	t.Helper()
+	var connectErr *connect.Error
+	if !errors.As(err, &connectErr) {
+		t.Fatalf("error = %v (%T), want *connect.Error", err, err)
+	}
+	var names []string
+	for _, detail := range connectErr.Details() {
+		msg, err := connectproto.UnmarshalErrorDetail(detail)
+		if err != nil {
+			t.Fatalf("UnmarshalErrorDetail(%s) error = %v", detail.Type, err)
+		}
+		if info, ok := msg.(*errdetails.ResourceInfo); ok && info.GetResourceType() == "type.googleapis.com/ai_grid.v1.ManagedCluster" {
+			names = append(names, info.GetResourceName())
+		}
+	}
+	return names
 }
 
 // Without the ManagedCluster API no cluster exists, so every name is unknown;

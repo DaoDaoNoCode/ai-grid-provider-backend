@@ -533,7 +533,9 @@ ingress clusters. See README "Git catalog" for the repository layout.
 `name` label only (`name In [...]` or a `name` match label); cluster sets, other labels,
 `number_of_clusters` and any rollout other than strategy `All` alone are
 `InvalidArgument`. Each cluster a create or update adds must be a
-ManagedCluster on the hub, or the call is `InvalidArgument` naming it; a
+ManagedCluster on the hub, or the call is `InvalidArgument` naming it, with a
+`google.rpc.ResourceInfo` detail per unknown cluster (`resource_type`
+`type.googleapis.com/ai_grid.v1.ManagedCluster`, `resource_name` the cluster); a
 cluster the model is already on is not checked again, so a model on a cluster
 that has left the hub can still be changed or moved off it.
 `:listPlacementClusters` lists the clusters a model can run on. Status comes

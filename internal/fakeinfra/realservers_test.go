@@ -7,6 +7,7 @@ package fakeinfra_test
 import (
 	"context"
 	"crypto/tls"
+	"errors"
 	"log/slog"
 	"maps"
 	"net"
@@ -20,6 +21,7 @@ import (
 	"time"
 
 	connect "connectrpc.com/connect/v2"
+	"connectrpc.com/connect/v2/connectproto"
 	aigridv1 "github.com/osac-project/ai-grid-provider-backend/gen/ai_grid/v1"
 	"github.com/osac-project/ai-grid-provider-backend/internal/acmsearch"
 	"github.com/osac-project/ai-grid-provider-backend/internal/fakeinfra/devserve"
@@ -28,6 +30,7 @@ import (
 	"github.com/osac-project/ai-grid-provider-backend/internal/gitops"
 	"github.com/osac-project/ai-grid-provider-backend/internal/keycloak"
 	"github.com/osac-project/ai-grid-provider-backend/internal/servers"
+	"google.golang.org/genproto/googleapis/rpc/errdetails"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -591,8 +594,22 @@ func TestRealModelsPlacementClustersOnFakeHub(t *testing.T) {
 	}
 
 	_, err = models.Create(ctx, &aigridv1.ModelsCreateRequest{Object: placed("granite-copy", st.GetLocations()...)})
-	if connect.CodeOf(err) != connect.CodeInvalidArgument || !strings.Contains(err.Error(), `"madrid"`) || !strings.Contains(err.Error(), `"paris"`) {
-		t.Fatalf("Create(placed on the location labels) error = %v, want InvalidArgument naming madrid and paris", err)
+	var connectErr *connect.Error
+	if !errors.As(err, &connectErr) || connectErr.Code() != connect.CodeInvalidArgument {
+		t.Fatalf("Create(placed on the location labels) error = %v, want InvalidArgument", err)
+	}
+	var unknown []string
+	for _, detail := range connectErr.Details() {
+		msg, err := connectproto.UnmarshalErrorDetail(detail)
+		if err != nil {
+			t.Fatalf("UnmarshalErrorDetail(%s) error = %v", detail.Type, err)
+		}
+		if info, ok := msg.(*errdetails.ResourceInfo); ok && info.GetResourceType() == "type.googleapis.com/ai_grid.v1.ManagedCluster" {
+			unknown = append(unknown, info.GetResourceName())
+		}
+	}
+	if !slices.Equal(unknown, []string{"madrid", "paris"}) {
+		t.Fatalf("Create(placed on the location labels) unknown clusters = %v, want [madrid paris] (%v)", unknown, err)
 	}
 }
 

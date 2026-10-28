@@ -1924,7 +1924,7 @@
         },
         "placement": {
           "$ref": "#/definitions/v1ModelPlacement",
-          "description": "Where to deploy. Required: names at least one cluster by the ACM `name`\nlabel (`name In [...]` or a `name` match label); the model is listed in\neach named cluster's index in the Git catalog. A cluster that a create or\nupdate adds must be a ManagedCluster on the hub, or the call is\nInvalidArgument naming it; Models/ListPlacementClusters lists the clusters\na model can run on."
+          "description": "Where to deploy. Required: names at least one cluster by the ACM `name`\nlabel (`name In [...]` or a `name` match label); the model is listed in\neach named cluster's index in the Git catalog. A cluster that a create or\nupdate adds must be a ManagedCluster on the hub, or the call is\nInvalidArgument naming it, with a google.rpc.ResourceInfo detail per\nunknown cluster (resource_type\n`type.googleapis.com/ai_grid.v1.ManagedCluster`, resource_name the\ncluster); Models/ListPlacementClusters lists the clusters a model can run\non."
         },
         "rollout": {
           "$ref": "#/definitions/v1ModelRollout",

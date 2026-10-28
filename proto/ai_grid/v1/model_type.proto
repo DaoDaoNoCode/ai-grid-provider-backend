@@ -57,8 +57,11 @@ message ModelSpec {
   // label (`name In [...]` or a `name` match label); the model is listed in
   // each named cluster's index in the Git catalog. A cluster that a create or
   // update adds must be a ManagedCluster on the hub, or the call is
-  // InvalidArgument naming it; Models/ListPlacementClusters lists the clusters
-  // a model can run on.
+  // InvalidArgument naming it, with a google.rpc.ResourceInfo detail per
+  // unknown cluster (resource_type
+  // `type.googleapis.com/ai_grid.v1.ManagedCluster`, resource_name the
+  // cluster); Models/ListPlacementClusters lists the clusters a model can run
+  // on.
   ModelPlacement placement = 8;
 
   // Rollout. Only strategy All (the default) is accepted: Argo CD delivers to
