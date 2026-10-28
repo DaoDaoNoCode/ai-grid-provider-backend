@@ -317,7 +317,7 @@ func (s *ModelsServer) placementClusters(ctx context.Context) ([]string, error) 
 	provisioned := readProvisioning(ctx, s.client, s.logger, s.readyPolicyNamespace, s.readyPolicyName)
 	var names []string
 	for i := range items {
-		if isModelLocation(items[i], provisioned) {
+		if isPlacementCluster(items[i], provisioned) {
 			names = append(names, items[i].GetName())
 		}
 	}
@@ -375,7 +375,9 @@ func (s *ModelsServer) checkPlacementClusters(ctx context.Context, added []strin
 	}
 }
 
-func isModelLocation(item unstructured.Unstructured, provisioned map[string]string) bool {
+// isPlacementCluster reports whether a model can be placed on the cluster
+// item, by the rules ListPlacementClusters documents.
+func isPlacementCluster(item unstructured.Unstructured, provisioned map[string]string) bool {
 	labels := item.GetLabels()
 	if labels["ai-grid/enabled"] != "true" || provisioned[item.GetName()] != "Compliant" {
 		return false
