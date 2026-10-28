@@ -12,6 +12,7 @@ import (
 	connect "connectrpc.com/connect/v2"
 	aigridv1 "github.com/osac-project/ai-grid-provider-backend/gen/ai_grid/v1"
 	"github.com/osac-project/ai-grid-provider-backend/internal/gitops"
+	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 )
@@ -694,4 +695,215 @@ func TestSubscriptionsGitUnconfigured(t *testing.T) {
 	}
 	_, err = srv.Create(ctx, &aigridv1.SubscriptionsCreateRequest{Object: gitSampleSubscription("team-a")})
 	assertConnectCode(t, err, connect.CodeFailedPrecondition)
+}
+
+// Each model ref names the Model it refers to by model_id, with the display
+// name and description of the MaaSModelRef the Models API publishes for it,
+// on every read and every write's answer, so a client joins a ref to its
+// model by id and needs no namespace of its own. They're read from the
+// model's catalog entry each time, never stored in the subscription file, and
+// what a client sends in them is ignored.
+func TestSubscriptionsGitModelRefCatalogJoin(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	writer := gitops.NewMemoryWriter(nil)
+	models := mustGitModelsServer(t, writer)
+	srv := mustGitSubscriptionsServer(t, writer)
+
+	granite := gitSampleModel("granite", "site-a")
+	granite.Metadata.Annotations = map[string]string{
+		annotationDisplayName: "Granite 3B",
+		annotationDescription: "A small model",
+	}
+	plain := gitSampleModel("plain", "site-a")
+	plain.Metadata.Annotations = nil
+	for _, model := range []*aigridv1.Model{granite, plain} {
+		if _, err := models.Create(ctx, &aigridv1.ModelsCreateRequest{Object: model}); err != nil {
+			t.Fatalf("Create model %s error = %v", model.GetId(), err)
+		}
+	}
+
+	object := gitSampleSubscription("team-a")
+	limits := object.Spec.ModelRefs[0].TokenRateLimits
+	object.Spec.ModelRefs = []*aigridv1.SubscriptionModelRef{
+		// A client's values in the output fields are ignored.
+		{Name: "granite", TokenRateLimits: limits, ModelId: "bogus", DisplayName: "stale", Description: "stale"},
+		{Name: "plain", Namespace: "models-as-a-service", TokenRateLimits: limits},
+		// Not a MaaSModelRef the Models API wrote: no model.
+		{Name: "granite", Namespace: "other-namespace", TokenRateLimits: limits, ModelId: "granite"},
+	}
+	want := []*aigridv1.SubscriptionModelRef{
+		{Name: "granite", Namespace: "models-as-a-service", ModelId: "granite", DisplayName: "Granite 3B", Description: "A small model"},
+		{Name: "plain", Namespace: "models-as-a-service", ModelId: "plain"},
+		{Name: "granite", Namespace: "other-namespace"},
+	}
+	check := func(op string, sub *aigridv1.Subscription) {
+		t.Helper()
+		refs := sub.GetSpec().GetModelRefs()
+		if len(refs) != len(want) {
+			t.Fatalf("%s model_refs = %v, want %d", op, refs, len(want))
+		}
+		for i, w := range want {
+			got := refs[i]
+			if got.GetName() != w.GetName() || got.GetNamespace() != w.GetNamespace() || got.GetModelId() != w.GetModelId() ||
+				got.GetDisplayName() != w.GetDisplayName() || got.GetDescription() != w.GetDescription() {
+				t.Errorf("%s model_refs[%d] = {name %q, namespace %q, model_id %q, display_name %q, description %q}, want {%q, %q, %q, %q, %q}",
+					op, i, got.GetName(), got.GetNamespace(), got.GetModelId(), got.GetDisplayName(), got.GetDescription(),
+					w.GetName(), w.GetNamespace(), w.GetModelId(), w.GetDisplayName(), w.GetDescription())
+			}
+		}
+		if err := protovalidate.Validate(sub); err != nil {
+			t.Errorf("%s answer fails its own validation rules: %v", op, err)
+		}
+	}
+
+	created, err := srv.Create(ctx, &aigridv1.SubscriptionsCreateRequest{Object: object})
+	if err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	check("Create", created.GetObject())
+
+	got, err := srv.Get(ctx, &aigridv1.SubscriptionsGetRequest{Id: "team-a"})
+	if err != nil {
+		t.Fatalf("Get() error = %v", err)
+	}
+	check("Get", got.GetObject())
+
+	list, err := srv.List(ctx, &aigridv1.SubscriptionsListRequest{})
+	if err != nil {
+		t.Fatalf("List() error = %v", err)
+	}
+	if len(list.GetItems()) != 1 {
+		t.Fatalf("List items = %v, want team-a", list.GetItems())
+	}
+	check("List", list.GetItems()[0])
+
+	// The subscriptions that use a model, as the model's page asks for them.
+	for filter, wantIDs := range map[string][]string{
+		`this.spec.model_refs.exists(r, r.model_id == "granite")`: {"team-a"},
+		`this.spec.model_refs.exists(r, r.model_id == "plain")`:   {"team-a"},
+		`this.spec.model_refs.exists(r, r.model_id == "other")`:   nil,
+	} {
+		list, err := srv.List(ctx, &aigridv1.SubscriptionsListRequest{Filter: &filter})
+		if err != nil {
+			t.Fatalf("List(%s) error = %v", filter, err)
+		}
+		var ids []string
+		for _, item := range list.GetItems() {
+			ids = append(ids, item.GetId())
+		}
+		if !slices.Equal(ids, wantIDs) {
+			t.Errorf("List(%s) = %v, want %v", filter, ids, wantIDs)
+		}
+	}
+
+	update := proto.CloneOf(object)
+	update.Metadata.Version = 1
+	update.Spec.Priority = 20
+	updated, err := srv.Update(ctx, &aigridv1.SubscriptionsUpdateRequest{
+		Object:     update,
+		UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec"}},
+		Lock:       true,
+	})
+	if err != nil {
+		t.Fatalf("Update() error = %v", err)
+	}
+	check("Update", updated.GetObject())
+	// A mask that names nothing stored answers without a commit.
+	update.Metadata.Version = 2
+	unchanged, err := srv.Update(ctx, &aigridv1.SubscriptionsUpdateRequest{
+		Object:     update,
+		UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"id"}},
+	})
+	if err != nil {
+		t.Fatalf("Update(no-op) error = %v", err)
+	}
+	check("Update(no-op)", unchanged.GetObject())
+
+	sub, _ := readGitSubscriptionFile(t, writer, "team-a")
+	refs, _, _ := unstructured.NestedSlice(sub.Object, "spec", "modelRefs")
+	for i, raw := range refs {
+		for _, key := range []string{"modelId", "model_id", "displayName", "display_name", "description"} {
+			if _, ok := raw.(map[string]interface{})[key]; ok {
+				t.Errorf("file modelRefs[%d] has %q; it is output only", i, key)
+			}
+		}
+	}
+
+	// A new display name on the model shows on the next read.
+	rename := proto.CloneOf(granite)
+	rename.Metadata.Annotations = map[string]string{annotationDisplayName: "Granite 3B v2"}
+	if _, err := models.Update(ctx, &aigridv1.ModelsUpdateRequest{
+		Object:     rename,
+		UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"metadata.annotations"}},
+	}); err != nil {
+		t.Fatalf("Update model error = %v", err)
+	}
+	want[0].DisplayName, want[0].Description = "Granite 3B v2", ""
+	got, err = srv.Get(ctx, &aigridv1.SubscriptionsGetRequest{Id: "team-a"})
+	if err != nil {
+		t.Fatalf("Get() after the model's update error = %v", err)
+	}
+	check("Get after the model's update", got.GetObject())
+}
+
+// model_id follows the MaaSModelRef a ref names on the ingress clusters, not
+// the backend's settings: a ref is joined only when the model's catalog entry
+// has a MaaSModelRef of that name in that namespace. A model without a
+// catalog entry has none; a broken catalog entry is Internal, as a broken
+// subscription file is.
+func TestSubscriptionsGitModelIDFollowsTheCatalogEntry(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	t.Run("another subscription namespace", func(t *testing.T) {
+		t.Parallel()
+		writer := gitops.NewMemoryWriter(nil)
+		models := mustGitModelsServer(t, writer) // publishes into models-as-a-service
+		if _, err := models.Create(ctx, &aigridv1.ModelsCreateRequest{Object: gitSampleModel("sim-model", "site-a")}); err != nil {
+			t.Fatalf("Create model error = %v", err)
+		}
+		srv, err := NewSubscriptionsServer().SetWriter(writer).SetNamespace("tenant-maas").Build()
+		if err != nil {
+			t.Fatalf("Build() error = %v", err)
+		}
+		created, err := srv.Create(ctx, &aigridv1.SubscriptionsCreateRequest{Object: gitSampleSubscription("team-a")})
+		if err != nil {
+			t.Fatalf("Create() error = %v", err)
+		}
+		ref := created.GetObject().GetSpec().GetModelRefs()[0]
+		if ref.GetNamespace() != "tenant-maas" || ref.GetModelId() != "" || ref.GetDisplayName() != "" {
+			t.Fatalf("ref = %v, want namespace tenant-maas and no model: the MaaSModelRef is in models-as-a-service", ref)
+		}
+	})
+
+	t.Run("no catalog entry", func(t *testing.T) {
+		t.Parallel()
+		srv := mustGitSubscriptionsServer(t, gitops.NewMemoryWriter(gitModelSeed("sim-model")))
+		if _, err := srv.Create(ctx, &aigridv1.SubscriptionsCreateRequest{Object: gitSampleSubscription("team-a")}); err != nil {
+			t.Fatalf("Create() error = %v", err)
+		}
+		got, err := srv.Get(ctx, &aigridv1.SubscriptionsGetRequest{Id: "team-a"})
+		if err != nil {
+			t.Fatalf("Get() error = %v", err)
+		}
+		if id := got.GetObject().GetSpec().GetModelRefs()[0].GetModelId(); id != "" {
+			t.Fatalf("model_id = %q, want empty: the repository has no catalog entry", id)
+		}
+	})
+
+	t.Run("broken catalog entry", func(t *testing.T) {
+		t.Parallel()
+		seed := gitModelSeed("sim-model")
+		seed[path.Join(modelCatalogGitDir("sim-model"), "model.yaml")] = []byte("kind: [")
+		writer := gitops.NewMemoryWriter(seed)
+		srv := mustGitSubscriptionsServer(t, writer)
+		// The entry is read before the commit, so a write that can't answer
+		// commits nothing.
+		_, err := srv.Create(ctx, &aigridv1.SubscriptionsCreateRequest{Object: gitSampleSubscription("team-a")})
+		assertConnectCode(t, err, connect.CodeInternal)
+		if n := len(writer.Messages()); n != 0 {
+			t.Fatalf("commits = %d, want none", n)
+		}
+	})
 }
