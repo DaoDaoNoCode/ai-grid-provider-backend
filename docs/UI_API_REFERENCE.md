@@ -561,7 +561,7 @@ annotations take only unprefixed keys plus `openshift.io/display-name` and
 | GET | `/api/v1/models:listLocations` | Deprecated: the same cluster names, as `locations`. Use `:listPlacementClusters`; removed once clients have moved |
 | GET | `/api/v1/models/{id}` | Get one (unwraps to the Model object); `status.placement` when placed: `selected_clusters` (cluster names) and `locations` (their `location` labels, P8) |
 | POST | `/api/v1/models` | Create (= deploy); body is the Model object |
-| PATCH | `/api/v1/models/{id}` | FieldMask update (`spec.replicas`, `spec.main.image`, `spec.main.env`, `spec.placement`, `spec.rollout`, `metadata.labels`, `metadata.annotations`) |
+| PATCH | `/api/v1/models/{id}` | FieldMask update (`metadata.labels`, `metadata.annotations`, `spec.model`, `spec.replicas`, `spec.base_refs`, `spec.runtime`, `spec.router`, `spec.main`, `spec.main.image`, `spec.main.env`, `spec.main.requests`, `spec.main.limits`, `spec.scaling`, `spec.placement`, `spec.rollout`). Each path replaces its field whole; a subpath such as `metadata.labels.<key>` replaces the whole map. `ModelsUpdateRequest.update_mask` has the full rules |
 | DELETE | `/api/v1/models/{id}` | Refuses while a subscription in the repository references the model |
 
 ### Create body (key fields)
