@@ -198,31 +198,99 @@ message ModelStatus {
   // LLMInferenceService conditions.
   repeated Condition conditions = 2;
 
-  // Derived summary phase.
+  // Derived summary phase (see ModelPhase).
   ModelPhase phase = 3;
 
-  // Reason of the condition that decided phase.
+  // Reason of the condition that decided phase. In git mode: SavedToGit
+  // while no cluster has reported, else Ready, PartiallyAvailable or
+  // NotReady with the phase.
   string reason = 4;
 
-  // Message of the condition that decided phase.
+  // Message of the condition that decided phase. In git mode, while a
+  // cluster has reported: where the model is ready, for example "Not ready
+  // on site-a; ready on site-b; no report from site-c".
   string message = 5;
 
   // Placement status when placement is set.
   ModelPlacementStatus placement = 6;
 
-  // ManifestWorkReplicaSet status when placement is set.
+  // ManifestWorkReplicaSet status when placement is set. Git mode has no
+  // ManifestWorkReplicaSet and never sets it; each placed cluster's status
+  // is in `clusters`.
   ModelRolloutStatus rollout = 7;
 
   // Observed generation from the LLMInferenceService.
   int64 observed_generation = 8;
+
+  // The model on each cluster its placement names (the clusters in
+  // placement.selected_clusters), one entry per cluster in cluster-name
+  // order, from what the hub's status Policies report. Empty while no
+  // cluster has reported (reason SavedToGit). Ingress clusters the model
+  // isn't placed on, which publish it but don't run it, have no entry; their
+  // reports count in `phase` and `message`. Output only.
+  repeated ModelClusterStatus clusters = 9;
 }
 
 // Derived model phase.
+//
+// In git mode, while no cluster has reported the model, the phase is
+// UNSPECIFIED with reason SavedToGit. Once one has, the phase is, in this
+// order of precedence:
+//
+//   - READY (reason Ready): every ingress cluster reports the model's
+//     MaaSModelRef ready, and every placed cluster is READY in `clusters`.
+//   - PARTIALLY_AVAILABLE (reason PartiallyAvailable): every ingress cluster
+//     reports the MaaSModelRef ready, at least one placed cluster is READY
+//     and at least one is not.
+//   - PENDING (reason NotReady): otherwise, including while an ingress
+//     cluster reports the MaaSModelRef not ready or hasn't reported it.
+//
+// Git mode never reports FAILED: the status Policies can't tell a model
+// that failed from one that is still starting. The order is the one the
+// console's Models page uses (READY, PARTIALLY_AVAILABLE, FAILED, then the
+// PENDING cases; proposal P13).
 enum ModelPhase {
   MODEL_PHASE_UNSPECIFIED = 0;
   MODEL_PHASE_PENDING = 1;
   MODEL_PHASE_READY = 2;
   MODEL_PHASE_FAILED = 3;
+  // Serving on some of the clusters its placement names but not all (see
+  // above). Only a whole model has it; a cluster in ModelStatus.clusters is
+  // READY or PENDING.
+  MODEL_PHASE_PARTIALLY_AVAILABLE = 4;
+}
+
+// The model on one placed cluster. In git mode it comes from the hub's
+// status Policies: the cluster's models-ready report of the model's
+// LLMInferenceService (Ready=True), and, on a combined cluster, which is
+// also an ingress cluster, its model-refs-ready report of the model's
+// MaaSModelRef (phase Ready). Output only.
+message ModelClusterStatus {
+  // ManagedCluster name, one of placement.selected_clusters.
+  string cluster = 1 [(buf.validate.field).string = {
+    min_len: 1
+    max_len: 63
+    pattern: "^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$"
+  }];
+
+  // READY when every report from the cluster says ready; PENDING when one
+  // says not ready (or not found) or one is missing. Git mode never sets
+  // FAILED; PARTIALLY_AVAILABLE is only a whole model's phase.
+  ModelPhase phase = 2 [(buf.validate.field).enum = {
+    defined_only: true
+    not_in: [
+      0,
+      4
+    ]
+  }];
+
+  // Ready, NotReady (a report says not ready or not found) or NoReport (the
+  // cluster hasn't reported the object yet).
+  string reason = 3 [(buf.validate.field).string.min_len = 1];
+
+  // What the cluster reported, for example "LLMInferenceService not ready"
+  // or "LLMInferenceService ready; no MaaSModelRef report".
+  string message = 4;
 }
 
 // Placement observed state.
@@ -250,7 +318,8 @@ message ModelRolloutStatus {
   bool applied = 2;
   // Reason from the deciding condition.
   string reason = 3;
-  // Per-cluster work summaries when available.
+  // Per-cluster work summaries when available. Never set in git mode; see
+  // ModelStatus.clusters.
   repeated ModelWorkStatus works = 4;
   // MWRS conditions.
   repeated Condition conditions = 5;
