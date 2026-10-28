@@ -464,10 +464,11 @@ func TestRealClustersServerProvisioning(t *testing.T) {
 	}
 }
 
-// The real Models and Subscriptions servers, committing to an in-memory
-// repository, read status from the fake hub's status Policies
-// (fixtures/default/policies.json), as in make dev-fake.
-func TestRealCatalogStatusOnFakeHub(t *testing.T) {
+// startCatalogServers starts the fake hub and builds the real Models and
+// Subscriptions servers on it, as make dev-fake does: status from the hub's
+// status Policies, commits to an in-memory repository, which is returned.
+func startCatalogServers(t *testing.T) (*servers.ModelsServer, *servers.SubscriptionsServer, *gitops.MemoryWriter) {
+	t.Helper()
 	h, srv := startHub(t)
 	cfg := &rest.Config{Host: srv.URL, BearerToken: h.ServiceAccountToken(), QPS: 1000, Burst: 1000}
 	client, err := dynamic.NewForConfig(cfg)
@@ -476,13 +477,26 @@ func TestRealCatalogStatusOnFakeHub(t *testing.T) {
 	}
 	status := servers.NewCatalogStatusReader(client, "")
 	writer := gitops.NewMemoryWriter(nil)
-	ctx := context.Background()
-
 	models, err := servers.NewModelsServer().SetLogger(slog.New(slog.DiscardHandler)).
 		SetWriter(writer).SetCatalogStatus(status).SetDynamicClient(client).Build()
 	if err != nil {
-		t.Fatalf("Build() error = %v", err)
+		t.Fatalf("Models Build() error = %v", err)
 	}
+	subscriptions, err := servers.NewSubscriptionsServer().SetLogger(slog.New(slog.DiscardHandler)).
+		SetWriter(writer).SetCatalogStatus(status).Build()
+	if err != nil {
+		t.Fatalf("Subscriptions Build() error = %v", err)
+	}
+	return models, subscriptions, writer
+}
+
+// The real Models and Subscriptions servers, committing to an in-memory
+// repository, read status from the fake hub's status Policies
+// (fixtures/default/policies.json), as in make dev-fake.
+func TestRealCatalogStatusOnFakeHub(t *testing.T) {
+	models, subscriptions, _ := startCatalogServers(t)
+	ctx := context.Background()
+
 	replicas := int32(1)
 	created, err := models.Create(ctx, &aigridv1.ModelsCreateRequest{Object: &aigridv1.Model{
 		Id: "granite-3b",
@@ -505,11 +519,6 @@ func TestRealCatalogStatusOnFakeHub(t *testing.T) {
 		t.Fatalf("model locations = %v", got)
 	}
 
-	subscriptions, err := servers.NewSubscriptionsServer().SetLogger(slog.New(slog.DiscardHandler)).
-		SetWriter(writer).SetCatalogStatus(status).Build()
-	if err != nil {
-		t.Fatalf("Build() error = %v", err)
-	}
 	sub, err := subscriptions.Create(ctx, &aigridv1.SubscriptionsCreateRequest{Object: &aigridv1.Subscription{
 		Id: "team-a",
 		Spec: &aigridv1.SubscriptionSpec{
@@ -533,21 +542,9 @@ func TestRealCatalogStatusOnFakeHub(t *testing.T) {
 // a rate-limit window longer than 8784h on Create and Update and commits
 // nothing for it, and accepts 8784h and 24h.
 func TestRealSubscriptionsTokenWindowOnFakeHub(t *testing.T) {
-	h, srv := startHub(t)
-	cfg := &rest.Config{Host: srv.URL, BearerToken: h.ServiceAccountToken(), QPS: 1000, Burst: 1000}
-	client, err := dynamic.NewForConfig(cfg)
-	if err != nil {
-		t.Fatalf("dynamic.NewForConfig() error = %v", err)
-	}
-	status := servers.NewCatalogStatusReader(client, "")
-	writer := gitops.NewMemoryWriter(nil)
+	models, subscriptions, writer := startCatalogServers(t)
 	ctx := context.Background()
 
-	models, err := servers.NewModelsServer().SetLogger(slog.New(slog.DiscardHandler)).
-		SetWriter(writer).SetCatalogStatus(status).SetDynamicClient(client).Build()
-	if err != nil {
-		t.Fatalf("Build() error = %v", err)
-	}
 	replicas := int32(1)
 	if _, err := models.Create(ctx, &aigridv1.ModelsCreateRequest{Object: &aigridv1.Model{
 		Id: "win-model",
@@ -560,11 +557,6 @@ func TestRealSubscriptionsTokenWindowOnFakeHub(t *testing.T) {
 		},
 	}}); err != nil {
 		t.Fatalf("Models Create() error = %v", err)
-	}
-	subscriptions, err := servers.NewSubscriptionsServer().SetLogger(slog.New(slog.DiscardHandler)).
-		SetWriter(writer).SetCatalogStatus(status).Build()
-	if err != nil {
-		t.Fatalf("Build() error = %v", err)
 	}
 	subscription := func(id, window string) *aigridv1.Subscription {
 		return &aigridv1.Subscription{
@@ -597,7 +589,7 @@ func TestRealSubscriptionsTokenWindowOnFakeHub(t *testing.T) {
 	}
 
 	commits := len(writer.Messages())
-	_, err = subscriptions.Update(ctx, &aigridv1.SubscriptionsUpdateRequest{
+	_, err := subscriptions.Update(ctx, &aigridv1.SubscriptionsUpdateRequest{
 		Object:     subscription("win-24h", "9999h"),
 		UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.model_refs"}},
 	})
