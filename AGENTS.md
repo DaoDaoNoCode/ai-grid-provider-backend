@@ -200,7 +200,7 @@ Run this for changes affecting Kubernetes behavior, OCM/RHACM resources, Keycloa
 ```bash
 make dev-fake         # real backend on the fake hub (:9091) and fake Keycloak (:9093); gRPC :9090, REST :9092; draft fake :9094
 make dev-fake-poc     # the same on fixtures/poc and fixtures/draft/poc; override ports with DEV_*_PORT=...
-make dev-fake-locations  # the same on fixtures/locations, one cluster per status.location edge case
+make dev-fake-locations  # the same on fixtures/locations (and fixtures/draft/default for the draft fake), one cluster per status.location edge case
 ```
 
 `make dev-fake` runs the unmodified backend against `internal/fakeinfra` (README.md, "Dev mode with fake infrastructure"). With the console, run `make -j2 dev-bff-fake dev-frontend-fake` in the console repo in a second terminal. It is a development aid, not a substitute for `make kind-test`.

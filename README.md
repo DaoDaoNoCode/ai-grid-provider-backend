@@ -612,6 +612,7 @@ make dev-fake                         # fixtures/default: ten clusters in every 
 make dev-fake-poc                     # fixtures/poc: the PoC's four sites and three organizations, static
                                       # (and fixtures/draft/poc for the draft fake)
 make dev-fake-locations               # fixtures/locations: one cluster per status.location edge case
+                                      # (and fixtures/draft/default for the draft fake)
 make dev-fake DEV_GRPC_PORT=19090 DEV_HUB_PORT=19091 DEV_HTTP_PORT=19092 DEV_KEYCLOAK_PORT=19093 DEV_DRAFT_PORT=19094
                                       # when the default ports are taken
 
