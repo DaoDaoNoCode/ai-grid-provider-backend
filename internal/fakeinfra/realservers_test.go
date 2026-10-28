@@ -20,6 +20,7 @@ import (
 	"testing"
 	"time"
 
+	"buf.build/go/protovalidate"
 	connect "connectrpc.com/connect/v2"
 	"connectrpc.com/connect/v2/connectproto"
 	aigridv1 "github.com/osac-project/ai-grid-provider-backend/gen/ai_grid/v1"
@@ -263,6 +264,9 @@ func TestRealClustersServerLocationsOnFakeHub(t *testing.T) {
 			(hasCoordinates && (loc.GetLatitude() != w.lat || loc.GetLongitude() != w.lon)) ||
 			(loc.GetProblem() != "") != w.problemPresent || !strings.HasPrefix(loc.GetProblem(), w.problemPrefix) {
 			t.Errorf("%s: location = %v, want %+v", c.GetId(), loc, w)
+		}
+		if err := protovalidate.Validate(loc); err != nil {
+			t.Errorf("%s: location %v breaks its buf.validate rules: %v", c.GetId(), loc, err)
 		}
 	}
 }

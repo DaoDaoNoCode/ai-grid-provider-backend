@@ -1,9 +1,12 @@
 package servers
 
 import (
+	"errors"
+	"math"
 	"strings"
 	"testing"
 
+	"buf.build/go/protovalidate"
 	aigridv1 "github.com/osac-project/ai-grid-provider-backend/gen/ai_grid/v1"
 	"google.golang.org/protobuf/proto"
 )
@@ -229,8 +232,48 @@ func TestManagedClusterLocation(t *testing.T) {
 			if tc.coordinates != nil {
 				tc.coordinates(tc.want)
 			}
-			if got := managedClusterLocation(tc.annotations, tc.claims); !proto.Equal(got, tc.want) {
+			got := managedClusterLocation(tc.annotations, tc.claims)
+			if !proto.Equal(got, tc.want) {
 				t.Errorf("location = %v\nwant %v", got, tc.want)
+			}
+			if err := protovalidate.Validate(got); err != nil {
+				t.Errorf("location %v breaks its buf.validate rules: %v", got, err)
+			}
+		})
+	}
+}
+
+// The buf.validate rules on ManagedClusterLocation state what the mapper
+// guarantees: both coordinates or neither, each finite and within range.
+// TestManagedClusterLocation checks every mapped location against them;
+// this checks that they refuse what they should.
+func TestManagedClusterLocationValidationRules(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name     string
+		lat, lon *float64
+		ok       bool
+	}{
+		{"neither", nil, nil, true},
+		{"both at 0,0", proto.Float64(0), proto.Float64(0), true},
+		{"both at the limits", proto.Float64(-90), proto.Float64(180), true},
+		{"only latitude", proto.Float64(40.7), nil, false},
+		{"only longitude", nil, proto.Float64(-74), false},
+		{"latitude out of range", proto.Float64(90.01), proto.Float64(0), false},
+		{"longitude out of range", proto.Float64(0), proto.Float64(-180.01), false},
+		{"NaN", proto.Float64(math.NaN()), proto.Float64(0), false},
+		{"infinite", proto.Float64(0), proto.Float64(math.Inf(1)), false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			err := protovalidate.Validate(&aigridv1.ManagedClusterLocation{Latitude: tc.lat, Longitude: tc.lon})
+			var verr *protovalidate.ValidationError
+			switch {
+			case tc.ok && err != nil:
+				t.Fatalf("Validate() error = %v, want none", err)
+			case !tc.ok && !errors.As(err, &verr):
+				// A compile or runtime error is not a refusal.
+				t.Fatalf("Validate() error = %v, want a ValidationError", err)
 			}
 		})
 	}
@@ -272,7 +315,8 @@ func TestManagedClusterFromUnstructuredLocation(t *testing.T) {
 }
 
 // Every point in the table is a real position, and no region sits at 0,0,
-// which would mean a missing entry.
+// which would mean a missing entry. The location it gives a cluster keeps
+// the buf.validate rules.
 func TestCloudRegions(t *testing.T) {
 	t.Parallel()
 	for platform, regions := range cloudRegions {
@@ -282,6 +326,16 @@ func TestCloudRegions(t *testing.T) {
 		for region, p := range regions {
 			if p.lat < -maxLatitude || p.lat > maxLatitude || p.lon < -maxLongitude || p.lon > maxLongitude || (p.lat == 0 && p.lon == 0) {
 				t.Errorf("%s %s = %v, want a position within range", platform, region, p)
+			}
+			loc := managedClusterLocation(nil, []*aigridv1.ManagedClusterClaim{
+				{Name: claimPlatform, Value: platform},
+				{Name: claimRegion, Value: region},
+			})
+			if loc.GetSource() != sourceCloudRegion {
+				t.Errorf("%s %s: source = %v, want CLOUD_REGION", platform, region, loc.GetSource())
+			}
+			if err := protovalidate.Validate(loc); err != nil {
+				t.Errorf("%s %s: location %v breaks its buf.validate rules: %v", platform, region, loc, err)
 			}
 		}
 	}
