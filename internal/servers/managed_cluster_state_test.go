@@ -61,8 +61,10 @@ func TestManagedClusterState(t *testing.T) {
 		{"hubAcceptsClient false, still accepted by the hub", false, false, conds(condAccepted, condJoined, condAvailable), aigridv1.ManagedClusterState_MANAGED_CLUSTER_STATE_READY, "Managed cluster is available"},
 		// The first condition of a type wins, like the ACM console's find.
 		{"first Available wins", false, true, conds(condAccepted, condJoined, condAPIDown, condAvailable), aigridv1.ManagedClusterState_MANAGED_CLUSTER_STATE_OFFLINE, "The kube-apiserver is not ok, status code: 503, the server is currently unable to handle the request"},
-		// Condition status is an exact "True": anything else is not True.
-		{"lowercase true is not True", false, true, conds(map[string]interface{}{"type": "HubAcceptedManagedCluster", "status": "true"}), aigridv1.ManagedClusterState_MANAGED_CLUSTER_STATE_NOT_ACCEPTED, ""},
+		// Condition status is read case-insensitively, as for status.available.
+		{"lowercase true is True", false, true, conds(map[string]interface{}{"type": "HubAcceptedManagedCluster", "status": "true"}), aigridv1.ManagedClusterState_MANAGED_CLUSTER_STATE_PENDING_IMPORT, ""},
+		{"lowercase available", false, true, conds(condAccepted, condJoined, map[string]interface{}{"type": "ManagedClusterConditionAvailable", "status": "true"}), aigridv1.ManagedClusterState_MANAGED_CLUSTER_STATE_READY, ""},
+		{"lowercase unavailable", false, true, conds(condAccepted, condJoined, map[string]interface{}{"type": "ManagedClusterConditionAvailable", "status": "false"}), aigridv1.ManagedClusterState_MANAGED_CLUSTER_STATE_OFFLINE, ""},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -75,6 +77,10 @@ func TestManagedClusterState(t *testing.T) {
 			status := managedClusterFromUnstructured(*object).GetStatus()
 			if status.GetState() != tc.want || status.GetStateMessage() != tc.message {
 				t.Errorf("state = %s %q, want %s %q", status.GetState(), status.GetStateMessage(), tc.want, tc.message)
+			}
+			// available and state read the Available condition the same way.
+			if ready := tc.want == aigridv1.ManagedClusterState_MANAGED_CLUSTER_STATE_READY; ready && !status.GetAvailable() {
+				t.Errorf("state READY with available = false")
 			}
 		})
 	}

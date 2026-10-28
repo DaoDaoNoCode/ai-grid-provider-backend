@@ -1,6 +1,8 @@
 package servers
 
 import (
+	"strings"
+
 	aigridv1 "github.com/osac-project/ai-grid-provider-backend/gen/ai_grid/v1"
 )
 
@@ -43,8 +45,8 @@ func isAIGridMember(labels map[string]string) bool {
 //     branches aren't derived, as the backend reads neither CSRs nor
 //     HostedClusters, so such a cluster is PENDING_IMPORT.
 //
-// Conditions are matched by type, first match wins, and by the exact
-// status "True" or "False". spec.hubAcceptsClient is not read: the hub's
+// Conditions are matched by type, first match wins, and by status with
+// conditionTrue and conditionFalse. spec.hubAcceptsClient is not read: the hub's
 // registration controller turns it into the HubAcceptedManagedCluster
 // condition, which is what the ACM console reads.
 func managedClusterState(deleting bool, conditions []*aigridv1.ManagedClusterCondition) (aigridv1.ManagedClusterState, string) {
@@ -56,7 +58,7 @@ func managedClusterState(deleting bool, conditions []*aigridv1.ManagedClusterCon
 		}
 		return nil
 	}
-	isTrue := func(condType string) bool { return find(condType).GetStatus() == "True" }
+	isTrue := func(condType string) bool { return conditionTrue(find(condType).GetStatus()) }
 
 	if deleting {
 		return aigridv1.ManagedClusterState_MANAGED_CLUSTER_STATE_DETACHING, find(conditionImportSucceeded).GetMessage()
@@ -69,7 +71,7 @@ func managedClusterState(deleting bool, conditions []*aigridv1.ManagedClusterCon
 	}
 	if !isTrue(conditionJoined) {
 		imported := find(conditionImportSucceeded)
-		if imported.GetStatus() == "False" {
+		if conditionFalse(imported.GetStatus()) {
 			switch imported.GetReason() {
 			case reasonImporting:
 				return aigridv1.ManagedClusterState_MANAGED_CLUSTER_STATE_IMPORTING, imported.GetMessage()
@@ -80,12 +82,20 @@ func managedClusterState(deleting bool, conditions []*aigridv1.ManagedClusterCon
 		return aigridv1.ManagedClusterState_MANAGED_CLUSTER_STATE_PENDING_IMPORT, imported.GetMessage()
 	}
 	available := find(conditionAvailable)
-	switch available.GetStatus() {
-	case "True":
+	switch {
+	case conditionTrue(available.GetStatus()):
 		return aigridv1.ManagedClusterState_MANAGED_CLUSTER_STATE_READY, available.GetMessage()
-	case "False":
+	case conditionFalse(available.GetStatus()):
 		return aigridv1.ManagedClusterState_MANAGED_CLUSTER_STATE_OFFLINE, available.GetMessage()
 	default:
 		return aigridv1.ManagedClusterState_MANAGED_CLUSTER_STATE_UNKNOWN, available.GetMessage()
 	}
 }
+
+// conditionTrue and conditionFalse read a condition's status. The API server
+// only admits "True", "False" and "Unknown" (metav1.Condition's enum), and
+// status.available has always matched case-insensitively, so every reading
+// of a ManagedCluster condition here does the same.
+func conditionTrue(status string) bool { return strings.EqualFold(status, "True") }
+
+func conditionFalse(status string) bool { return strings.EqualFold(status, "False") }
