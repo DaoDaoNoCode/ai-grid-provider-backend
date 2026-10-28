@@ -1411,6 +1411,48 @@
       },
       "description": "One `status.conditions[]` entry of a ManagedCluster."
     },
+    "v1ManagedClusterLocation": {
+      "type": "object",
+      "properties": {
+        "site_name": {
+          "type": "string",
+          "description": "`ai-grid/site-name`, surrounding whitespace removed. Kept whether or not\nthere are coordinates."
+        },
+        "latitude": {
+          "type": "number",
+          "format": "double",
+          "description": "Decimal degrees, -90..90. Unset when there are no coordinates; 0 is a\nvalid latitude."
+        },
+        "longitude": {
+          "type": "number",
+          "format": "double",
+          "description": "Decimal degrees, -180..180. Unset when there are no coordinates; 0 is a\nvalid longitude."
+        },
+        "source": {
+          "$ref": "#/definitions/v1ManagedClusterLocationSource",
+          "description": "Where `latitude` and `longitude` come from."
+        },
+        "problem": {
+          "type": "string",
+          "description": "What is wrong with the coordinate annotations, for a hub admin to fix,\nfor example `ai-grid/latitude \"40,7\" is not a decimal number such as\n40.7128`. Several problems are joined with \"; \". Empty when there is\nnothing to fix; missing annotations are not a problem."
+        },
+        "region": {
+          "type": "string",
+          "description": "The cloud region the cluster runs in, from its\n`region.open-cluster-management.io` claim (for example \"us-east-2\"), as\na fact whatever `source` is. Empty when the agent reports none, as on\nmost on-premises clusters."
+        }
+      },
+      "description": "Where a cluster is. A hub admin sets it once with the ManagedCluster\nannotations `ai-grid/latitude`, `ai-grid/longitude` (decimal degrees) and\n`ai-grid/site-name`; see the README, \"Cluster locations\".\n\n`latitude` and `longitude` are both set or both unset. When the\nannotations are wrong, the coordinates are unset, `source` is NONE and\n`problem` says what to fix: the backend never guesses past a mistake."
+    },
+    "v1ManagedClusterLocationSource": {
+      "type": "string",
+      "enum": [
+        "MANAGED_CLUSTER_LOCATION_SOURCE_UNSPECIFIED",
+        "MANAGED_CLUSTER_LOCATION_SOURCE_NONE",
+        "MANAGED_CLUSTER_LOCATION_SOURCE_ANNOTATIONS"
+      ],
+      "default": "MANAGED_CLUSTER_LOCATION_SOURCE_UNSPECIFIED",
+      "description": "Where a cluster's coordinates come from.\n\n - MANAGED_CLUSTER_LOCATION_SOURCE_UNSPECIFIED: Not reported; a client also reads a source added after it was built as\nUNSPECIFIED.\n - MANAGED_CLUSTER_LOCATION_SOURCE_NONE: No coordinates: none are set, or the ones set have a `problem`.\n - MANAGED_CLUSTER_LOCATION_SOURCE_ANNOTATIONS: The `ai-grid/latitude` and `ai-grid/longitude` annotations, as the hub\nadmin set them."
+    },
     "v1ManagedClusterSpec": {
       "type": "object",
       "properties": {
@@ -1420,6 +1462,23 @@
         }
       },
       "description": "Desired state of a hub ManagedCluster."
+    },
+    "v1ManagedClusterState": {
+      "type": "string",
+      "enum": [
+        "MANAGED_CLUSTER_STATE_UNSPECIFIED",
+        "MANAGED_CLUSTER_STATE_READY",
+        "MANAGED_CLUSTER_STATE_OFFLINE",
+        "MANAGED_CLUSTER_STATE_UNKNOWN",
+        "MANAGED_CLUSTER_STATE_PENDING_IMPORT",
+        "MANAGED_CLUSTER_STATE_IMPORTING",
+        "MANAGED_CLUSTER_STATE_IMPORT_FAILED",
+        "MANAGED_CLUSTER_STATE_NOT_ACCEPTED",
+        "MANAGED_CLUSTER_STATE_DETACHING"
+      ],
+      "default": "MANAGED_CLUSTER_STATE_UNSPECIFIED",
+      "description": "metadata.deletion_timestamp set                    -\u003e DETACHING\n  no conditions at all                               -\u003e UNSPECIFIED\n  HubAcceptedManagedCluster not True                 -\u003e NOT_ACCEPTED\n  ManagedClusterJoined not True, and\n    ManagedClusterImportSucceeded False with reason\n      ManagedClusterImporting                        -\u003e IMPORTING\n      ManagedClusterImportFailed                     -\u003e IMPORT_FAILED\n    otherwise                                        -\u003e PENDING_IMPORT\n  ManagedClusterConditionAvailable True              -\u003e READY\n  ManagedClusterConditionAvailable False             -\u003e OFFLINE\n  otherwise (Unknown or absent)                      -\u003e UNKNOWN\n\n\"Not True\" means False or absent. The ACM console's \"needs approval\" (a\npending CSR) and its hosted-cluster states aren't derived: the backend\nreads neither CSRs nor HostedClusters, so such a cluster is PENDING_IMPORT.\n\n - MANAGED_CLUSTER_STATE_UNSPECIFIED: The hub has reported no condition yet; a client also reads a state added\nafter it was built as UNSPECIFIED.\n - MANAGED_CLUSTER_STATE_READY: Joined and available. ACM console: `ready`.\n - MANAGED_CLUSTER_STATE_OFFLINE: Joined; the agent reports the cluster unavailable (Available False, for\nexample the kube-apiserver is down). ACM console: `offline`.\n - MANAGED_CLUSTER_STATE_UNKNOWN: Joined; the hub has no current report (Available Unknown or absent,\nusually an expired lease). ACM console: `unknown`.\n - MANAGED_CLUSTER_STATE_PENDING_IMPORT: Accepted, not joined, import not started or not reported. ACM console:\n`pendingimport`.\n - MANAGED_CLUSTER_STATE_IMPORTING: Accepted, not joined, the import controller is applying the klusterlet.\nACM console: `importing`.\n - MANAGED_CLUSTER_STATE_IMPORT_FAILED: Accepted, not joined, the import failed. ACM console: `importfailed`.\n - MANAGED_CLUSTER_STATE_NOT_ACCEPTED: The hub hasn't accepted the cluster (HubAcceptedManagedCluster absent or\nFalse, for example after hub_accepts_client was set to false). ACM\nconsole: `notaccepted`.\n - MANAGED_CLUSTER_STATE_DETACHING: The ManagedCluster is being deleted and its agent removed. ACM console:\n`detaching`.",
+      "title": "Lifecycle state of a ManagedCluster, one per state the ACM console shows.\nChecked in this order, the first that applies wins:"
     },
     "v1ManagedClusterStatus": {
       "type": "object",
@@ -1477,6 +1536,22 @@
         "gpus": {
           "$ref": "#/definitions/v1ClusterGPUs",
           "description": "The cluster's GPUs, from ACM Search's index of its nodes and the labels\nNVIDIA GPU Feature Discovery puts on them. Unset when Search isn't\navailable or hasn't indexed the cluster; `capacity[\"nvidia.com/gpu\"]`\nstill counts its schedulable GPUs then."
+        },
+        "ai_grid_member": {
+          "type": "boolean",
+          "description": "True when the cluster is an AI Grid member: its `ai-grid/enabled` label\nis exactly \"true\", the label selector the hub's AI Grid Placements\nmatch. A cluster joins or leaves the grid through Update, by setting or\nremoving that label in `metadata.labels`."
+        },
+        "state": {
+          "$ref": "#/definitions/v1ManagedClusterState",
+          "description": "The cluster's lifecycle state, derived from its conditions and its\ndeletion timestamp in the order the ACM console uses. UNSPECIFIED until\nthe hub reports any condition."
+        },
+        "state_message": {
+          "type": "string",
+          "description": "The message of the condition that decided `state`, for example \"Managed\ncluster is available\" or \"Try to import managed cluster, error: ...\".\nEmpty when that condition has no message or is absent."
+        },
+        "location": {
+          "$ref": "#/definitions/v1ManagedClusterLocation",
+          "description": "Where the cluster is, for a map. Always set."
         }
       },
       "description": "Observed state of a hub ManagedCluster."
