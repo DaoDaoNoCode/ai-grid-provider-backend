@@ -720,20 +720,3 @@ func modelURIHasAllowedScheme(uri string) bool {
 func staleModelError(op, id string) *connect.Error {
 	return connect.Errorf(connect.CodeAborted, "%s Model %q: the model changed since it was read; reload and retry", op, id)
 }
-
-func mapModelAPIError(op, id string, err error) error {
-	switch {
-	case apierrors.IsNotFound(err):
-		return connect.Errorf(connect.CodeNotFound, "Model %q not found", id).WithCause(err)
-	case apierrors.IsAlreadyExists(err):
-		return connect.Errorf(connect.CodeAlreadyExists, "Model %q already exists", id).WithCause(err)
-	case apierrors.IsInvalid(err), apierrors.IsBadRequest(err):
-		return connect.Errorf(connect.CodeInvalidArgument, "%s Model %q: %v", op, id, err).WithCause(err)
-	case apierrors.IsConflict(err):
-		return staleModelError(op, id).WithCause(err)
-	case apierrors.IsForbidden(err), apierrors.IsUnauthorized(err):
-		return connect.Errorf(connect.CodePermissionDenied, "%s Model %q: %v", op, id, err).WithCause(err)
-	default:
-		return connect.Errorf(connect.CodeInternal, "%s Model %q: %v", op, id, err).WithCause(err)
-	}
-}
