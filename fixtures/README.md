@@ -16,9 +16,15 @@ at commit `537df38`:
 | `poc/` | `mock/fixtures-poc/` | The PoC's four sites (`site1`-`site4`) and three organizations; no timeline, so nothing changes over time. Also seeds the same hand-authored MaaS / LLMInferenceService CRs as `default/` so `make dev-fake-poc` exercises Models and Subscriptions. |
 
 `locations/` is **hand-written, not converted**: one ready cluster per edge case of
-`status.location` (README, "Cluster locations"), each a copy of `default/`'s settled
-`site-paris-1` with its own name, ids, `ai-grid/*` annotations and claims; `make
-dev-fake-locations` serves it. `hack/convert-console-fixtures` doesn't touch it.
+`status.location` (README, "Cluster locations"); `make dev-fake-locations` serves it.
+`hack/convert-console-fixtures` doesn't touch it. Each cluster has only what the location,
+state and membership code reads (the `ai-grid/*` annotations, the `ai-grid/enabled` label,
+the platform and region claims, and the Accepted, Joined and Available conditions) plus what
+the fake hub needs to load it and leave it settled: `uid`, `resourceVersion`, `generation`
+and `creationTimestamp` (`LoadFixtures` requires them), and the `name` label, the
+`open-cluster-management/created-via` annotation, the finalizers and the
+`ManagedClusterImportSucceeded=True` condition (the fake's import controller adds them to a
+cluster without them). No capacity, version or other claims.
 
 | Cluster | Annotations | Claims |
 |---|---|---|
