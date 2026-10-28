@@ -580,8 +580,11 @@ make run-hub              # gRPC/Connect 127.0.0.1:9090, REST 127.0.0.1:9092
 make run-hub KEYCLOAK=hub # also the deployed console's Keycloak (Organizations)
 ```
 
-It uses the current kubeconfig context as it is and stops when `oc whoami`
-fails. It listens on loopback only (`LISTEN_ADDRESS`, `HTTP_LISTEN_ADDRESS`
+It uses the current kubeconfig context as it is (`KUBECONFIG_PATH` picks
+another kubeconfig, for `oc` and the backend alike) and stops when `oc whoami`
+fails. While it runs, anything on this machine that reaches those ports acts
+with your login, a web page through DNS rebinding included (`make run` too):
+stop it when you're done. It listens on loopback only (`LISTEN_ADDRESS`, `HTTP_LISTEN_ADDRESS`
 move it; any other address is refused, as the API has no authentication),
 port-forwards ACM Search (`open-cluster-management/search-search-api`) for
 cluster GPUs, or runs with `--search-api-url=off` without it, and copies the

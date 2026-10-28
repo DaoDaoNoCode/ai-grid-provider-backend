@@ -24,6 +24,9 @@ set -euo pipefail
 LISTEN_ADDRESS="${LISTEN_ADDRESS:-127.0.0.1:9090}"
 HTTP_LISTEN_ADDRESS="${HTTP_LISTEN_ADDRESS:-127.0.0.1:9092}"
 KUBECONFIG_PATH="${KUBECONFIG_PATH:-${KUBECONFIG:-$HOME/.kube/config}}"
+# Every oc call below and the backend use the same kubeconfig, so they act on
+# the same hub.
+export KUBECONFIG="$KUBECONFIG_PATH"
 KEYCLOAK_URL="${KEYCLOAK_URL:-http://127.0.0.1:8180}"
 KEYCLOAK="${KEYCLOAK:-}"
 BACKEND_BIN="${BACKEND_BIN:-bin/ai-grid-provider-backend}"
@@ -67,9 +70,10 @@ say "hub $server as $user (context $(oc config current-context))"
 # The deployed console, if exactly one.
 console_ns=""
 console_name=""
+# oc's messages go to the terminal, never into the list it prints.
 if ! found="$(oc get deployment -A -l "$CONSOLE_SELECTOR" \
-  -o jsonpath='{range .items[*]}{.metadata.namespace}/{.metadata.name}{"\n"}{end}' 2>&1)"; then
-  say "cannot list Deployments ($found); using make run's defaults"
+  -o jsonpath='{range .items[*]}{.metadata.namespace}/{.metadata.name}{"\n"}{end}')"; then
+  say "cannot list Deployments (oc's message above); using make run's defaults"
   found=""
 fi
 count="$(grep -c . <<<"$found" || true)"
@@ -182,6 +186,7 @@ if [[ "$KEYCLOAK" == hub ]]; then
 else
   say "This acts on $server as $user: adding or removing clusters is real."
 fi
+say "Anything on this machine that can reach $LISTEN_ADDRESS acts as $user too, a web page through DNS rebinding included: stop it when you're done."
 
 backend_args=(--listen-address="$LISTEN_ADDRESS"
   --http-listen-address="$HTTP_LISTEN_ADDRESS"
@@ -190,12 +195,21 @@ backend_args=(--listen-address="$LISTEN_ADDRESS"
 read -r -a run_args <<<"$RUN_ARGS"
 backend_args+=(${run_args[@]+"${run_args[@]}"})
 if [[ "$KEYCLOAK" == hub ]]; then
-  KEYCLOAK_URL="$(keycloak_value url)" \
-  KEYCLOAK_ADMIN_REALM="$(keycloak_value admin-realm)" \
-  KEYCLOAK_REALM="$(keycloak_value realm)" \
-  KEYCLOAK_ADMIN_USERNAME="$(keycloak_value username)" \
-  KEYCLOAK_ADMIN_PASSWORD="$(keycloak_value password)" \
+  # Read first, where set -e stops on a failed read: inside the command's own
+  # assignments a failed read would leave the value empty, and the backend
+  # would fall back to its defaults (admin/admin) without saying so.
+  kc_url="$(keycloak_value url)"
+  kc_admin_realm="$(keycloak_value admin-realm)"
+  kc_realm="$(keycloak_value realm)"
+  kc_username="$(keycloak_value username)"
+  kc_password="$(keycloak_value password)"
+  KEYCLOAK_URL="$kc_url" \
+  KEYCLOAK_ADMIN_REALM="$kc_admin_realm" \
+  KEYCLOAK_REALM="$kc_realm" \
+  KEYCLOAK_ADMIN_USERNAME="$kc_username" \
+  KEYCLOAK_ADMIN_PASSWORD="$kc_password" \
     "$BACKEND_BIN" "${backend_args[@]}" &
+  unset kc_url kc_admin_realm kc_realm kc_username kc_password
 else
   KEYCLOAK_URL="$KEYCLOAK_URL" "$BACKEND_BIN" "${backend_args[@]}" &
 fi
