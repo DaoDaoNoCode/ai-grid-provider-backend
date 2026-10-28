@@ -51,9 +51,18 @@ message ModelsCreateResponse {
 
 message ModelsUpdateRequest {
   Model object = 1;
-  // Supported paths: spec.replicas, spec.main.image, spec.main.env,
-  // spec.placement, spec.rollout, metadata.labels, metadata.annotations.
-  // A path replaces that field as a whole. Empty mask is InvalidArgument.
+  // Supported paths: metadata.labels, metadata.annotations, spec.model,
+  // spec.replicas, spec.base_refs, spec.runtime, spec.router, spec.main,
+  // spec.main.image, spec.main.env, spec.main.requests, spec.main.limits,
+  // spec.scaling, spec.placement and spec.rollout, each optionally prefixed
+  // with "object.". A path replaces that field as a whole. A path below
+  // metadata.labels, metadata.annotations, spec.model, spec.router,
+  // spec.main.env, spec.main.requests, spec.main.limits, spec.scaling,
+  // spec.placement or spec.rollout (for example metadata.labels.<key>) is
+  // accepted and replaces that whole field, not just the key. Any other path
+  // is InvalidArgument, and so is an empty mask. spec.replicas and
+  // spec.scaling are exclusive: setting one clears the other. The merged
+  // model is validated as on Create.
   google.protobuf.FieldMask update_mask = 2;
   // When true, update fails with Aborted unless metadata.version matches.
   bool lock = 3;

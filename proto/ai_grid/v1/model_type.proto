@@ -32,14 +32,23 @@ message Model {
 
 // Desired state of a Model (trimmed LLMInferenceService.spec + ACM placement).
 message ModelSpec {
+  option (buf.validate.message).cel = {
+    id: "model_spec.main_image"
+    message: "spec.main.image is required when spec.base_refs names no preset"
+    expression: "!has(this.main) || this.main.image != '' || size(this.base_refs) > 0"
+  };
+
   // Where the artifact comes from and the name clients send.
   ModelSource model = 1;
 
   // Static replica count. Mutually exclusive with scaling.
   optional int32 replicas = 2;
 
-  // LLMInferenceServiceConfig preset names merged under the spec.
-  repeated string base_refs = 3;
+  // LLMInferenceServiceConfig preset names merged under the spec. Each is a
+  // name with no whitespace; an empty or blank name is InvalidArgument.
+  repeated string base_refs = 3 [(buf.validate.field).repeated.items = {
+    string: {pattern: "^\\S+$"}
+  }];
 
   // Optional ServingRuntime / ClusterServingRuntime name.
   string runtime = 4;
@@ -47,7 +56,8 @@ message ModelSpec {
   // Router / gateway configuration.
   ModelRouter router = 5;
 
-  // Main container of the workload template.
+  // Main container of the workload template. Its image may be empty only
+  // when base_refs names a preset (see ModelContainer.image).
   ModelContainer main = 6;
 
   // Autoscaling. Mutually exclusive with replicas.
@@ -103,14 +113,53 @@ message ModelGatewayRef {
 
 // Main container resources and environment.
 message ModelContainer {
-  // Runtime image. Empty uses the preset's.
+  // Runtime image. Required when spec.base_refs is empty. With base_refs it
+  // may be empty, and the presets' image applies: KServe merges the
+  // LLMInferenceServiceConfigs named in baseRefs under the service's own
+  // spec, and an empty image in the service doesn't override theirs
+  // (combineBaseRefsConfig and mergeSpecs in
+  // pkg/controller/v1alpha2/llmisvc/config_merge.go,
+  // red-hat-data-services/kserve rhoai-3.6 at 40fa1a1). The backend can't
+  // see the presets on the clusters, so it can't check that one sets an
+  // image: if none does, Kubernetes refuses the workload on the cluster
+  // ("image: Required value"), the model never becomes ready there, and its
+  // status says so. A blank image, or one with a space or tab, is
+  // InvalidArgument.
   string image = 1;
 
-  // Resource requests (cpu, memory, nvidia.com/gpu, ...).
-  map<string, string> requests = 2;
+  // Resource requests (cpu, memory, nvidia.com/gpu, ...): Kubernetes
+  // quantities, which must parse and be non-negative. The values the
+  // container can't have are InvalidArgument, as Kubernetes would refuse
+  // them on every cluster: an extended resource such as nvidia.com/gpu that
+  // isn't a whole number, a request above its limit, and, for the resources
+  // Kubernetes can't overcommit (extended resources and hugepages-*), a
+  // request that differs from its limit. Such a resource with a request and
+  // no limit is saved with the request as its limit, as Kubernetes requires
+  // the limit (validateResourceRequirements in kubernetes/kubernetes
+  // pkg/apis/core/validation). An Update that replaces requests and not
+  // limits drops each such limit that equalled its saved request, so the
+  // limit follows the new request, and a removed request takes its limit
+  // with it. A rule across the two maps is checked by the server only.
+  map<string, string> requests = 2 [(buf.validate.field).map = {
+    keys: {
+      string: {min_len: 1}
+    }
+    values: {
+      // A Kubernetes quantity (k8s.io/apimachinery resource.ParseQuantity)
+      // without a minus sign.
+      string: {pattern: "^\\+?[0-9.]+[eEinumkKMGTP]*[-+]?[0-9]*$"}
+    }
+  }];
 
-  // Resource limits.
-  map<string, string> limits = 3;
+  // Resource limits: Kubernetes quantities, as requests.
+  map<string, string> limits = 3 [(buf.validate.field).map = {
+    keys: {
+      string: {min_len: 1}
+    }
+    values: {
+      string: {pattern: "^\\+?[0-9.]+[eEinumkKMGTP]*[-+]?[0-9]*$"}
+    }
+  }];
 
   // Environment variables (for example VLLM_ADDITIONAL_ARGS).
   repeated ModelEnvVar env = 4;
@@ -198,31 +247,105 @@ message ModelStatus {
   // LLMInferenceService conditions.
   repeated Condition conditions = 2;
 
-  // Derived summary phase.
+  // Derived summary phase (see ModelPhase).
   ModelPhase phase = 3;
 
-  // Reason of the condition that decided phase.
+  // Reason of the condition that decided phase. In git mode: SavedToGit
+  // while no cluster has reported, else Ready, PartiallyAvailable or
+  // NotReady with the phase.
   string reason = 4;
 
-  // Message of the condition that decided phase.
+  // Message of the condition that decided phase. In git mode, while a
+  // cluster has reported: where the model is ready, for example "Not ready
+  // on site-a; ready on site-b; no report from site-c".
   string message = 5;
 
   // Placement status when placement is set.
   ModelPlacementStatus placement = 6;
 
-  // ManifestWorkReplicaSet status when placement is set.
+  // ManifestWorkReplicaSet status when placement is set. Git mode has no
+  // ManifestWorkReplicaSet and never sets it; each placed cluster's status
+  // is in `clusters`.
   ModelRolloutStatus rollout = 7;
 
   // Observed generation from the LLMInferenceService.
   int64 observed_generation = 8;
+
+  // The model on each cluster its placement names (the clusters in
+  // placement.selected_clusters), one entry per cluster in cluster-name
+  // order, from what the hub's status Policies report. Empty while no
+  // cluster has reported (reason SavedToGit). Ingress clusters the model
+  // isn't placed on, which publish it but don't run it, have no entry; their
+  // reports count in `phase` and `message`. Output only.
+  repeated ModelClusterStatus clusters = 9;
 }
 
 // Derived model phase.
+//
+// In git mode, while no cluster has reported the model, the phase is
+// UNSPECIFIED with reason SavedToGit. Once one has, the phase is, in this
+// order of precedence:
+//
+//   - READY (reason Ready): every ingress cluster reports the model's
+//     MaaSModelRef ready, and every placed cluster is READY in `clusters`.
+//   - PARTIALLY_AVAILABLE (reason PartiallyAvailable): every ingress cluster
+//     reports the MaaSModelRef ready, at least one placed cluster is READY
+//     and at least one is not.
+//   - PENDING (reason NotReady): otherwise, including while an ingress
+//     cluster reports the MaaSModelRef not ready or hasn't reported it.
+//
+// The ingress clusters are those the catalog status Policy lists and those
+// labelled ai-grid/enabled "true" and ai-grid/role ingress or combined; each
+// must report. READY and PARTIALLY_AVAILABLE need at least one: with none,
+// nothing shows the model published, so it is PENDING, and the message ends
+// "no ingress cluster has reported the MaaSModelRef".
+//
+// Git mode never reports FAILED: the status Policies can't tell a model
+// that failed from one that is still starting. The order is the one the
+// console's Models page uses (READY, PARTIALLY_AVAILABLE, FAILED, then the
+// PENDING cases; proposal P13).
 enum ModelPhase {
   MODEL_PHASE_UNSPECIFIED = 0;
   MODEL_PHASE_PENDING = 1;
   MODEL_PHASE_READY = 2;
   MODEL_PHASE_FAILED = 3;
+  // Serving on some of the clusters its placement names but not all (see
+  // above). Only a whole model has it; a cluster in ModelStatus.clusters is
+  // READY or PENDING.
+  MODEL_PHASE_PARTIALLY_AVAILABLE = 4;
+}
+
+// The model on one placed cluster. In git mode it comes from the hub's
+// status Policies: the cluster's models-ready report of the model's
+// LLMInferenceService (Ready=True), and, on a combined cluster, which is
+// also an ingress cluster, its model-refs-ready report of the model's
+// MaaSModelRef (phase Ready). Output only.
+message ModelClusterStatus {
+  // ManagedCluster name, one of placement.selected_clusters.
+  string cluster = 1 [(buf.validate.field).string = {
+    min_len: 1
+    max_len: 63
+    pattern: "^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$"
+  }];
+
+  // READY when every report from the cluster says ready; PENDING when one
+  // says not ready (or not found) or one is missing. Git mode never sets
+  // FAILED; PARTIALLY_AVAILABLE is only a whole model's phase.
+  ModelPhase phase = 2 [(buf.validate.field).enum = {
+    defined_only: true
+    not_in: [
+      0,
+      4
+    ]
+  }];
+
+  // Ready, NotReady (a report says not ready or not found) or NoReport (the
+  // cluster hasn't reported the object yet).
+  string reason = 3 [(buf.validate.field).string.min_len = 1];
+
+  // What the cluster reported, for example "LLMInferenceService not ready"
+  // or "LLMInferenceService ready; no MaaSModelRef report".
+  string message = 4;
 }
 
 // Placement observed state.
@@ -250,7 +373,8 @@ message ModelRolloutStatus {
   bool applied = 2;
   // Reason from the deciding condition.
   string reason = 3;
-  // Per-cluster work summaries when available.
+  // Per-cluster work summaries when available. Never set in git mode; see
+  // ModelStatus.clusters.
   repeated ModelWorkStatus works = 4;
   // MWRS conditions.
   repeated Condition conditions = 5;

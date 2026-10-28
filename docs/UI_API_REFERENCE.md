@@ -550,7 +550,26 @@ cluster the model is already on is not checked again, so a model on a cluster
 that has left the hub can still be changed or moved off it.
 `:listPlacementClusters` lists the clusters a model can run on. Status comes
 from the hub's status Policies, or reason
-`SavedToGit` with no phase when no cluster has reported. Labels and
+`SavedToGit` with no phase when no cluster has reported. Once one has,
+`status.phase` is `MODEL_PHASE_READY`, `MODEL_PHASE_PARTIALLY_AVAILABLE`
+(ready on some placed clusters, not all, and published on every ingress
+cluster) or `MODEL_PHASE_PENDING`; READY and PARTIALLY_AVAILABLE need at least
+one ingress cluster's report, and a cluster labelled `ai-grid/role` `ingress` or
+`combined` must report even before the catalog Policy lists it; in that order of precedence (the comment on
+`ModelPhase`), and `status.clusters` gives each placed cluster's own status
+(below). `spec.main.requests` and `limits` take Kubernetes quantities with
+Kubernetes' container rules: non-negative, whole numbers for extended
+resources such as `nvidia.com/gpu`, a request at most its limit and equal to
+it for extended resources and hugepages; anything else is `InvalidArgument`.
+A GPU request with no limit is saved with the request as its limit, and an
+update of `spec.main.requests` alone moves that limit with the request (a
+removed GPU request removes the GPU limit too).
+`spec.main.image` is required unless `spec.base_refs` names a preset; with
+one it may be left empty, and KServe uses the presets' image, because an empty
+image in the model doesn't override theirs. The backend can't see the presets
+on the clusters: if none sets an image, Kubernetes refuses the workload on the
+cluster and the model stays not ready there. A `base_refs` item must be a
+name with no whitespace; an empty one is `InvalidArgument`. Labels and
 annotations take only unprefixed keys plus `openshift.io/display-name` and
 `openshift.io/description`.
 
@@ -561,7 +580,7 @@ annotations take only unprefixed keys plus `openshift.io/display-name` and
 | GET | `/api/v1/models:listLocations` | Deprecated: the same cluster names, as `locations`. Use `:listPlacementClusters`; removed once clients have moved |
 | GET | `/api/v1/models/{id}` | Get one (unwraps to the Model object); `status.placement` when placed: `selected_clusters` (cluster names) and `locations` (their `location` labels, P8) |
 | POST | `/api/v1/models` | Create (= deploy); body is the Model object |
-| PATCH | `/api/v1/models/{id}` | FieldMask update (`spec.replicas`, `spec.main.image`, `spec.main.env`, `spec.placement`, `spec.rollout`, `metadata.labels`, `metadata.annotations`) |
+| PATCH | `/api/v1/models/{id}` | FieldMask update (`metadata.labels`, `metadata.annotations`, `spec.model`, `spec.replicas`, `spec.base_refs`, `spec.runtime`, `spec.router`, `spec.main`, `spec.main.image`, `spec.main.env`, `spec.main.requests`, `spec.main.limits`, `spec.scaling`, `spec.placement`, `spec.rollout`). Each path replaces its field whole; a subpath such as `metadata.labels.<key>` replaces the whole map. `ModelsUpdateRequest.update_mask` has the full rules |
 | DELETE | `/api/v1/models/{id}` | Refuses while a subscription in the repository references the model |
 
 ### Create body (key fields)
@@ -606,6 +625,27 @@ A placed model's status names its clusters and, separately, where they are:
   }
 }
 ```
+
+Once a cluster reports, the status also has the model on each placed cluster
+(proposal P13), in cluster-name order:
+
+```json
+"status": {
+  "phase": "MODEL_PHASE_PARTIALLY_AVAILABLE",
+  "reason": "PartiallyAvailable",
+  "message": "Not ready on site-a; ready on site-b",
+  "clusters": [
+    {"cluster": "site-a", "phase": "MODEL_PHASE_PENDING", "reason": "NotReady", "message": "LLMInferenceService not ready"},
+    {"cluster": "site-b", "phase": "MODEL_PHASE_READY", "reason": "Ready", "message": "LLMInferenceService ready"}
+  ]
+}
+```
+
+A cluster's `phase` is `MODEL_PHASE_READY` or `MODEL_PHASE_PENDING`; its
+`reason` is `Ready`, `NotReady` or `NoReport` (no report yet); on a combined
+cluster the `MaaSModelRef` report counts too, and the message names both, such
+as `LLMInferenceService ready; MaaSModelRef not ready`. Ingress clusters the
+model isn't placed on have no entry. `status.rollout` is never set.
 
 `selected_clusters` holds cluster names, the values `spec.placement` takes.
 `locations` holds the distinct values of those clusters' `location` label;

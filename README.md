@@ -282,14 +282,29 @@ For models:
 - `status.placement` lists the clusters the file places the model on
   (`selected_clusters`, cluster names), and the distinct values of their
   `location` labels (`locations`, read from the ManagedClusters; not cluster
-  names). `status.phase` is
-  `READY` when every placed cluster reports the `LLMInferenceService` ready
-  and every ingress cluster the status Policy is placed on has its
-  `MaaSModelRef` ready; `PENDING`, reason `NotReady`, when any report says not
-  ready, or a placed or ingress cluster hasn't reported it, with a per-cluster message such as
-  `Not ready on site-a; ready on site-b`. With no report at all, it has no
-  phase and reason `SavedToGit`. It is never `FAILED`: the Policies can't tell
-  a failed model from one that is starting.
+  names). `status.clusters` has one entry per placed cluster: `READY`,
+  reason `Ready`, when the cluster reports the `LLMInferenceService` ready
+  (and, on a combined cluster, the `MaaSModelRef` too); `PENDING`, reason
+  `NotReady`, when a report says not ready; `PENDING`, reason `NoReport`,
+  when one is missing; its message says what the cluster reported, such as
+  `LLMInferenceService ready; MaaSModelRef not ready`. `status.phase` is
+  `READY` when every placed cluster is ready and every ingress cluster (the
+  ones the catalog status Policy is placed on, and the ones labelled
+  `ai-grid/enabled: "true"` and `ai-grid/role` `ingress` or `combined`) has
+  its `MaaSModelRef` ready, and there is at least one;
+  `PARTIALLY_AVAILABLE`, reason `PartiallyAvailable`, when every ingress
+  cluster has the `MaaSModelRef` ready and some, not all, placed clusters are
+  ready, with at least one ingress cluster too; otherwise `PENDING`, reason
+  `NotReady`. The message covers every
+  cluster, such as `Not ready on site-a; ready on site-b`. With no report at
+  all, it has no phase, reason `SavedToGit` and no `clusters`. It is never
+  `FAILED`: the Policies can't tell a failed model from one that is starting.
+- `spec.main.requests` and `limits` must be Kubernetes quantities that
+  Kubernetes accepts for a container: non-negative, whole numbers for
+  extended resources such as `nvidia.com/gpu`, a request at most its limit,
+  and equal to it for extended resources and hugepages; otherwise
+  `InvalidArgument`. Such a resource with a request and no limit is saved
+  with the request as its limit.
 - Delete answers `FailedPrecondition` while a subscription in the repository
   names the model. A subscription written between the check and the commit
   makes the delete `Aborted`, and a model deleted before a subscription that
@@ -709,8 +724,12 @@ make dev-catalog-log                  # the commits and the files at the branch 
 make dev-catalog-reset                # delete the repository and start from the seed commit again
 ```
 
-`granite-3b` shows `PENDING`: the fixtures report it not ready on
-`site-madrid-1`. Any other name shows `SavedToGit`. `team-a`'s model ref
+`granite-3b` shows `PARTIALLY_AVAILABLE`: the fixtures report it ready on
+`site-paris-1`, not ready on `site-madrid-1`, and its `MaaSModelRef` ready on
+the ingress `site-ashburn-1`, and `status.clusters` has an entry for each of
+the two placed clusters. Any other name shows `SavedToGit`. On
+`make dev-fake-poc`, place `granite-3b` on `site1` and `site2` instead:
+`fixtures/poc/policies.json` reports it the same way. `team-a`'s model ref
 reads back joined to the model: `namespace` `models-as-a-service`,
 `model_id` `granite-3b` and `display_name` `Granite 3B`. `make run` commits to the
 same repository. To commit somewhere else, such as a clone you push from, set

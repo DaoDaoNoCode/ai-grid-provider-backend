@@ -1623,26 +1623,49 @@
       },
       "description": "Model is a deployable LLM inference workload on the AI Grid.\n\nIt is committed to the backend's Git catalog: an LLMInferenceService\n(serving.kserve.io/v1alpha2) that Argo CD delivers to the clusters the\nplacement names, and an ExternalModel and MaaSModelRef that publish it\nthrough the grid on the ingress clusters.\n\nThe `spec` contains the desired details and may be modified by the user.\nThe `status` contains the current status and is provided by the system."
     },
+    "v1ModelClusterStatus": {
+      "type": "object",
+      "properties": {
+        "cluster": {
+          "type": "string",
+          "description": "ManagedCluster name, one of placement.selected_clusters."
+        },
+        "phase": {
+          "$ref": "#/definitions/v1ModelPhase",
+          "description": "READY when every report from the cluster says ready; PENDING when one\nsays not ready (or not found) or one is missing. Git mode never sets\nFAILED; PARTIALLY_AVAILABLE is only a whole model's phase."
+        },
+        "reason": {
+          "type": "string",
+          "description": "Ready, NotReady (a report says not ready or not found) or NoReport (the\ncluster hasn't reported the object yet)."
+        },
+        "message": {
+          "type": "string",
+          "description": "What the cluster reported, for example \"LLMInferenceService not ready\"\nor \"LLMInferenceService ready; no MaaSModelRef report\"."
+        }
+      },
+      "description": "The model on one placed cluster. In git mode it comes from the hub's\nstatus Policies: the cluster's models-ready report of the model's\nLLMInferenceService (Ready=True), and, on a combined cluster, which is\nalso an ingress cluster, its model-refs-ready report of the model's\nMaaSModelRef (phase Ready). Output only.",
+      "readOnly": true
+    },
     "v1ModelContainer": {
       "type": "object",
       "properties": {
         "image": {
           "type": "string",
-          "description": "Runtime image. Empty uses the preset's."
+          "description": "Runtime image. Required when spec.base_refs is empty. With base_refs it\nmay be empty, and the presets' image applies: KServe merges the\nLLMInferenceServiceConfigs named in baseRefs under the service's own\nspec, and an empty image in the service doesn't override theirs\n(combineBaseRefsConfig and mergeSpecs in\npkg/controller/v1alpha2/llmisvc/config_merge.go,\nred-hat-data-services/kserve rhoai-3.6 at 40fa1a1). The backend can't\nsee the presets on the clusters, so it can't check that one sets an\nimage: if none does, Kubernetes refuses the workload on the cluster\n(\"image: Required value\"), the model never becomes ready there, and its\nstatus says so. A blank image, or one with a space or tab, is\nInvalidArgument."
         },
         "requests": {
           "type": "object",
           "additionalProperties": {
             "type": "string"
           },
-          "description": "Resource requests (cpu, memory, nvidia.com/gpu, ...)."
+          "description": "Resource requests (cpu, memory, nvidia.com/gpu, ...): Kubernetes\nquantities, which must parse and be non-negative. The values the\ncontainer can't have are InvalidArgument, as Kubernetes would refuse\nthem on every cluster: an extended resource such as nvidia.com/gpu that\nisn't a whole number, a request above its limit, and, for the resources\nKubernetes can't overcommit (extended resources and hugepages-*), a\nrequest that differs from its limit. Such a resource with a request and\nno limit is saved with the request as its limit, as Kubernetes requires\nthe limit (validateResourceRequirements in kubernetes/kubernetes\npkg/apis/core/validation). An Update that replaces requests and not\nlimits drops each such limit that equalled its saved request, so the\nlimit follows the new request, and a removed request takes its limit\nwith it. A rule across the two maps is checked by the server only."
         },
         "limits": {
           "type": "object",
           "additionalProperties": {
             "type": "string"
           },
-          "description": "Resource limits."
+          "description": "Resource limits: Kubernetes quantities, as requests."
         },
         "env": {
           "type": "array",
@@ -1741,10 +1764,11 @@
         "MODEL_PHASE_UNSPECIFIED",
         "MODEL_PHASE_PENDING",
         "MODEL_PHASE_READY",
-        "MODEL_PHASE_FAILED"
+        "MODEL_PHASE_FAILED",
+        "MODEL_PHASE_PARTIALLY_AVAILABLE"
       ],
       "default": "MODEL_PHASE_UNSPECIFIED",
-      "description": "Derived model phase."
+      "description": "Derived model phase.\n\nIn git mode, while no cluster has reported the model, the phase is\nUNSPECIFIED with reason SavedToGit. Once one has, the phase is, in this\norder of precedence:\n\n  - READY (reason Ready): every ingress cluster reports the model's\n    MaaSModelRef ready, and every placed cluster is READY in `clusters`.\n  - PARTIALLY_AVAILABLE (reason PartiallyAvailable): every ingress cluster\n    reports the MaaSModelRef ready, at least one placed cluster is READY\n    and at least one is not.\n  - PENDING (reason NotReady): otherwise, including while an ingress\n    cluster reports the MaaSModelRef not ready or hasn't reported it.\n\nThe ingress clusters are those the catalog status Policy lists and those\nlabelled ai-grid/enabled \"true\" and ai-grid/role ingress or combined; each\nmust report. READY and PARTIALLY_AVAILABLE need at least one: with none,\nnothing shows the model published, so it is PENDING, and the message ends\n\"no ingress cluster has reported the MaaSModelRef\".\n\nGit mode never reports FAILED: the status Policies can't tell a model\nthat failed from one that is still starting. The order is the one the\nconsole's Models page uses (READY, PARTIALLY_AVAILABLE, FAILED, then the\nPENDING cases; proposal P13).\n\n - MODEL_PHASE_PARTIALLY_AVAILABLE: Serving on some of the clusters its placement names but not all (see\nabove). Only a whole model has it; a cluster in ModelStatus.clusters is\nREADY or PENDING."
     },
     "v1ModelPlacement": {
       "type": "object",
@@ -1875,7 +1899,7 @@
             "type": "object",
             "$ref": "#/definitions/v1ModelWorkStatus"
           },
-          "description": "Per-cluster work summaries when available."
+          "description": "Per-cluster work summaries when available. Never set in git mode; see\nModelStatus.clusters."
         },
         "conditions": {
           "type": "array",
@@ -1980,7 +2004,7 @@
           "items": {
             "type": "string"
           },
-          "description": "LLMInferenceServiceConfig preset names merged under the spec."
+          "description": "LLMInferenceServiceConfig preset names merged under the spec. Each is a\nname with no whitespace; an empty or blank name is InvalidArgument."
         },
         "runtime": {
           "type": "string",
@@ -1992,7 +2016,7 @@
         },
         "main": {
           "$ref": "#/definitions/v1ModelContainer",
-          "description": "Main container of the workload template."
+          "description": "Main container of the workload template. Its image may be empty only\nwhen base_refs names a preset (see ModelContainer.image)."
         },
         "scaling": {
           "$ref": "#/definitions/v1ModelScaling",
@@ -2026,15 +2050,15 @@
         },
         "phase": {
           "$ref": "#/definitions/v1ModelPhase",
-          "description": "Derived summary phase."
+          "description": "Derived summary phase (see ModelPhase)."
         },
         "reason": {
           "type": "string",
-          "description": "Reason of the condition that decided phase."
+          "description": "Reason of the condition that decided phase. In git mode: SavedToGit\nwhile no cluster has reported, else Ready, PartiallyAvailable or\nNotReady with the phase."
         },
         "message": {
           "type": "string",
-          "description": "Message of the condition that decided phase."
+          "description": "Message of the condition that decided phase. In git mode, while a\ncluster has reported: where the model is ready, for example \"Not ready\non site-a; ready on site-b; no report from site-c\"."
         },
         "placement": {
           "$ref": "#/definitions/v1ModelPlacementStatus",
@@ -2042,12 +2066,21 @@
         },
         "rollout": {
           "$ref": "#/definitions/v1ModelRolloutStatus",
-          "description": "ManifestWorkReplicaSet status when placement is set."
+          "description": "ManifestWorkReplicaSet status when placement is set. Git mode has no\nManifestWorkReplicaSet and never sets it; each placed cluster's status\nis in `clusters`."
         },
         "observed_generation": {
           "type": "string",
           "format": "int64",
           "description": "Observed generation from the LLMInferenceService."
+        },
+        "clusters": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "$ref": "#/definitions/v1ModelClusterStatus"
+          },
+          "description": "The model on each cluster its placement names (the clusters in\nplacement.selected_clusters), one entry per cluster in cluster-name\norder, from what the hub's status Policies report. Empty while no\ncluster has reported (reason SavedToGit). Ingress clusters the model\nisn't placed on, which publish it but don't run it, have no entry; their\nreports count in `phase` and `message`. Output only.",
+          "readOnly": true
         }
       },
       "description": "Observed state of a Model."

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"regexp"
 	"slices"
 	"sort"
 	"strconv"
@@ -205,6 +206,7 @@ func (s *ModelsServer) Create(ctx context.Context, req *aigridv1.ModelsCreateReq
 	object.Metadata.Name = id
 	object.Id = id
 
+	normalizeModelResources(object.GetSpec().GetMain())
 	if err := validateModelSpec(object.GetSpec()); err != nil {
 		return nil, err
 	}
@@ -580,6 +582,9 @@ func mergeModelUpdate(current, incoming *aigridv1.Model, paths modelUpdatePaths)
 			main.Env = inMain.GetEnv()
 		}
 		if paths.mainRequests {
+			if !paths.mainLimits {
+				dropDerivedLimits(out.Spec.GetMain(), main)
+			}
 			main.Requests = inMain.GetRequests()
 		}
 		if paths.mainLimits {
@@ -629,6 +634,9 @@ func validateModelID(id string) error {
 	return nil
 }
 
+// baseRefRE is the buf.validate pattern on ModelSpec.base_refs items.
+var baseRefRE = regexp.MustCompile(`^\S+$`)
+
 func validateModelSpec(spec *aigridv1.ModelSpec) error {
 	if spec == nil {
 		return connect.NewError(connect.CodeInvalidArgument, "spec is required")
@@ -673,13 +681,25 @@ func validateModelSpec(spec *aigridv1.ModelSpec) error {
 			return connect.NewError(connect.CodeInvalidArgument, "at least one trigger is required when using direct KEDA scaling")
 		}
 	}
+	for i, ref := range spec.GetBaseRefs() {
+		// The buf.validate pattern on ModelSpec.base_refs. A blank name would
+		// count as a preset below and read back as none (model_mapper.go).
+		if !baseRefRE.MatchString(ref) {
+			return connect.Errorf(connect.CodeInvalidArgument, "spec.base_refs[%d] %q must be a preset name with no whitespace", i, ref)
+		}
+	}
 	if main := spec.GetMain(); main != nil {
+		// With base_refs the presets may provide the image (ModelContainer.image
+		// in model_type.proto); without them nothing does.
 		img := strings.TrimSpace(main.GetImage())
-		if img == "" {
-			return connect.NewError(connect.CodeInvalidArgument, "spec.main.image is required when spec.main is set")
+		if img == "" && (main.GetImage() != "" || len(spec.GetBaseRefs()) == 0) {
+			return connect.NewError(connect.CodeInvalidArgument, "spec.main.image is required when spec.base_refs names no preset")
 		}
 		if strings.ContainsAny(img, " \t") {
 			return connect.NewError(connect.CodeInvalidArgument, "spec.main.image must not contain whitespace")
+		}
+		if err := validateModelResources(main); err != nil {
+			return err
 		}
 	}
 	if placement := spec.GetPlacement(); placement != nil {
