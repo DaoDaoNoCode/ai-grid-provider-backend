@@ -141,6 +141,7 @@ make lint             # gofmt check, go vet; golangci-lint when installed
 make verify           # build + unit + lint
 make generate         # regenerate proto / gateway / OpenAPI
 make run              # local API (gRPC :8080, REST/Swagger :8081) against kubeconfig
+make run-hub          # local API on 127.0.0.1:9090/:9092 against your oc login's hub, set up like its console; KEYCLOAK=hub
 make keycloak-up      # local Keycloak on :8180 + seed tenant-a/tenant-b
 make keycloak-seed    # re-seed ai-grid realm / Organizations (idempotent)
 make keycloak-down    # remove local Keycloak container
