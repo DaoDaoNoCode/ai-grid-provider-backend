@@ -105,7 +105,7 @@ func (s *ModelsServer) gitCreate(ctx context.Context, object *aigridv1.Model) (*
 	if err != nil {
 		return nil, err
 	}
-	if err := s.checkPlacementClusters(ctx, "create", id, clusters); err != nil {
+	if err := s.checkPlacementClusters(ctx, clusters); err != nil {
 		return nil, err
 	}
 	head, err := s.writer.Head(ctx)
@@ -164,7 +164,7 @@ func (s *ModelsServer) gitUpdate(ctx context.Context, req *aigridv1.ModelsUpdate
 			added = append(added, cluster)
 		}
 	}
-	if err := s.checkPlacementClusters(ctx, "update", id, added); err != nil {
+	if err := s.checkPlacementClusters(ctx, added); err != nil {
 		return nil, err
 	}
 	return s.gitCommitModel(ctx, head, "update", merged, current.model.GetMetadata().GetVersion()+1, current.clusters, clusters)

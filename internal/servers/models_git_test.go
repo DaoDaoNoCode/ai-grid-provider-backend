@@ -556,18 +556,26 @@ func TestModelsGitPlacementNamesKnownClusters(t *testing.T) {
 
 // Without the ManagedCluster API no cluster exists, so every name is unknown;
 // a failed read of the clusters fails the call rather than skipping the check.
+// The backend lists ManagedClusters with its own credentials, so any other
+// list error, Forbidden included, is the service's own: Internal, as for
+// Clusters/List, with the Kubernetes error kept as the cause.
 func TestModelsGitPlacementClusterReadErrors(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
+	managedClusters := schema.GroupResource{Group: "cluster.open-cluster-management.io", Resource: "managedclusters"}
 	for name, tc := range map[string]struct {
 		err  error
 		want connect.Code
 	}{
 		"no ManagedCluster API": {
-			err:  apierrors.NewNotFound(schema.GroupResource{Group: "cluster.open-cluster-management.io", Resource: "managedclusters"}, ""),
+			err:  apierrors.NewNotFound(managedClusters, ""),
 			want: connect.CodeInvalidArgument,
 		},
 		"list fails": {err: errors.New("api unavailable"), want: connect.CodeInternal},
+		"list forbidden": {
+			err:  apierrors.NewForbidden(managedClusters, "", errors.New("no RBAC")),
+			want: connect.CodeInternal,
+		},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
@@ -581,6 +589,21 @@ func TestModelsGitPlacementClusterReadErrors(t *testing.T) {
 			}
 			_, err = srv.Create(ctx, &aigridv1.ModelsCreateRequest{Object: gitSampleModel("sim", "site-a")})
 			assertConnectCode(t, err, tc.want)
+			if tc.want == connect.CodeInternal && !errors.Is(err, tc.err) {
+				t.Fatalf("Create() error = %v, want the list error as its cause", err)
+			}
+			// ListPlacementClusters answers an empty list without the API.
+			_, err = srv.ListPlacementClusters(ctx, &aigridv1.ModelsListPlacementClustersRequest{})
+			if tc.want != connect.CodeInternal {
+				if err != nil {
+					t.Fatalf("ListPlacementClusters() error = %v, want nil", err)
+				}
+				return
+			}
+			assertConnectCode(t, err, connect.CodeInternal)
+			if !errors.Is(err, tc.err) {
+				t.Fatalf("ListPlacementClusters() error = %v, want the list error as its cause", err)
+			}
 		})
 	}
 }

@@ -307,22 +307,37 @@ func (s *ModelsServer) placementClusters(ctx context.Context) ([]string, error) 
 	if s.client == nil {
 		return nil, nil
 	}
+	items, err := s.listManagedClusters(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if len(items) == 0 {
+		return nil, nil
+	}
+	provisioned := readProvisioning(ctx, s.client, s.logger, s.readyPolicyNamespace, s.readyPolicyName)
+	var names []string
+	for i := range items {
+		if isModelLocation(items[i], provisioned) {
+			names = append(names, items[i].GetName())
+		}
+	}
+	sort.Strings(names)
+	return slices.Compact(names), nil
+}
+
+// listManagedClusters lists the ManagedClusters on the hub. A hub without the
+// ManagedCluster API (NotFound) has no cluster, so the list is empty. Any
+// other error is Internal, as in Clusters/List: the backend lists with its own
+// credentials, so a failure, Forbidden included, is not the caller's to fix.
+func (s *ModelsServer) listManagedClusters(ctx context.Context) ([]unstructured.Unstructured, error) {
 	list, err := s.client.Resource(managedClustersResource).List(ctx, metav1.ListOptions{})
 	if err != nil {
 		if apierrors.IsNotFound(err) {
 			return nil, nil
 		}
-		return nil, mapModelAPIError("list placement clusters", "", err)
+		return nil, connect.Errorf(connect.CodeInternal, "list ManagedCluster resources: %v", err).WithCause(err)
 	}
-	provisioned := readProvisioning(ctx, s.client, s.logger, s.readyPolicyNamespace, s.readyPolicyName)
-	var names []string
-	for i := range list.Items {
-		if isModelLocation(list.Items[i], provisioned) {
-			names = append(names, list.Items[i].GetName())
-		}
-	}
-	sort.Strings(names)
-	return slices.Compact(names), nil
+	return list.Items, nil
 }
 
 // checkPlacementClusters answers InvalidArgument naming each cluster in added
@@ -332,19 +347,17 @@ func (s *ModelsServer) placementClusters(ctx context.Context) ([]string, error) 
 // update adds are checked, so a model on a cluster that has since left the
 // hub can still be changed or moved off it. Without a dynamic client there is
 // nothing to check against.
-func (s *ModelsServer) checkPlacementClusters(ctx context.Context, op, id string, added []string) error {
+func (s *ModelsServer) checkPlacementClusters(ctx context.Context, added []string) error {
 	if s.client == nil || len(added) == 0 {
 		return nil
 	}
+	items, err := s.listManagedClusters(ctx)
+	if err != nil {
+		return err
+	}
 	known := map[string]bool{}
-	list, err := s.client.Resource(managedClustersResource).List(ctx, metav1.ListOptions{})
-	switch {
-	case err == nil:
-		for i := range list.Items {
-			known[list.Items[i].GetName()] = true
-		}
-	case !apierrors.IsNotFound(err): // NotFound: no ManagedCluster API, so no cluster.
-		return mapModelAPIError(op, id, err)
+	for i := range items {
+		known[items[i].GetName()] = true
 	}
 	var unknown []string
 	for _, cluster := range added {
