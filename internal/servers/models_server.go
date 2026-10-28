@@ -6,14 +6,17 @@ import (
 	"log/slog"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
 	connect "connectrpc.com/connect/v2"
+	"connectrpc.com/connect/v2/connectproto"
 	aigridv1 "github.com/osac-project/ai-grid-provider-backend/gen/ai_grid/v1"
 	"github.com/osac-project/ai-grid-provider-backend/gen/ai_grid/v1/aigridv1connect"
 	"github.com/osac-project/ai-grid-provider-backend/internal/celfilter"
 	"github.com/osac-project/ai-grid-provider-backend/internal/gitops"
+	"google.golang.org/genproto/googleapis/rpc/errdetails"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -38,8 +41,9 @@ type ModelsServerBuilder struct {
 // is an LLMInferenceService that Argo CD delivers to the clusters its
 // placement names, and an ExternalModel and MaaSModelRef for the ingress
 // clusters (models_git.go). It never writes to the cluster; it reads the
-// ManagedClusters for locations, and status from the hub through its
-// CatalogStatusReader.
+// ManagedClusters for ListPlacementClusters, status.placement.locations and
+// the check that a placement names existing clusters, and status from the hub
+// through its CatalogStatusReader.
 type ModelsServer struct {
 	aigridv1connect.UnimplementedModelsHandler
 	logger                *slog.Logger
@@ -73,9 +77,10 @@ func (b *ModelsServerBuilder) SetWriter(writer gitops.Writer) *ModelsServerBuild
 	return b
 }
 
-// SetDynamicClient sets the hub client that ListLocations and
-// status.placement.locations read ManagedClusters with. Optional; without it
-// both are empty.
+// SetDynamicClient sets the hub client that ListPlacementClusters (and the
+// deprecated ListLocations), status.placement.locations and the placement's
+// cluster check read ManagedClusters with. Optional; without it the lists are
+// empty and placements are not checked.
 func (b *ModelsServerBuilder) SetDynamicClient(client dynamic.Interface) *ModelsServerBuilder {
 	b.client = client
 	return b
@@ -276,34 +281,129 @@ func listModelItems(ctx context.Context, req *aigridv1.ModelsListRequest, items 
 	}, nil
 }
 
-// ListLocations returns the unique sorted names of the clusters a model can
-// be placed on: the values a placement's name In [...] takes, since git mode
-// places a model by cluster name. A cluster qualifies when it is labelled
-// ai-grid/enabled=true and ai-grid/role inference or combined, is Available,
-// and is Compliant with the ready Policy (provisioned).
-func (s *ModelsServer) ListLocations(ctx context.Context, _ *aigridv1.ModelsListLocationsRequest) (*aigridv1.ModelsListLocationsResponse, error) {
-	if s.client == nil {
-		return &aigridv1.ModelsListLocationsResponse{}, nil
-	}
-	list, err := s.client.Resource(managedClustersResource).List(ctx, metav1.ListOptions{})
+// ListPlacementClusters returns the unique sorted names of the clusters a
+// model can be placed on: the values a placement's name In [...] takes, since
+// git mode places a model by cluster name. A cluster qualifies when it is
+// labelled ai-grid/enabled=true and ai-grid/role inference or combined, is
+// Available, and is Compliant with the ready Policy (provisioned).
+func (s *ModelsServer) ListPlacementClusters(ctx context.Context, _ *aigridv1.ModelsListPlacementClustersRequest) (*aigridv1.ModelsListPlacementClustersResponse, error) {
+	names, err := s.placementClusters(ctx)
 	if err != nil {
-		if apierrors.IsNotFound(err) {
-			return &aigridv1.ModelsListLocationsResponse{}, nil
-		}
-		return nil, mapModelAPIError("list locations", "", err)
+		return nil, err
+	}
+	return &aigridv1.ModelsListPlacementClustersResponse{Clusters: names}, nil
+}
+
+// ListLocations is the deprecated name of ListPlacementClusters: the same
+// cluster names, as locations (docs/API_CONTRACT.md, expand step).
+func (s *ModelsServer) ListLocations(ctx context.Context, _ *aigridv1.ModelsListLocationsRequest) (*aigridv1.ModelsListLocationsResponse, error) {
+	names, err := s.placementClusters(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return &aigridv1.ModelsListLocationsResponse{Locations: names}, nil
+}
+
+// placementClusters answers ListPlacementClusters and ListLocations.
+func (s *ModelsServer) placementClusters(ctx context.Context) ([]string, error) {
+	if s.client == nil {
+		return nil, nil
+	}
+	items, err := s.listManagedClusters(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if len(items) == 0 {
+		return nil, nil
 	}
 	provisioned := readProvisioning(ctx, s.client, s.logger, s.readyPolicyNamespace, s.readyPolicyName)
 	var names []string
-	for i := range list.Items {
-		if isModelLocation(list.Items[i], provisioned) {
-			names = append(names, list.Items[i].GetName())
+	for i := range items {
+		if isPlacementCluster(items[i], provisioned) {
+			names = append(names, items[i].GetName())
 		}
 	}
 	sort.Strings(names)
-	return &aigridv1.ModelsListLocationsResponse{Locations: slices.Compact(names)}, nil
+	return slices.Compact(names), nil
 }
 
-func isModelLocation(item unstructured.Unstructured, provisioned map[string]string) bool {
+// listManagedClusters lists the ManagedClusters on the hub. A hub without the
+// ManagedCluster API (NotFound) has no cluster, so the list is empty. Any
+// other error is Internal, as in Clusters/List: the backend lists with its own
+// credentials, so a failure, Forbidden included, is not the caller's to fix.
+func (s *ModelsServer) listManagedClusters(ctx context.Context) ([]unstructured.Unstructured, error) {
+	list, err := s.client.Resource(managedClustersResource).List(ctx, metav1.ListOptions{})
+	if err != nil {
+		if apierrors.IsNotFound(err) {
+			return nil, nil
+		}
+		return nil, connect.Errorf(connect.CodeInternal, "list ManagedCluster resources: %v", err).WithCause(err)
+	}
+	return list.Items, nil
+}
+
+// checkPlacementClusters answers InvalidArgument naming each cluster in added
+// that is not a ManagedCluster on the hub. A placement names clusters, and a
+// name no cluster has (a location label, a typo) would commit a model that
+// Argo CD delivers nowhere, with no error. Only the clusters a create or
+// update adds are checked, so a model on a cluster that has since left the
+// hub can still be changed or moved off it. Without a dynamic client there is
+// nothing to check against.
+//
+// The error carries a google.rpc.ResourceInfo detail for each unknown cluster,
+// in the order of added (resource_type managedClusterResourceType,
+// resource_name the cluster), so a client can find the names without parsing
+// the message.
+func (s *ModelsServer) checkPlacementClusters(ctx context.Context, added []string) error {
+	if s.client == nil || len(added) == 0 {
+		return nil
+	}
+	items, err := s.listManagedClusters(ctx)
+	if err != nil {
+		return err
+	}
+	known := map[string]bool{}
+	for i := range items {
+		known[items[i].GetName()] = true
+	}
+	var unknown, quoted []string
+	for _, cluster := range added {
+		if !known[cluster] {
+			unknown = append(unknown, cluster)
+			quoted = append(quoted, strconv.Quote(cluster))
+		}
+	}
+	var cerr *connect.Error
+	switch len(unknown) {
+	case 0:
+		return nil
+	case 1:
+		cerr = connect.Errorf(connect.CodeInvalidArgument, "spec.placement names cluster %s, which is not a ManagedCluster on the hub; a placement takes cluster names (Models/ListPlacementClusters), not location labels", quoted[0])
+	default:
+		cerr = connect.Errorf(connect.CodeInvalidArgument, "spec.placement names clusters %s, which are not ManagedClusters on the hub; a placement takes cluster names (Models/ListPlacementClusters), not location labels", strings.Join(quoted, ", "))
+	}
+	for _, cluster := range unknown {
+		// Marshalling a ResourceInfo does not fail; if it did, the message
+		// still names the cluster.
+		if detail, err := connectproto.NewErrorDetail(&errdetails.ResourceInfo{
+			ResourceType: managedClusterResourceType,
+			ResourceName: cluster,
+			Description:  "not a ManagedCluster on the hub",
+		}); err == nil {
+			cerr = cerr.WithDetail(detail)
+		}
+	}
+	return cerr
+}
+
+// managedClusterResourceType is the google.rpc.ResourceInfo resource_type of
+// a cluster: the type URL of ai_grid.v1.ManagedCluster, whose id is the
+// cluster name.
+var managedClusterResourceType = "type.googleapis.com/" + string((&aigridv1.ManagedCluster{}).ProtoReflect().Descriptor().FullName())
+
+// isPlacementCluster reports whether a model can be placed on the cluster
+// item, by the rules ListPlacementClusters documents.
+func isPlacementCluster(item unstructured.Unstructured, provisioned map[string]string) bool {
 	labels := item.GetLabels()
 	if labels["ai-grid/enabled"] != "true" || provisioned[item.GetName()] != "Compliant" {
 		return false
@@ -619,21 +719,4 @@ func modelURIHasAllowedScheme(uri string) bool {
 
 func staleModelError(op, id string) *connect.Error {
 	return connect.Errorf(connect.CodeAborted, "%s Model %q: the model changed since it was read; reload and retry", op, id)
-}
-
-func mapModelAPIError(op, id string, err error) error {
-	switch {
-	case apierrors.IsNotFound(err):
-		return connect.Errorf(connect.CodeNotFound, "Model %q not found", id).WithCause(err)
-	case apierrors.IsAlreadyExists(err):
-		return connect.Errorf(connect.CodeAlreadyExists, "Model %q already exists", id).WithCause(err)
-	case apierrors.IsInvalid(err), apierrors.IsBadRequest(err):
-		return connect.Errorf(connect.CodeInvalidArgument, "%s Model %q: %v", op, id, err).WithCause(err)
-	case apierrors.IsConflict(err):
-		return staleModelError(op, id).WithCause(err)
-	case apierrors.IsForbidden(err), apierrors.IsUnauthorized(err):
-		return connect.Errorf(connect.CodePermissionDenied, "%s Model %q: %v", op, id, err).WithCause(err)
-	default:
-		return connect.Errorf(connect.CodeInternal, "%s Model %q: %v", op, id, err).WithCause(err)
-	}
 }

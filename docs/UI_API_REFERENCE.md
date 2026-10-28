@@ -43,7 +43,8 @@ unwraps them via `response_body: "object"`.
 | `DELETE` | `/api/v1/tenants/{id}` | Delete tenant |
 | `GET` | `/api/v1/tenants/{id}:listMembers` | List users in the tenant Organization |
 | `GET` | `/api/v1/models` | List models (from the Git catalog) |
-| `GET` | `/api/v1/models:listLocations` | Unique sorted names of the provisioned, Available inference and combined clusters |
+| `GET` | `/api/v1/models:listPlacementClusters` | Unique sorted names of the provisioned, Available inference and combined clusters (`clusters`) |
+| `GET` | `/api/v1/models:listLocations` | Deprecated: the same cluster names as `locations`; use `:listPlacementClusters` |
 | `GET` | `/api/v1/models/{id}` | Get one model |
 | `POST` | `/api/v1/models` | Create model (commits it to Git) |
 | `PATCH` | `/api/v1/models/{id}` | Update model (FieldMask) |
@@ -531,7 +532,14 @@ ingress clusters. See README "Git catalog" for the repository layout.
 `spec.placement` is required and names at least one cluster, by the ACM
 `name` label only (`name In [...]` or a `name` match label); cluster sets, other labels,
 `number_of_clusters` and any rollout other than strategy `All` alone are
-`InvalidArgument`. Status comes from the hub's status Policies, or reason
+`InvalidArgument`. Each cluster a create or update adds must be a
+ManagedCluster on the hub, or the call is `InvalidArgument` naming it, with a
+`google.rpc.ResourceInfo` detail per unknown cluster (`resource_type`
+`type.googleapis.com/ai_grid.v1.ManagedCluster`, `resource_name` the cluster); a
+cluster the model is already on is not checked again, so a model on a cluster
+that has left the hub can still be changed or moved off it.
+`:listPlacementClusters` lists the clusters a model can run on. Status comes
+from the hub's status Policies, or reason
 `SavedToGit` with no phase when no cluster has reported. Labels and
 annotations take only unprefixed keys plus `openshift.io/display-name` and
 `openshift.io/description`.
@@ -539,8 +547,9 @@ annotations take only unprefixed keys plus `openshift.io/display-name` and
 | Method | Path | Notes |
 | --- | --- | --- |
 | GET | `/api/v1/models` | List; CEL `filter`; `order` allowlist `id`, `-id`, `metadata.name`, `-metadata.name` |
-| GET | `/api/v1/models:listLocations` | Unique sorted names of the provisioned (ai-grid-ready Compliant), Available inference and combined clusters, the values `spec.placement` takes (P7) |
-| GET | `/api/v1/models/{id}` | Get one (unwraps to the Model object); `status.placement.locations` when placed (P8) |
+| GET | `/api/v1/models:listPlacementClusters` | `clusters`: unique sorted names of the provisioned (ai-grid-ready Compliant), Available inference and combined clusters, the values `spec.placement` takes (P7) |
+| GET | `/api/v1/models:listLocations` | Deprecated: the same cluster names, as `locations`. Use `:listPlacementClusters`; removed once clients have moved |
+| GET | `/api/v1/models/{id}` | Get one (unwraps to the Model object); `status.placement` when placed: `selected_clusters` (cluster names) and `locations` (their `location` labels, P8) |
 | POST | `/api/v1/models` | Create (= deploy); body is the Model object |
 | PATCH | `/api/v1/models/{id}` | FieldMask update (`spec.replicas`, `spec.main.image`, `spec.main.env`, `spec.placement`, `spec.rollout`, `metadata.labels`, `metadata.annotations`) |
 | DELETE | `/api/v1/models/{id}` | Refuses while a subscription in the repository references the model |
@@ -576,12 +585,30 @@ annotations take only unprefixed keys plus `openshift.io/display-name` and
 }
 ```
 
+A placed model's status names its clusters and, separately, where they are:
+
+```json
+"status": {
+  "placement": {
+    "number_of_selected_clusters": 2,
+    "selected_clusters": ["site-a", "site-b"],
+    "locations": ["us-east"]
+  }
+}
+```
+
+`selected_clusters` holds cluster names, the values `spec.placement` takes.
+`locations` holds the distinct values of those clusters' `location` label;
+several clusters can share one, so it can't be turned back into clusters, and
+a placement that names a location is `InvalidArgument`.
+
 Without `placement`, the model is on no cluster (only its catalog entry is
 delivered). Gateway defaults to
 `openshift-ingress/openshift-ai-inference`. Display name / description live in
 `openshift.io/display-name` and `openshift.io/description` annotations.
 
-gRPC: `ai_grid.v1.Models/{List,Get,Create,Update,Delete}`.
+gRPC: `ai_grid.v1.Models/{List,Get,Create,Update,Delete,ListPlacementClusters}`,
+and the deprecated `ai_grid.v1.Models/ListLocations`.
 
 ---
 

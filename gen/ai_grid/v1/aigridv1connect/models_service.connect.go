@@ -36,6 +36,9 @@ const (
 	ModelsDeleteProcedure = "/ai_grid.v1.Models/Delete"
 	// ModelsListLocationsProcedure is the procedure name of the Models's ListLocations RPC.
 	ModelsListLocationsProcedure = "/ai_grid.v1.Models/ListLocations"
+	// ModelsListPlacementClustersProcedure is the procedure name of the Models's ListPlacementClusters
+	// RPC.
+	ModelsListPlacementClustersProcedure = "/ai_grid.v1.Models/ListPlacementClusters"
 )
 
 var (
@@ -81,6 +84,13 @@ var (
 			Procedure:  ModelsListLocationsProcedure,
 		}
 	})
+	modelsListPlacementClustersSpec = sync.OnceValue(func() connect.Spec {
+		return connect.Spec{
+			StreamType: connect.StreamTypeUnary,
+			Schema:     v1.File_ai_grid_v1_models_service_proto.Services().ByName("Models").Methods().ByName("ListPlacementClusters"),
+			Procedure:  ModelsListPlacementClustersProcedure,
+		}
+	})
 )
 
 // ModelsClient is a client for the ai_grid.v1.Models service.
@@ -93,12 +103,20 @@ type ModelsClient interface {
 	Create(context.Context, *v1.ModelsCreateRequest) (*v1.ModelsCreateResponse, error)
 	Update(context.Context, *v1.ModelsUpdateRequest) (*v1.ModelsUpdateResponse, error)
 	Delete(context.Context, *v1.ModelsDeleteRequest) (*v1.ModelsDeleteResponse, error)
-	// Locations a model can be placed on: unique sorted names of the
+	// Deprecated: use ListPlacementClusters, which answers the same list as
+	// `clusters`. Despite its name, this RPC answers cluster names, not values
+	// of the cluster's `location` label (those are in a model's
+	// status.placement.locations). It is removed once its clients have moved
+	// (docs/API_CONTRACT.md, "Expand, migrate, contract").
+	//
+	// Deprecated: do not use.
+	ListLocations(context.Context, *v1.ModelsListLocationsRequest) (*v1.ModelsListLocationsResponse, error)
+	// Clusters a model can be placed on: unique sorted names of the
 	// ManagedClusters labelled ai-grid/enabled "true" and ai-grid/role
 	// inference or combined that are Available and Compliant with the ready
-	// Policy (AI_GRID_READY_POLICY). A location is a cluster: the values a
-	// placement's `name In [...]` takes.
-	ListLocations(context.Context, *v1.ModelsListLocationsRequest) (*v1.ModelsListLocationsResponse, error)
+	// Policy (AI_GRID_READY_POLICY). These are the values a placement's
+	// `name In [...]` takes.
+	ListPlacementClusters(context.Context, *v1.ModelsListPlacementClustersRequest) (*v1.ModelsListPlacementClustersResponse, error)
 }
 
 // NewModelsClient constructs a client for the ai_grid.v1.Models service. Multiple service clients
@@ -117,12 +135,20 @@ type ModelsHandler interface {
 	Create(context.Context, *v1.ModelsCreateRequest) (*v1.ModelsCreateResponse, error)
 	Update(context.Context, *v1.ModelsUpdateRequest) (*v1.ModelsUpdateResponse, error)
 	Delete(context.Context, *v1.ModelsDeleteRequest) (*v1.ModelsDeleteResponse, error)
-	// Locations a model can be placed on: unique sorted names of the
+	// Deprecated: use ListPlacementClusters, which answers the same list as
+	// `clusters`. Despite its name, this RPC answers cluster names, not values
+	// of the cluster's `location` label (those are in a model's
+	// status.placement.locations). It is removed once its clients have moved
+	// (docs/API_CONTRACT.md, "Expand, migrate, contract").
+	//
+	// Deprecated: do not use.
+	ListLocations(context.Context, *v1.ModelsListLocationsRequest) (*v1.ModelsListLocationsResponse, error)
+	// Clusters a model can be placed on: unique sorted names of the
 	// ManagedClusters labelled ai-grid/enabled "true" and ai-grid/role
 	// inference or combined that are Available and Compliant with the ready
-	// Policy (AI_GRID_READY_POLICY). A location is a cluster: the values a
-	// placement's `name In [...]` takes.
-	ListLocations(context.Context, *v1.ModelsListLocationsRequest) (*v1.ModelsListLocationsResponse, error)
+	// Policy (AI_GRID_READY_POLICY). These are the values a placement's
+	// `name In [...]` takes.
+	ListPlacementClusters(context.Context, *v1.ModelsListPlacementClustersRequest) (*v1.ModelsListPlacementClustersResponse, error)
 }
 
 // RegisterModelsHandler registers svc as the ai_grid.v1.Models implementation on server.
@@ -135,6 +161,7 @@ func RegisterModelsHandler(server *connect.Server, svc ModelsHandler) {
 		connect.Method{Spec: modelsUpdateSpec(), Handler: adapter.update},
 		connect.Method{Spec: modelsDeleteSpec(), Handler: adapter.delete},
 		connect.Method{Spec: modelsListLocationsSpec(), Handler: adapter.listLocations},
+		connect.Method{Spec: modelsListPlacementClustersSpec(), Handler: adapter.listPlacementClusters},
 	)
 }
 
@@ -163,6 +190,10 @@ func (UnimplementedModelsHandler) Delete(context.Context, *v1.ModelsDeleteReques
 
 func (UnimplementedModelsHandler) ListLocations(context.Context, *v1.ModelsListLocationsRequest) (*v1.ModelsListLocationsResponse, error) {
 	return nil, connect.NewError(connect.CodeUnimplemented, "ai_grid.v1.Models.ListLocations is not implemented")
+}
+
+func (UnimplementedModelsHandler) ListPlacementClusters(context.Context, *v1.ModelsListPlacementClustersRequest) (*v1.ModelsListPlacementClustersResponse, error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, "ai_grid.v1.Models.ListPlacementClusters is not implemented")
 }
 
 type modelsClient struct {
@@ -212,6 +243,14 @@ func (c *modelsClient) Delete(ctx context.Context, req *v1.ModelsDeleteRequest) 
 func (c *modelsClient) ListLocations(ctx context.Context, req *v1.ModelsListLocationsRequest) (*v1.ModelsListLocationsResponse, error) {
 	var res v1.ModelsListLocationsResponse
 	if err := c.client.CallUnary(ctx, modelsListLocationsSpec(), req, &res); err != nil {
+		return nil, err
+	}
+	return &res, nil
+}
+
+func (c *modelsClient) ListPlacementClusters(ctx context.Context, req *v1.ModelsListPlacementClustersRequest) (*v1.ModelsListPlacementClustersResponse, error) {
+	var res v1.ModelsListPlacementClustersResponse
+	if err := c.client.CallUnary(ctx, modelsListPlacementClustersSpec(), req, &res); err != nil {
 		return nil, err
 	}
 	return &res, nil
@@ -285,6 +324,18 @@ func (h modelsHandler) listLocations(ctx context.Context, _ connect.Spec, stream
 		return err
 	}
 	res, err := h.svc.ListLocations(ctx, &req)
+	if err != nil {
+		return err
+	}
+	return stream.Send(res)
+}
+
+func (h modelsHandler) listPlacementClusters(ctx context.Context, _ connect.Spec, stream connect.ServerStream) error {
+	var req v1.ModelsListPlacementClustersRequest
+	if err := stream.Receive(&req); err != nil {
+		return err
+	}
+	res, err := h.svc.ListPlacementClusters(ctx, &req)
 	if err != nil {
 		return err
 	}

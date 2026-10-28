@@ -210,7 +210,8 @@ func TestClientListTenants(t *testing.T) {
 func TestClientModelsCRUD(t *testing.T) {
 	t.Parallel()
 
-	c, cleanup := startTestClient(t, nil, fakeOrganizationLister{})
+	// The placement below names site-a, which must be a ManagedCluster.
+	c, cleanup := startTestClient(t, []runtime.Object{managedCluster("site-a", nil, true)}, fakeOrganizationLister{})
 	defer cleanup()
 	ctx := context.Background()
 
@@ -220,6 +221,17 @@ func TestClientModelsCRUD(t *testing.T) {
 	}
 	if len(items) != 0 {
 		t.Fatalf("ListModels() len = %d, want 0", len(items))
+	}
+
+	// site-a is no AI Grid member, so no cluster qualifies; both RPCs answer
+	// the same list.
+	clusters, err := c.ListModelPlacementClusters(ctx)
+	if err != nil || len(clusters) != 0 {
+		t.Fatalf("ListModelPlacementClusters() = %v, %v; want none", clusters, err)
+	}
+	locations, err := c.ListModelLocations(ctx)
+	if err != nil || len(locations) != 0 {
+		t.Fatalf("ListModelLocations() = %v, %v; want none", locations, err)
 	}
 
 	replicas := int32(1)

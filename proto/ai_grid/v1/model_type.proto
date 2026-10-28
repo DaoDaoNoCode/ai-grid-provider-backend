@@ -55,7 +55,13 @@ message ModelSpec {
 
   // Where to deploy. Required: names at least one cluster by the ACM `name`
   // label (`name In [...]` or a `name` match label); the model is listed in
-  // each named cluster's index in the Git catalog.
+  // each named cluster's index in the Git catalog. A cluster that a create or
+  // update adds must be a ManagedCluster on the hub, or the call is
+  // InvalidArgument naming it, with a google.rpc.ResourceInfo detail per
+  // unknown cluster (resource_type
+  // `type.googleapis.com/ai_grid.v1.ManagedCluster`, resource_name the
+  // cluster); Models/ListPlacementClusters lists the clusters a model can run
+  // on.
   ModelPlacement placement = 8;
 
   // Rollout. Only strategy All (the default) is accepted: Argo CD delivers to
@@ -223,12 +229,16 @@ enum ModelPhase {
 message ModelPlacementStatus {
   // Number of clusters selected.
   int32 number_of_selected_clusters = 1;
-  // Selected cluster names.
+  // Selected cluster names (ManagedCluster names): the values of the
+  // placement's `name In [...]`, as ListPlacementClusters answers them.
   repeated string selected_clusters = 2;
   // Placement conditions when present.
   repeated Condition conditions = 3;
-  // Unique sorted `location` labels of decided clusters (P8). A decided
-  // cluster without a location label adds nothing. Output only.
+  // Unique sorted values of the `location` label of the selected clusters
+  // (P8): where they are, not which clusters they are. Several clusters can
+  // share one location, so these are not cluster names and a placement can't
+  // name them; use selected_clusters for that. A selected cluster without a
+  // location label adds nothing. Output only.
   repeated string locations = 4;
 }
 
