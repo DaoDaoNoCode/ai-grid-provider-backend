@@ -105,9 +105,6 @@ func (s *ModelsServer) gitCreate(ctx context.Context, object *aigridv1.Model) (*
 	if err != nil {
 		return nil, err
 	}
-	if err := s.checkPlacementClusters(ctx, clusters); err != nil {
-		return nil, err
-	}
 	head, err := s.writer.Head(ctx)
 	if err != nil {
 		return nil, modelGitError("create", id, err)
@@ -116,6 +113,9 @@ func (s *ModelsServer) gitCreate(ctx context.Context, object *aigridv1.Model) (*
 		return nil, connect.Errorf(connect.CodeAlreadyExists, "Model %q already exists", id)
 	} else if !errors.Is(err, gitops.ErrNotFound) {
 		return nil, modelGitError("create", id, err)
+	}
+	if err := s.checkPlacementClusters(ctx, clusters); err != nil {
+		return nil, err
 	}
 	return s.gitCommitModel(ctx, head, "create", object, 1, nil, clusters)
 }

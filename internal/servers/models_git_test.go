@@ -521,6 +521,9 @@ func TestModelsGitPlacementNamesKnownClusters(t *testing.T) {
 	if _, err := srv.Get(ctx, &aigridv1.ModelsGetRequest{Id: "copy"}); connect.CodeOf(err) != connect.CodeNotFound {
 		t.Fatalf("Get(copy) error = %v, want NotFound: a refused create commits nothing", err)
 	}
+	// An existing id is AlreadyExists before its clusters are checked.
+	_, err = srv.Create(ctx, &aigridv1.ModelsCreateRequest{Object: gitSampleModel("sim", "madrid")})
+	assertConnectCode(t, err, connect.CodeAlreadyExists)
 
 	placement := &fieldmaskpb.FieldMask{Paths: []string{"spec.placement"}}
 	_, err = srv.Update(ctx, &aigridv1.ModelsUpdateRequest{Object: gitSampleModel("sim", "site-a", "us-east"), UpdateMask: placement})
