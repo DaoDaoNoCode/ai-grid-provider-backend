@@ -289,15 +289,6 @@ func TestManagedClusterLocationProblemEscapes(t *testing.T) {
 	}
 }
 
-// "-0" is 0, not negative zero, so it encodes as 0 in JSON.
-func TestParseDecimalDegreesNegativeZero(t *testing.T) {
-	t.Parallel()
-	f, ok := parseDecimalDegrees("-0")
-	if !ok || f != 0 || 1/f < 0 {
-		t.Fatalf("parseDecimalDegrees(-0) = %v, %v; want +0", f, ok)
-	}
-}
-
 // The mapper always sets the location, whatever the cluster carries.
 func TestManagedClusterFromUnstructuredLocation(t *testing.T) {
 	t.Parallel()

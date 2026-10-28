@@ -83,6 +83,11 @@ func TestClusterCoordinatesAreChecked(t *testing.T) {
 		{AnnotationLatitude, "NaN"}:     `annotation "ai-grid/latitude" must be a number between -90 and 90, got "NaN"`,
 		{AnnotationLongitude, "-180.5"}: `annotation "ai-grid/longitude" must be a number between -180 and 180, got "-180.5"`,
 		{AnnotationLongitude, "+Inf"}:   `annotation "ai-grid/longitude" must be a number between -180 and 180, got "+Inf"`,
+		// Not plain decimals, as the real server's Update refuses them.
+		{AnnotationLatitude, "4e1"}:   `annotation "ai-grid/latitude" must be a number between -90 and 90, got "4e1"`,
+		{AnnotationLatitude, "0x1p4"}: `annotation "ai-grid/latitude" must be a number between -90 and 90, got "0x1p4"`,
+		{AnnotationLongitude, "1_0"}:  `annotation "ai-grid/longitude" must be a number between -180 and 180, got "1_0"`,
+		{AnnotationLongitude, "2,35"}: `annotation "ai-grid/longitude" must be a number between -180 and 180, got "2,35"`,
 	} {
 		_, err := update(map[string]string{annotations[0]: annotations[1]})
 		mustCode(t, err, codes.InvalidArgument, want)

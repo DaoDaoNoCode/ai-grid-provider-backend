@@ -3,11 +3,11 @@ package servers
 import (
 	"fmt"
 	"math"
-	"regexp"
 	"strconv"
 	"strings"
 
 	aigridv1 "github.com/osac-project/ai-grid-provider-backend/gen/ai_grid/v1"
+	"github.com/osac-project/ai-grid-provider-backend/internal/geo"
 )
 
 // The annotations a hub admin sets once to place a cluster on a map, the
@@ -30,31 +30,6 @@ const (
 	maxLatitude  = 90
 	maxLongitude = 180
 )
-
-// plainDecimal is a decimal number of degrees as people write it: an
-// optional sign, digits and an optional fraction, nothing else. It refuses
-// what strconv.ParseFloat would also accept ("1e1", "0x1p4", "Inf", "NaN",
-// "1_0") and the usual mistakes (a decimal comma, a hemisphere letter,
-// degrees-minutes-seconds), so a value is read the same way by every
-// client.
-var plainDecimal = regexp.MustCompile(`^[+-]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)$`)
-
-// parseDecimalDegrees reads a trimmed coordinate value. ok is false when it
-// isn't a plain decimal number. A value with more digits than a float64
-// holds reads as ±Inf, which every range check refuses.
-func parseDecimalDegrees(v string) (degrees float64, ok bool) {
-	if !plainDecimal.MatchString(v) {
-		return 0, false
-	}
-	f, err := strconv.ParseFloat(v, 64)
-	if err != nil && !math.IsInf(f, 0) {
-		return 0, false
-	}
-	if f == 0 {
-		f = 0 // "-0" is 0
-	}
-	return f, true
-}
 
 // managedClusterLocation reads a cluster's location from its annotations and
 // claims (ManagedClusterLocation in the proto). Explicit annotations win.
@@ -102,8 +77,8 @@ func coordinatesFromAnnotations(annotations map[string]string) (lat, lon float64
 		problems = append(problems, fmt.Sprintf("%s is set but %s is not; set both or neither", annotationLatitude, annotationLongitude))
 	}
 
-	lat, latNumber := parseDecimalDegrees(rawLat)
-	lon, lonNumber := parseDecimalDegrees(rawLon)
+	lat, latNumber := geo.ParseDecimalDegrees(rawLat)
+	lon, lonNumber := geo.ParseDecimalDegrees(rawLon)
 	for _, c := range []struct {
 		key, raw string
 		number   bool
