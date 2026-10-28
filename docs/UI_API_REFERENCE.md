@@ -645,7 +645,10 @@ these return the full gRPC response wrapper:
 - `PATCH` still unwraps to the Subscription (`response_body: object`)
 - `GET /subscriptions` list remains `{ size, total, items }`
 
-`authPolicies` on Get is the subscription's managed policy. `modelRegistrations`
+`authPolicies` on Get (and `authPolicy` on Create) is the subscription's
+managed policy, with `phase` `Active` or `Pending` and a `Ready` condition
+saying where it is active, from the hub's status Policies, or no phase and no
+conditions when no cluster has reported. `modelRegistrations`
 has one entry per model ref, with phase `Ready` or `Pending` from the hub's
 status Policies, or reason `SavedToGit` and no phase when no cluster has
 reported.
@@ -695,7 +698,7 @@ Subscription ids must leave room for the `-policy` suffix (max 56 chars).
 | --- | --- | --- |
 | `name` | string | MaaSModelRef name |
 | `namespace` | string | Defaults to the subscription namespace on write |
-| `token_rate_limits[]` | object | Required unless `unlimited` |
+| `token_rate_limits[]` | object | Required unless `unlimited`. `{ limit, window }`: `limit` 1 to 1000000000; `window` matches `^[1-9]\d{0,3}(s\|m\|h)$` and is at most `8784h` (366 days, the MaaS maximum), else `InvalidArgument` |
 | `unlimited` | bool | Mutually exclusive with `token_rate_limits` |
 | `billing_rate.per_token` | string | Optional |
 | `guardrails[]` | object | Per-model guardrails |

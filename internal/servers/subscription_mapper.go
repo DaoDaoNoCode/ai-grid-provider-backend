@@ -2,6 +2,7 @@ package servers
 
 import (
 	"regexp"
+	"strconv"
 
 	aigridv1 "github.com/osac-project/ai-grid-provider-backend/gen/ai_grid/v1"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -17,12 +18,47 @@ const (
 
 	annotationDisplayName = "openshift.io/display-name"
 	annotationDescription = "openshift.io/description"
+
+	// maxTokenWindowSeconds is the longest rate-limit window MaaS accepts, 366
+	// days (8784h): maxWindowSeconds and validateTokenRateLimit in
+	// opendatahub-io/models-as-a-service at 4d71db2,
+	// maas-controller/pkg/controller/maas/maassubscription_controller.go,
+	// lines 119-122 and 134-170. The CRD checks only tokenWindowRE
+	// (maas-controller/api/maas/v1alpha1/maassubscription_types.go, line 169),
+	// so a longer window is admitted and Argo CD applies it; the controller
+	// then logs an error and leaves the subscription out of the model's
+	// TokenRateLimitPolicy (lines 736-741).
+	maxTokenWindowSeconds = 366 * 24 * 3600
 )
+
+// maxTokenWindow is maxTokenWindowSeconds written as a window, "8784h", for
+// error messages; derived so the two can't disagree.
+var maxTokenWindow = strconv.FormatInt(maxTokenWindowSeconds/3600, 10) + "h"
 
 var (
 	subscriptionNameRE = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$`)
 	tokenWindowRE      = regexp.MustCompile(`^[1-9]\d{0,3}(s|m|h)$`)
 )
+
+// tokenWindowSeconds returns the length of a rate-limit window in seconds, or
+// false when it doesn't match tokenWindowRE.
+func tokenWindowSeconds(window string) (int64, bool) {
+	m := tokenWindowRE.FindStringSubmatch(window)
+	if m == nil {
+		return 0, false
+	}
+	n, err := strconv.ParseInt(window[:len(window)-1], 10, 64)
+	if err != nil {
+		return 0, false
+	}
+	switch m[1] {
+	case "m":
+		n *= 60
+	case "h":
+		n *= 3600
+	}
+	return n, true
+}
 
 func subscriptionID(object *aigridv1.Subscription) string {
 	if object == nil {

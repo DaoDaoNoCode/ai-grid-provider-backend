@@ -111,8 +111,17 @@ message TokenRateLimit {
   // Maximum tokens allowed in the window. CRD range is typically 1..1e9.
   int64 limit = 1;
 
-  // Window duration, e.g. "1m", "30s", "2h". Pattern: ^[1-9]\d{0,3}(s|m|h)$.
-  string window = 2;
+  // Window duration, e.g. "1m", "30s", "2h". Pattern: ^[1-9]\d{0,3}(s|m|h)$,
+  // and at most 8784h (366 days), the longest window MaaS accepts.
+  string window = 2 [
+    (buf.validate.field).string.pattern = "^[1-9]\\d{0,3}(s|m|h)$",
+    // Only hours can exceed 366 days: 9999m and 9999s are within it.
+    (buf.validate.field).cel = {
+      id: "token_rate_limit.window.max"
+      message: "window must be at most 8784h (366 days)"
+      expression: "!this.matches('^[1-9][0-9]{0,3}h$') || int(this.substring(0, size(this) - 1)) <= 8784"
+    }
+  ];
 }
 
 // BillingRate defines cost per token.

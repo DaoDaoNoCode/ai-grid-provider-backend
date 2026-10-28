@@ -2,12 +2,16 @@ package servers
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"os"
+	"path/filepath"
 	"testing"
 
 	aigridv1 "github.com/osac-project/ai-grid-provider-backend/gen/ai_grid/v1"
 	"github.com/osac-project/ai-grid-provider-backend/internal/gitops"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/dynamic/fake"
 	clienttesting "k8s.io/client-go/testing"
@@ -150,45 +154,75 @@ func TestSubscriptionsGitStatus(t *testing.T) {
 	refReady := func(ready bool) string {
 		return statusMessage("maasmodelrefs", "sim-model", "models-as-a-service", ready)
 	}
+	policyActive := func(ready bool) string {
+		return statusMessage("maasauthpolicies", "team-a-policy", "models-as-a-service", ready)
+	}
+	catalog := func(ready bool) map[string]string {
+		return map[string]string{
+			subscriptionsActiveCheck: subscriptionActive(ready),
+			modelRefsReadyCheck:      refReady(ready),
+			authPoliciesActiveCheck:  policyActive(ready),
+		}
+	}
 	for name, tc := range map[string]struct {
-		objects        []runtime.Object
-		forbid         bool
-		wantPhase      string
-		wantModelPhase string
-		wantReason     string
+		objects           []runtime.Object
+		forbid            bool
+		wantPhase         string
+		wantModelPhase    string
+		wantReason        string
+		wantPolicyPhase   string
+		wantPolicyMessage string
 	}{
 		"active": {
 			objects: []runtime.Object{
 				rootPolicy(catalogStatusPolicy, "site-a", "site-b"),
-				clusterPolicy("site-a", catalogStatusPolicy, map[string]string{subscriptionsActiveCheck: subscriptionActive(true), modelRefsReadyCheck: refReady(true)}),
-				clusterPolicy("site-b", catalogStatusPolicy, map[string]string{subscriptionsActiveCheck: subscriptionActive(true), modelRefsReadyCheck: refReady(true)}),
+				clusterPolicy("site-a", catalogStatusPolicy, catalog(true)),
+				clusterPolicy("site-b", catalogStatusPolicy, catalog(true)),
 			},
 			wantPhase: "Active", wantModelPhase: "Ready", wantReason: "Ready",
+			wantPolicyPhase: "Active", wantPolicyMessage: "Ready on site-a, site-b",
 		},
 		"not active on one cluster": {
 			objects: []runtime.Object{
 				rootPolicy(catalogStatusPolicy, "site-a", "site-b"),
-				clusterPolicy("site-a", catalogStatusPolicy, map[string]string{subscriptionsActiveCheck: subscriptionActive(false), modelRefsReadyCheck: refReady(false)}),
-				clusterPolicy("site-b", catalogStatusPolicy, map[string]string{subscriptionsActiveCheck: subscriptionActive(true), modelRefsReadyCheck: refReady(true)}),
+				clusterPolicy("site-a", catalogStatusPolicy, catalog(false)),
+				clusterPolicy("site-b", catalogStatusPolicy, catalog(true)),
 			},
 			wantPhase: "Pending", wantModelPhase: "Pending", wantReason: "NotReady",
+			wantPolicyPhase: "Pending", wantPolicyMessage: "Not ready on site-a; ready on site-b",
 		},
 		// An ingress cluster that doesn't have the objects yet, or hasn't
 		// reported, keeps them from Active and Ready.
 		"missing on one cluster": {
 			objects: []runtime.Object{
 				rootPolicy(catalogStatusPolicy, "site-a", "site-b"),
-				clusterPolicy("site-a", catalogStatusPolicy, map[string]string{subscriptionsActiveCheck: subscriptionActive(true), modelRefsReadyCheck: refReady(true)}),
-				clusterPolicy("site-b", catalogStatusPolicy, map[string]string{subscriptionsActiveCheck: msgEmpty, modelRefsReadyCheck: msgEmpty}),
+				clusterPolicy("site-a", catalogStatusPolicy, catalog(true)),
+				clusterPolicy("site-b", catalogStatusPolicy, map[string]string{subscriptionsActiveCheck: msgEmpty, modelRefsReadyCheck: msgEmpty, authPoliciesActiveCheck: msgEmpty}),
 			},
 			wantPhase: "Pending", wantModelPhase: "Pending", wantReason: "NotReady",
+			wantPolicyPhase: "Pending", wantPolicyMessage: "Ready on site-a; no report from site-b",
 		},
 		"one cluster hasn't reported": {
 			objects: []runtime.Object{
 				rootPolicy(catalogStatusPolicy, "site-a", "site-b"),
-				clusterPolicy("site-a", catalogStatusPolicy, map[string]string{subscriptionsActiveCheck: subscriptionActive(true), modelRefsReadyCheck: refReady(true)}),
+				clusterPolicy("site-a", catalogStatusPolicy, catalog(true)),
 			},
 			wantPhase: "Pending", wantModelPhase: "Pending", wantReason: "NotReady",
+			wantPolicyPhase: "Pending", wantPolicyMessage: "Ready on site-a; no report from site-b",
+		},
+		// Subscriptions and their policies go to the ingress clusters, the
+		// ones the catalog Policy is placed on. An inference-only cluster,
+		// which only the models Policy reports for, has no say in their
+		// status.
+		"inference-only cluster": {
+			objects: []runtime.Object{
+				rootPolicy(modelsStatusPolicy, "site-a", "site-b"),
+				clusterPolicy("site-b", modelsStatusPolicy, map[string]string{modelsReadyCheck: msgEmpty}),
+				rootPolicy(catalogStatusPolicy, "site-a"),
+				clusterPolicy("site-a", catalogStatusPolicy, catalog(true)),
+			},
+			wantPhase: "Active", wantModelPhase: "Ready", wantReason: "Ready",
+			wantPolicyPhase: "Active", wantPolicyMessage: "Ready on site-a",
 		},
 		"no reports": {
 			objects:    []runtime.Object{rootPolicy(catalogStatusPolicy, "site-a")},
@@ -197,7 +231,7 @@ func TestSubscriptionsGitStatus(t *testing.T) {
 		"forbidden": {
 			objects: []runtime.Object{
 				rootPolicy(catalogStatusPolicy, "site-a"),
-				clusterPolicy("site-a", catalogStatusPolicy, map[string]string{subscriptionsActiveCheck: subscriptionActive(true)}),
+				clusterPolicy("site-a", catalogStatusPolicy, catalog(true)),
 			},
 			forbid:     true,
 			wantReason: "SavedToGit",
@@ -236,6 +270,95 @@ func TestSubscriptionsGitStatus(t *testing.T) {
 			if len(regs) != 1 || regs[0].GetName() != "sim-model" || regs[0].GetPhase() != tc.wantModelPhase || regs[0].GetConditions()[0].GetReason() != tc.wantReason {
 				t.Fatalf("Get model_registrations = %v, want phase %q, reason %q", regs, tc.wantModelPhase, tc.wantReason)
 			}
+			if len(got.GetAuthPolicies()) != 1 {
+				t.Fatalf("Get auth_policies = %v, want team-a-policy", got.GetAuthPolicies())
+			}
+			for op, policy := range map[string]*aigridv1.AuthPolicy{"Create": created.GetAuthPolicy(), "Get": got.GetAuthPolicies()[0]} {
+				checkAuthPolicyStatus(t, op, policy, "team-a-policy", tc.wantPolicyPhase, tc.wantPolicyMessage)
+			}
 		})
 	}
+}
+
+// checkAuthPolicyStatus checks an AuthPolicy's phase and its Ready
+// condition: none without a phase, True with Active, False with Pending.
+func checkAuthPolicyStatus(t *testing.T, op string, policy *aigridv1.AuthPolicy, wantID, wantPhase, wantMessage string) {
+	t.Helper()
+	if policy.GetId() != wantID || policy.GetPhase() != wantPhase {
+		t.Errorf("%s auth policy %q phase = %q, want %q phase %q", op, policy.GetId(), policy.GetPhase(), wantID, wantPhase)
+	}
+	conditions := policy.GetConditions()
+	if wantPhase == "" {
+		if len(conditions) != 0 {
+			t.Errorf("%s auth policy conditions = %v, want none", op, conditions)
+		}
+		return
+	}
+	wantStatus, wantReason := aigridv1.ConditionStatus_CONDITION_STATUS_TRUE, "Ready"
+	if wantPhase != "Active" {
+		wantStatus, wantReason = aigridv1.ConditionStatus_CONDITION_STATUS_FALSE, "NotReady"
+	}
+	if len(conditions) != 1 || conditions[0].GetType() != "Ready" || conditions[0].GetStatus() != wantStatus ||
+		conditions[0].GetReason() != wantReason || conditions[0].GetMessage() != wantMessage {
+		t.Errorf("%s auth policy conditions = %v, want Ready %v, reason %q, message %q", op, conditions, wantStatus, wantReason, wantMessage)
+	}
+}
+
+// TestSubscriptionsGitStatusFromHub reads the status Policies as a real hub
+// reports them (testdata/hub-status-policies.json). site-a, a combined
+// cluster, reports subscription granite-org1, its policy granite-org1-policy
+// and model granite-4-tiny active; site-b, an inference-only cluster, has no
+// copy of the catalog Policy and so no say in the subscription's status.
+func TestSubscriptionsGitStatusFromHub(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	status := NewCatalogStatusReader(newPolicyClient(hubStatusPolicies(t)...), "")
+	srv, err := NewSubscriptionsServer().SetWriter(gitops.NewMemoryWriter(gitModelSeed("granite-4-tiny"))).
+		SetCatalogStatus(status).Build()
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+	object := gitSampleSubscription("granite-org1")
+	object.Spec.ModelRefs[0].Name = "granite-4-tiny"
+	created, err := srv.Create(ctx, &aigridv1.SubscriptionsCreateRequest{Object: object})
+	if err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	got, err := srv.Get(ctx, &aigridv1.SubscriptionsGetRequest{Id: "granite-org1"})
+	if err != nil {
+		t.Fatalf("Get() error = %v", err)
+	}
+	if phase := got.GetObject().GetStatus().GetPhase(); phase != "Active" {
+		t.Errorf("Get status.phase = %q, want Active", phase)
+	}
+	if len(got.GetAuthPolicies()) != 1 {
+		t.Fatalf("Get auth_policies = %v, want granite-org1-policy", got.GetAuthPolicies())
+	}
+	for op, policy := range map[string]*aigridv1.AuthPolicy{"Create": created.GetAuthPolicy(), "Get": got.GetAuthPolicies()[0]} {
+		checkAuthPolicyStatus(t, op, policy, "granite-org1-policy", "Active", "Ready on site-a")
+	}
+	regs := got.GetModelRegistrations()
+	if len(regs) != 1 || regs[0].GetPhase() != "Ready" || regs[0].GetConditions()[0].GetMessage() != "Ready on site-a" {
+		t.Errorf("Get model_registrations = %v, want granite-4-tiny Ready on site-a", regs)
+	}
+}
+
+// hubStatusPolicies returns the Policies in testdata/hub-status-policies.json.
+func hubStatusPolicies(t *testing.T) []runtime.Object {
+	t.Helper()
+	raw, err := os.ReadFile(filepath.Join("testdata", "hub-status-policies.json"))
+	if err != nil {
+		t.Fatalf("read fixture: %v", err)
+	}
+	var list struct {
+		Items []map[string]interface{} `json:"items"`
+	}
+	if err := json.Unmarshal(raw, &list); err != nil {
+		t.Fatalf("unmarshal fixture: %v", err)
+	}
+	objects := make([]runtime.Object, 0, len(list.Items))
+	for _, item := range list.Items {
+		objects = append(objects, &unstructured.Unstructured{Object: item})
+	}
+	return objects
 }

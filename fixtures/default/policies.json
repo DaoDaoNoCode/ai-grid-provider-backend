@@ -1,5 +1,5 @@
 {
-  "_comment": "ACM Policies the fake hub serves by namespace and name (internal/fakeinfra/hub/policy.go). These are the inform-only status Policies the backend reads models' and subscriptions' status from (README, \"Status from the spokes\"): each root lists its clusters in status.status, and each cluster's copy, ai-grid-policies.<policy> in the cluster's namespace, holds the latest message of each ConfigurationPolicy. Static: they report model granite-3b ready on site-paris-1, not ready on site-madrid-1 and listed on site-ashburn-1, and subscription team-a active on site-ashburn-1, so a model or subscription with those names shows status in make dev-fake. Any other name shows Saved to Git.",
+  "_comment": "ACM Policies the fake hub serves by namespace and name (internal/fakeinfra/hub/policy.go). These are the inform-only status Policies the backend reads models' and subscriptions' status from (README, \"Status from the spokes\"): each root lists its clusters in status.status, and each cluster's copy, ai-grid-policies.<policy> in the cluster's namespace, holds the latest message of each ConfigurationPolicy. Static: they report model granite-3b ready on site-paris-1, not ready on site-madrid-1 and listed on site-ashburn-1, and subscription team-a and its policy team-a-policy active on site-ashburn-1, so a model or subscription with those names shows status in make dev-fake. Any other name shows Saved to Git.",
   "apiVersion": "policy.open-cluster-management.io/v1",
   "kind": "PolicyList",
   "metadata": {},
@@ -120,6 +120,18 @@
       },
       "status": {
         "details": [
+          {
+            "compliant": "Compliant",
+            "templateMeta": {
+              "name": "auth-policies-active"
+            },
+            "history": [
+              {
+                "eventName": "ai-grid-policies.ai-grid-catalog-status.auth-policies-active",
+                "message": "Compliant; notification - maasauthpolicies [team-a-policy] found as specified in namespace models-as-a-service"
+              }
+            ]
+          },
           {
             "compliant": "Compliant",
             "templateMeta": {

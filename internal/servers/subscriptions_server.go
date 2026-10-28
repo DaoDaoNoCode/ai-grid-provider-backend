@@ -389,8 +389,12 @@ func validateSubscriptionSpec(spec *aigridv1.SubscriptionSpec) error {
 			if lim.GetLimit() < 1 || lim.GetLimit() > 1_000_000_000 {
 				return connect.Errorf(connect.CodeInvalidArgument, "spec.model_refs[%d].token_rate_limits[%d].limit must be between 1 and 1000000000", i, j)
 			}
-			if !tokenWindowRE.MatchString(lim.GetWindow()) {
-				return connect.Errorf(connect.CodeInvalidArgument, "spec.model_refs[%d].token_rate_limits[%d].window %q is invalid", i, j, lim.GetWindow())
+			seconds, ok := tokenWindowSeconds(lim.GetWindow())
+			if !ok {
+				return connect.Errorf(connect.CodeInvalidArgument, "spec.model_refs[%d].token_rate_limits[%d].window %q is invalid: want 1 to 9999 followed by s, m or h, at most %s", i, j, lim.GetWindow(), maxTokenWindow)
+			}
+			if seconds > maxTokenWindowSeconds {
+				return connect.Errorf(connect.CodeInvalidArgument, "spec.model_refs[%d].token_rate_limits[%d].window %q is longer than the maximum, %s (366 days)", i, j, lim.GetWindow(), maxTokenWindow)
 			}
 		}
 	}

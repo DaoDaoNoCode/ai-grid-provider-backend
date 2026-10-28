@@ -140,8 +140,11 @@ For subscriptions:
 - `status.phase` comes from the spokes (see "Status from the spokes" below):
   `Active` when every ingress cluster the status Policy is placed on has it
   active; `Pending` when any has it not active, doesn't have it yet, or hasn't
-  reported; and empty when no cluster has reported. `Get`
-  returns the file's policy, and one `model_registrations` entry per model
+  reported; and empty when no cluster has reported. `Get` and `Create`
+  return the file's policy with its `phase` set the same way from the
+  `auth-policies-active` reports (`Active` or `Pending`, empty with no
+  report) and a `Ready` condition whose message says where it is active,
+  such as `Ready on site-a`. `Get` also returns one `model_registrations` entry per model
   ref: phase `Ready` or `Pending` from the clusters' `MaaSModelRef` reports,
   or, with no report, no phase and a `Ready` condition of unknown status,
   reason `SavedToGit`, so a client doesn't take the models as missing.
@@ -203,6 +206,7 @@ deploys:
 | `ai-grid-models-status` | inference, combined | `models-ready` | each `LLMInferenceService` has `Ready=True` |
 | `ai-grid-catalog-status` | ingress, combined | `model-refs-ready` | each `MaaSModelRef` has phase `Ready` |
 | | | `subscriptions-active` | each `MaaSSubscription` has phase `Active` |
+| | | `auth-policies-active` | each `MaaSAuthPolicy` has phase `Active` |
 
 The backend reads the root Policy's `status.status` for the clusters, then
 each cluster's copy (`<namespace>.<policy>` in the cluster's namespace) for
