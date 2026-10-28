@@ -284,6 +284,9 @@ func TestManagedClusterStatusDetails(t *testing.T) {
 			{Name: "consoleurl.cluster.open-cluster-management.io", Value: "https://console.apps.site-a.example.com"},
 			{Name: "platform.open-cluster-management.io", Value: "AWS"},
 		},
+		// Derived from the conditions above (managed_cluster_state_test.go).
+		State:        aigridv1.ManagedClusterState_MANAGED_CLUSTER_STATE_READY,
+		StateMessage: "Managed cluster is available",
 	}
 	if got := managedClusterFromUnstructured(*object).GetStatus(); !proto.Equal(got, want) {
 		t.Fatalf("status = %v\nwant %v", got, want)

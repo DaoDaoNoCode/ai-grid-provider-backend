@@ -28,13 +28,17 @@ func managedClusterFromUnstructured(item unstructured.Unstructured) *aigridv1.Ma
 		meta.DeletionTimestamp = timestamppb.New(ts.Time)
 	}
 
+	status := managedClusterStatusFromUnstructured(item)
+	status.AiGridMember = isAIGridMember(item.GetLabels())
+	status.State, status.StateMessage = managedClusterState(meta.DeletionTimestamp != nil, status.GetConditions())
+
 	return &aigridv1.ManagedCluster{
 		Id:       name,
 		Metadata: meta,
 		Spec: &aigridv1.ManagedClusterSpec{
 			HubAcceptsClient: accepts,
 		},
-		Status: managedClusterStatusFromUnstructured(item),
+		Status: status,
 	}
 }
 

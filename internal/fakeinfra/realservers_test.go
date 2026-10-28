@@ -152,6 +152,44 @@ func TestRealClustersServerOnFakeHub(t *testing.T) {
 	}
 }
 
+// TestRealClustersServerStateOnFakeHub checks the derived state and
+// membership of every fixture cluster. The states are the ones the console
+// documents for these fixtures (ai-grid-provider-console mock/AGENTS.md,
+// "What the fixtures seed"), which its fake derived from the same
+// conditions; the members are the clusters labelled ai-grid/enabled=true.
+func TestRealClustersServerStateOnFakeHub(t *testing.T) {
+	h, srv := startHub(t)
+	s := clustersServer(t, &rest.Config{Host: srv.URL, BearerToken: h.ServiceAccountToken()})
+
+	list, err := s.List(context.Background(), &aigridv1.ClustersListRequest{})
+	if err != nil {
+		t.Fatalf("List() error = %v", err)
+	}
+	type summary struct {
+		state  aigridv1.ManagedClusterState
+		member bool
+	}
+	want := map[string]summary{
+		"local-cluster":    {aigridv1.ManagedClusterState_MANAGED_CLUSTER_STATE_READY, false},
+		"site-paris-1":     {aigridv1.ManagedClusterState_MANAGED_CLUSTER_STATE_READY, true},
+		"site-frankfurt-1": {aigridv1.ManagedClusterState_MANAGED_CLUSTER_STATE_READY, false},
+		"site-madrid-1":    {aigridv1.ManagedClusterState_MANAGED_CLUSTER_STATE_UNKNOWN, true},
+		"site-ashburn-1":   {aigridv1.ManagedClusterState_MANAGED_CLUSTER_STATE_OFFLINE, true},
+		"site-berlin-1":    {aigridv1.ManagedClusterState_MANAGED_CLUSTER_STATE_IMPORTING, false},
+		"site-oslo-1":      {aigridv1.ManagedClusterState_MANAGED_CLUSTER_STATE_PENDING_IMPORT, false},
+		"site-dublin-1":    {aigridv1.ManagedClusterState_MANAGED_CLUSTER_STATE_IMPORT_FAILED, false},
+		"site-lisbon-1":    {aigridv1.ManagedClusterState_MANAGED_CLUSTER_STATE_NOT_ACCEPTED, false},
+		"edge-lyon-2":      {aigridv1.ManagedClusterState_MANAGED_CLUSTER_STATE_DETACHING, false},
+	}
+	got := map[string]summary{}
+	for _, c := range list.GetItems() {
+		got[c.GetId()] = summary{c.GetStatus().GetState(), c.GetStatus().GetAiGridMember()}
+	}
+	if !maps.Equal(got, want) {
+		t.Fatalf("state and membership = %v\nwant %v", got, want)
+	}
+}
+
 // TestRealClustersServerThroughKubeconfig goes the way cmd/ai-grid-provider-backend
 // goes: clientcmd.BuildConfigFromFlags on the kubeconfig ai-grid-fake-infra
 // writes, against the hub on its TLS-and-plain listener.
@@ -336,6 +374,10 @@ func TestRealClustersServerUpdateVersion(t *testing.T) {
 	if added.GetObject().GetMetadata().GetLabels()["ai-grid/enabled"] != "true" || added.GetObject().GetMetadata().GetVersion() == read.GetVersion() {
 		t.Fatalf("Update(add) = %v", added.GetObject().GetMetadata())
 	}
+	if got.GetObject().GetStatus().GetAiGridMember() || !added.GetObject().GetStatus().GetAiGridMember() {
+		t.Fatalf("ai_grid_member before %v, after Update(add) %v; want false, true",
+			got.GetObject().GetStatus().GetAiGridMember(), added.GetObject().GetStatus().GetAiGridMember())
+	}
 
 	// The read version is stale now.
 	_, err = s.Update(ctx, &aigridv1.ClustersUpdateRequest{
@@ -385,6 +427,9 @@ func TestRealClustersServerUpdateVersion(t *testing.T) {
 	labels := removed.GetObject().GetMetadata().GetLabels()
 	if _, ok := labels["ai-grid/enabled"]; ok || labels["name"] != "site-oslo-1" || labels["location"] != read.GetLabels()["location"] {
 		t.Fatalf("Update(remove) labels = %v", labels)
+	}
+	if removed.GetObject().GetStatus().GetAiGridMember() {
+		t.Fatal("Update(remove) ai_grid_member = true, want false")
 	}
 
 	// lock without a version is refused.
