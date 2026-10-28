@@ -160,9 +160,14 @@ For models:
   other labels and `number_of_clusters` answer `InvalidArgument`, and so does a
   `spec.rollout` other than strategy `All` alone. Argo CD delivers to every
   cluster at once, which is `All`, so that rollout is accepted and not stored.
-- `Models/ListPlacementClusters` lists the clusters a model can run on;
-  `Models/ListLocations` is its deprecated name, answering the same cluster
-  names.
+- Each cluster a create or update adds to the placement must be a
+  ManagedCluster on the hub, or the call answers `InvalidArgument` naming it:
+  a name no cluster has, such as a `location` label, would be committed and
+  delivered nowhere. A cluster the model is already on is not checked again,
+  so a model on a cluster that has left the hub can still be changed or moved
+  off it. `Models/ListPlacementClusters` lists the clusters a model can run
+  on; `Models/ListLocations` is its deprecated name, answering the same
+  cluster names.
 - The model namespace must exist on the inference spokes with the label
   `grid.opendatahub.io/allowed: "true"`, so the platform creates the grid's
   `InferenceProvider`. The NetworkPolicy admits the grid namespace on ports

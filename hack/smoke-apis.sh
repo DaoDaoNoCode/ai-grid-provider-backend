@@ -16,6 +16,9 @@
 # Environment:
 #   GRPC_ADDR / HTTP_ADDR
 #   SKIP_CLUSTERS / SKIP_TENANTS / SKIP_MODELS / SKIP_SUBSCRIPTIONS
+#   SMOKE_MODEL_CLUSTER  ManagedCluster the smoke models are placed on (default
+#                        site-paris-1, from make dev-fake's fixtures); a name
+#                        the hub has no ManagedCluster for is InvalidArgument
 # Models and Subscriptions commit to the backend's Git repository
 # (AI_GRID_GIT_URL; make dev-fake and Kind set one up). When List fails, the
 # suite skips that section instead of failing the run.
@@ -27,6 +30,7 @@ skip_clusters="${SKIP_CLUSTERS:-0}"
 skip_tenants="${SKIP_TENANTS:-0}"
 skip_models="${SKIP_MODELS:-0}"
 skip_subscriptions="${SKIP_SUBSCRIPTIONS:-0}"
+smoke_model_cluster="${SMOKE_MODEL_CLUSTER:-site-paris-1}"
 failed=0
 
 smoke_suffix="$(date +%s | tail -c 6)"
@@ -306,7 +310,7 @@ else
 
     before_failed=$failed
     call_grpc 'Models/Create' \
-      "{\"object\":{\"id\":\"${smoke_model_grpc}\",\"metadata\":{\"name\":\"${smoke_model_grpc}\",\"annotations\":{\"openshift.io/display-name\":\"Smoke OPT\"}},\"spec\":{\"model\":{\"uri\":\"hf://facebook/opt-125m\",\"name\":\"facebook/opt-125m\"},\"replicas\":1,\"main\":{\"image\":\"quay.io/example/vllm:smoke\",\"requests\":{\"cpu\":\"100m\",\"memory\":\"1Gi\"},\"limits\":{\"cpu\":\"1\",\"memory\":\"2Gi\"}},\"placement\":{\"label_selector\":{\"match_expressions\":[{\"key\":\"name\",\"operator\":\"In\",\"values\":[\"site-paris-1\"]}]}}}}}" \
+      "{\"object\":{\"id\":\"${smoke_model_grpc}\",\"metadata\":{\"name\":\"${smoke_model_grpc}\",\"annotations\":{\"openshift.io/display-name\":\"Smoke OPT\"}},\"spec\":{\"model\":{\"uri\":\"hf://facebook/opt-125m\",\"name\":\"facebook/opt-125m\"},\"replicas\":1,\"main\":{\"image\":\"quay.io/example/vllm:smoke\",\"requests\":{\"cpu\":\"100m\",\"memory\":\"1Gi\"},\"limits\":{\"cpu\":\"1\",\"memory\":\"2Gi\"}},\"placement\":{\"label_selector\":{\"match_expressions\":[{\"key\":\"name\",\"operator\":\"In\",\"values\":[\"${smoke_model_cluster}\"]}]}}}}}" \
       'ai_grid.v1.Models/Create'
     if (( failed == before_failed )); then
       cleanup_model_ids+=("$smoke_model_grpc")
@@ -323,7 +327,7 @@ else
 
     before_failed=$failed
     call_http 'POST /api/v1/models' POST '/api/v1/models' \
-      "{\"id\":\"${smoke_model_rest}\",\"metadata\":{\"name\":\"${smoke_model_rest}\",\"annotations\":{\"openshift.io/display-name\":\"Smoke OPT REST\"}},\"spec\":{\"model\":{\"uri\":\"hf://facebook/opt-125m\",\"name\":\"facebook/opt-125m\"},\"replicas\":1,\"main\":{\"image\":\"quay.io/example/vllm:smoke\",\"requests\":{\"cpu\":\"100m\",\"memory\":\"1Gi\"},\"limits\":{\"cpu\":\"1\",\"memory\":\"2Gi\"}},\"placement\":{\"label_selector\":{\"match_expressions\":[{\"key\":\"name\",\"operator\":\"In\",\"values\":[\"site-paris-1\"]}]}}}}"
+      "{\"id\":\"${smoke_model_rest}\",\"metadata\":{\"name\":\"${smoke_model_rest}\",\"annotations\":{\"openshift.io/display-name\":\"Smoke OPT REST\"}},\"spec\":{\"model\":{\"uri\":\"hf://facebook/opt-125m\",\"name\":\"facebook/opt-125m\"},\"replicas\":1,\"main\":{\"image\":\"quay.io/example/vllm:smoke\",\"requests\":{\"cpu\":\"100m\",\"memory\":\"1Gi\"},\"limits\":{\"cpu\":\"1\",\"memory\":\"2Gi\"}},\"placement\":{\"label_selector\":{\"match_expressions\":[{\"key\":\"name\",\"operator\":\"In\",\"values\":[\"${smoke_model_cluster}\"]}]}}}}"
     if (( failed == before_failed )); then
       cleanup_model_ids+=("$smoke_model_rest")
       call_http "GET /api/v1/models/${smoke_model_rest}" GET "/api/v1/models/${smoke_model_rest}"
@@ -343,7 +347,7 @@ else
     printf '\n==> skipping Subscriptions (List failed; check AI_GRID_GIT_URL)\n'
   else
     # A subscription must name a model in the catalog.
-    grpcurl -plaintext -d "{\"object\":{\"id\":\"${smoke_sub_model}\",\"spec\":{\"model\":{\"uri\":\"hf://facebook/opt-125m\"},\"replicas\":1,\"placement\":{\"label_selector\":{\"match_expressions\":[{\"key\":\"name\",\"operator\":\"In\",\"values\":[\"site-paris-1\"]}]}}}}}" \
+    grpcurl -plaintext -d "{\"object\":{\"id\":\"${smoke_sub_model}\",\"spec\":{\"model\":{\"uri\":\"hf://facebook/opt-125m\"},\"replicas\":1,\"placement\":{\"label_selector\":{\"match_expressions\":[{\"key\":\"name\",\"operator\":\"In\",\"values\":[\"${smoke_model_cluster}\"]}]}}}}}" \
       "$addr" ai_grid.v1.Models/Create >/dev/null 2>&1 || true
     cleanup_model_ids+=("$smoke_sub_model")
     call_grpc 'Subscriptions/List' '{}' 'ai_grid.v1.Subscriptions/List'

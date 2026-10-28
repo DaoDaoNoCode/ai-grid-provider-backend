@@ -225,7 +225,10 @@ type ModelSpec struct {
 	Scaling *ModelScaling `protobuf:"bytes,7,opt,name=scaling,proto3" json:"scaling,omitempty"`
 	// Where to deploy. Required: names at least one cluster by the ACM `name`
 	// label (`name In [...]` or a `name` match label); the model is listed in
-	// each named cluster's index in the Git catalog.
+	// each named cluster's index in the Git catalog. A cluster that a create or
+	// update adds must be a ManagedCluster on the hub, or the call is
+	// InvalidArgument naming it; Models/ListPlacementClusters lists the clusters
+	// a model can run on.
 	Placement *ModelPlacement `protobuf:"bytes,8,opt,name=placement,proto3" json:"placement,omitempty"`
 	// Rollout. Only strategy All (the default) is accepted: Argo CD delivers to
 	// every placed cluster at once.

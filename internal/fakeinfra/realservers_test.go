@@ -531,8 +531,9 @@ func TestRealCatalogStatusOnFakeHub(t *testing.T) {
 
 // The real Models server on the fake hub: ListPlacementClusters and the
 // deprecated ListLocations answer cluster names, status.placement.locations
-// answers location labels. The stock fixtures have no ai-grid/role label, so
-// the test adds it the way an admin
+// answers location labels, and a placement copied from those labels is
+// InvalidArgument naming them instead of a model deployed nowhere. The stock
+// fixtures have no ai-grid/role label, so the test adds it the way an admin
 // would, with a merge patch.
 func TestRealModelsPlacementClustersOnFakeHub(t *testing.T) {
 	h, srv := startHub(t)
@@ -587,6 +588,11 @@ func TestRealModelsPlacementClustersOnFakeHub(t *testing.T) {
 	st := created.GetObject().GetStatus().GetPlacement()
 	if !slices.Equal(st.GetSelectedClusters(), []string{"site-madrid-1", "site-paris-1"}) || !slices.Equal(st.GetLocations(), []string{"madrid", "paris"}) {
 		t.Fatalf("status.placement = %v, want clusters [site-madrid-1 site-paris-1] at [madrid paris]", st)
+	}
+
+	_, err = models.Create(ctx, &aigridv1.ModelsCreateRequest{Object: placed("granite-copy", st.GetLocations()...)})
+	if connect.CodeOf(err) != connect.CodeInvalidArgument || !strings.Contains(err.Error(), `"madrid"`) || !strings.Contains(err.Error(), `"paris"`) {
+		t.Fatalf("Create(placed on the location labels) error = %v, want InvalidArgument naming madrid and paris", err)
 	}
 }
 

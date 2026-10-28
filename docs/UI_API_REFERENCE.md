@@ -532,8 +532,12 @@ ingress clusters. See README "Git catalog" for the repository layout.
 `spec.placement` is required and names at least one cluster, by the ACM
 `name` label only (`name In [...]` or a `name` match label); cluster sets, other labels,
 `number_of_clusters` and any rollout other than strategy `All` alone are
-`InvalidArgument`. `:listPlacementClusters` lists the clusters a model can run
-on. Status comes from the hub's status Policies, or reason
+`InvalidArgument`. Each cluster a create or update adds must be a
+ManagedCluster on the hub, or the call is `InvalidArgument` naming it; a
+cluster the model is already on is not checked again, so a model on a cluster
+that has left the hub can still be changed or moved off it.
+`:listPlacementClusters` lists the clusters a model can run on. Status comes
+from the hub's status Policies, or reason
 `SavedToGit` with no phase when no cluster has reported. Labels and
 annotations take only unprefixed keys plus `openshift.io/display-name` and
 `openshift.io/description`.
@@ -593,8 +597,8 @@ A placed model's status names its clusters and, separately, where they are:
 
 `selected_clusters` holds cluster names, the values `spec.placement` takes.
 `locations` holds the distinct values of those clusters' `location` label;
-several clusters can share one, so it can't be turned back into clusters or
-used in a placement.
+several clusters can share one, so it can't be turned back into clusters, and
+a placement that names a location is `InvalidArgument`.
 
 Without `placement`, the model is on no cluster (only its catalog entry is
 delivered). Gateway defaults to

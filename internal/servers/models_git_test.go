@@ -12,7 +12,12 @@ import (
 	aigridv1 "github.com/osac-project/ai-grid-provider-backend/gen/ai_grid/v1"
 	"github.com/osac-project/ai-grid-provider-backend/internal/gitops"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+	clienttesting "k8s.io/client-go/testing"
 )
 
 func TestModelsGitCRUD(t *testing.T) {
@@ -375,8 +380,8 @@ func kustomizationResources(t *testing.T, writer gitops.Writer, p string) []stri
 }
 
 // Git mode reads the ManagedClusters only for status.placement.locations, from
-// each placed cluster's location label, and for ListPlacementClusters and
-// ListLocations.
+// each placed cluster's location label, for ListPlacementClusters and
+// ListLocations, and to check the clusters a placement adds.
 func TestModelsGitLocations(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -472,6 +477,111 @@ func TestModelsListPlacementClustersAnswersClusterNames(t *testing.T) {
 	}
 	if !slices.Equal(got.GetLocations(), want) {
 		t.Fatalf("ListLocations() = %v, want %v", got.GetLocations(), want)
+	}
+}
+
+// A placement names clusters, and status.placement.locations holds their
+// location labels. A create or update that adds a name no ManagedCluster has
+// (such as a location label copied from status.placement.locations) is
+// InvalidArgument naming it, instead of a model deployed nowhere. A cluster the
+// model is already on is not checked again, so a model on a cluster that has
+// since left the hub can still be changed or moved off it.
+func TestModelsGitPlacementNamesKnownClusters(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	client := newManagedClusterClient(
+		managedCluster("site-a", map[string]string{"location": "us-east"}, true),
+		managedCluster("site-b", map[string]string{"location": "us-east"}, true),
+	)
+	srv, err := NewModelsServer().SetWriter(gitops.NewMemoryWriter(nil)).SetDynamicClient(client).Build()
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+
+	created, err := srv.Create(ctx, &aigridv1.ModelsCreateRequest{Object: gitSampleModel("sim", "site-a", "site-b")})
+	if err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	locations := created.GetObject().GetStatus().GetPlacement().GetLocations()
+	if !slices.Equal(locations, []string{"us-east"}) {
+		t.Fatalf("Create locations = %v, want [us-east]", locations)
+	}
+
+	// The location labels are not cluster names.
+	_, err = srv.Create(ctx, &aigridv1.ModelsCreateRequest{Object: gitSampleModel("copy", locations...)})
+	assertConnectCode(t, err, connect.CodeInvalidArgument)
+	if !strings.Contains(err.Error(), `"us-east"`) {
+		t.Fatalf("Create(us-east) error = %v, want it to name us-east", err)
+	}
+	_, err = srv.Create(ctx, &aigridv1.ModelsCreateRequest{Object: gitSampleModel("mixed", "site-a", "madrid", "paris")})
+	assertConnectCode(t, err, connect.CodeInvalidArgument)
+	if msg := err.Error(); !strings.Contains(msg, `"madrid"`) || !strings.Contains(msg, `"paris"`) || strings.Contains(msg, `"site-a"`) {
+		t.Fatalf("Create(site-a, madrid, paris) error = %v, want it to name madrid and paris only", err)
+	}
+	if _, err := srv.Get(ctx, &aigridv1.ModelsGetRequest{Id: "copy"}); connect.CodeOf(err) != connect.CodeNotFound {
+		t.Fatalf("Get(copy) error = %v, want NotFound: a refused create commits nothing", err)
+	}
+
+	placement := &fieldmaskpb.FieldMask{Paths: []string{"spec.placement"}}
+	_, err = srv.Update(ctx, &aigridv1.ModelsUpdateRequest{Object: gitSampleModel("sim", "site-a", "us-east"), UpdateMask: placement})
+	assertConnectCode(t, err, connect.CodeInvalidArgument)
+	if !strings.Contains(err.Error(), `"us-east"`) {
+		t.Fatalf("Update(us-east) error = %v, want it to name us-east", err)
+	}
+
+	// site-b leaves the hub: the model can still be changed, and moved off it.
+	if err := client.Resource(managedClustersResource).Delete(ctx, "site-b", metav1.DeleteOptions{}); err != nil {
+		t.Fatalf("delete ManagedCluster site-b: %v", err)
+	}
+	replicas := gitSampleModel("sim")
+	two := int32(2)
+	replicas.Spec.Replicas = &two
+	if _, err := srv.Update(ctx, &aigridv1.ModelsUpdateRequest{Object: replicas, UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.replicas"}}}); err != nil {
+		t.Fatalf("Update(spec.replicas) on a model placed on a removed cluster error = %v", err)
+	}
+	if _, err := srv.Update(ctx, &aigridv1.ModelsUpdateRequest{Object: gitSampleModel("sim", "site-a", "site-b"), UpdateMask: placement}); err != nil {
+		t.Fatalf("Update(placement kept) error = %v", err)
+	}
+	moved, err := srv.Update(ctx, &aigridv1.ModelsUpdateRequest{Object: gitSampleModel("sim", "site-a"), UpdateMask: placement})
+	if err != nil {
+		t.Fatalf("Update(placement site-a) error = %v", err)
+	}
+	if got := moved.GetObject().GetStatus().GetPlacement().GetSelectedClusters(); !slices.Equal(got, []string{"site-a"}) {
+		t.Fatalf("moved selected_clusters = %v, want [site-a]", got)
+	}
+	// Moving back onto the removed cluster adds it again, so it is checked.
+	_, err = srv.Update(ctx, &aigridv1.ModelsUpdateRequest{Object: gitSampleModel("sim", "site-a", "site-b"), UpdateMask: placement})
+	assertConnectCode(t, err, connect.CodeInvalidArgument)
+}
+
+// Without the ManagedCluster API no cluster exists, so every name is unknown;
+// a failed read of the clusters fails the call rather than skipping the check.
+func TestModelsGitPlacementClusterReadErrors(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	for name, tc := range map[string]struct {
+		err  error
+		want connect.Code
+	}{
+		"no ManagedCluster API": {
+			err:  apierrors.NewNotFound(schema.GroupResource{Group: "cluster.open-cluster-management.io", Resource: "managedclusters"}, ""),
+			want: connect.CodeInvalidArgument,
+		},
+		"list fails": {err: errors.New("api unavailable"), want: connect.CodeInternal},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			client := newManagedClusterClient(managedCluster("site-a", nil, true))
+			client.PrependReactor("list", "managedclusters", func(clienttesting.Action) (bool, runtime.Object, error) {
+				return true, nil, tc.err
+			})
+			srv, err := NewModelsServer().SetWriter(gitops.NewMemoryWriter(nil)).SetDynamicClient(client).Build()
+			if err != nil {
+				t.Fatalf("Build() error = %v", err)
+			}
+			_, err = srv.Create(ctx, &aigridv1.ModelsCreateRequest{Object: gitSampleModel("sim", "site-a")})
+			assertConnectCode(t, err, tc.want)
+		})
 	}
 }
 

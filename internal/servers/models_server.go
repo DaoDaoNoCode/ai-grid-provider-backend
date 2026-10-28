@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -38,8 +39,9 @@ type ModelsServerBuilder struct {
 // is an LLMInferenceService that Argo CD delivers to the clusters its
 // placement names, and an ExternalModel and MaaSModelRef for the ingress
 // clusters (models_git.go). It never writes to the cluster; it reads the
-// ManagedClusters for ListPlacementClusters and status.placement.locations,
-// and status from the hub through its CatalogStatusReader.
+// ManagedClusters for ListPlacementClusters, status.placement.locations and
+// the check that a placement names existing clusters, and status from the hub
+// through its CatalogStatusReader.
 type ModelsServer struct {
 	aigridv1connect.UnimplementedModelsHandler
 	logger                *slog.Logger
@@ -74,8 +76,9 @@ func (b *ModelsServerBuilder) SetWriter(writer gitops.Writer) *ModelsServerBuild
 }
 
 // SetDynamicClient sets the hub client that ListPlacementClusters (and the
-// deprecated ListLocations) and status.placement.locations read
-// ManagedClusters with. Optional; without it all are empty.
+// deprecated ListLocations), status.placement.locations and the placement's
+// cluster check read ManagedClusters with. Optional; without it the lists are
+// empty and placements are not checked.
 func (b *ModelsServerBuilder) SetDynamicClient(client dynamic.Interface) *ModelsServerBuilder {
 	b.client = client
 	return b
@@ -320,6 +323,43 @@ func (s *ModelsServer) placementClusters(ctx context.Context) ([]string, error) 
 	}
 	sort.Strings(names)
 	return slices.Compact(names), nil
+}
+
+// checkPlacementClusters answers InvalidArgument naming each cluster in added
+// that is not a ManagedCluster on the hub. A placement names clusters, and a
+// name no cluster has (a location label, a typo) would commit a model that
+// Argo CD delivers nowhere, with no error. Only the clusters a create or
+// update adds are checked, so a model on a cluster that has since left the
+// hub can still be changed or moved off it. Without a dynamic client there is
+// nothing to check against.
+func (s *ModelsServer) checkPlacementClusters(ctx context.Context, op, id string, added []string) error {
+	if s.client == nil || len(added) == 0 {
+		return nil
+	}
+	known := map[string]bool{}
+	list, err := s.client.Resource(managedClustersResource).List(ctx, metav1.ListOptions{})
+	switch {
+	case err == nil:
+		for i := range list.Items {
+			known[list.Items[i].GetName()] = true
+		}
+	case !apierrors.IsNotFound(err): // NotFound: no ManagedCluster API, so no cluster.
+		return mapModelAPIError(op, id, err)
+	}
+	var unknown []string
+	for _, cluster := range added {
+		if !known[cluster] {
+			unknown = append(unknown, strconv.Quote(cluster))
+		}
+	}
+	switch len(unknown) {
+	case 0:
+		return nil
+	case 1:
+		return connect.Errorf(connect.CodeInvalidArgument, "spec.placement names cluster %s, which is not a ManagedCluster on the hub; a placement takes cluster names (Models/ListPlacementClusters), not location labels", unknown[0])
+	default:
+		return connect.Errorf(connect.CodeInvalidArgument, "spec.placement names clusters %s, which are not ManagedClusters on the hub; a placement takes cluster names (Models/ListPlacementClusters), not location labels", strings.Join(unknown, ", "))
+	}
 }
 
 func isModelLocation(item unstructured.Unstructured, provisioned map[string]string) bool {
