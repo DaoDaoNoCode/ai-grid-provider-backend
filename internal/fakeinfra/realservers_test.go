@@ -529,6 +529,93 @@ func TestRealCatalogStatusOnFakeHub(t *testing.T) {
 	}
 }
 
+// The real Subscriptions server on the fake hub, as in make dev-fake, refuses
+// a rate-limit window longer than 8784h on Create and Update and commits
+// nothing for it, and accepts 8784h and 24h.
+func TestRealSubscriptionsTokenWindowOnFakeHub(t *testing.T) {
+	h, srv := startHub(t)
+	cfg := &rest.Config{Host: srv.URL, BearerToken: h.ServiceAccountToken(), QPS: 1000, Burst: 1000}
+	client, err := dynamic.NewForConfig(cfg)
+	if err != nil {
+		t.Fatalf("dynamic.NewForConfig() error = %v", err)
+	}
+	status := servers.NewCatalogStatusReader(client, "")
+	writer := gitops.NewMemoryWriter(nil)
+	ctx := context.Background()
+
+	models, err := servers.NewModelsServer().SetLogger(slog.New(slog.DiscardHandler)).
+		SetWriter(writer).SetCatalogStatus(status).SetDynamicClient(client).Build()
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+	replicas := int32(1)
+	if _, err := models.Create(ctx, &aigridv1.ModelsCreateRequest{Object: &aigridv1.Model{
+		Id: "win-model",
+		Spec: &aigridv1.ModelSpec{
+			Model:    &aigridv1.ModelSource{Uri: "hf://facebook/opt-125m"},
+			Replicas: &replicas,
+			Placement: &aigridv1.ModelPlacement{LabelSelector: &aigridv1.ModelLabelSelector{
+				MatchExpressions: []*aigridv1.ModelLabelSelectorRequirement{{Key: "name", Operator: "In", Values: []string{"site-paris-1"}}},
+			}},
+		},
+	}}); err != nil {
+		t.Fatalf("Models Create() error = %v", err)
+	}
+	subscriptions, err := servers.NewSubscriptionsServer().SetLogger(slog.New(slog.DiscardHandler)).
+		SetWriter(writer).SetCatalogStatus(status).Build()
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+	subscription := func(id, window string) *aigridv1.Subscription {
+		return &aigridv1.Subscription{
+			Id: id,
+			Spec: &aigridv1.SubscriptionSpec{
+				Organization: &aigridv1.SubscriptionOrganization{Id: "org-a"},
+				Owner:        &aigridv1.SubscriptionOwner{Groups: []string{"team-a"}},
+				ModelRefs: []*aigridv1.SubscriptionModelRef{{
+					Name:            "win-model",
+					TokenRateLimits: []*aigridv1.TokenRateLimit{{Limit: 100, Window: window}},
+				}},
+			},
+		}
+	}
+
+	for _, window := range []string{"9999h", "8785h"} {
+		commits := len(writer.Messages())
+		_, err := subscriptions.Create(ctx, &aigridv1.SubscriptionsCreateRequest{Object: subscription("win-refused", window)})
+		if connect.CodeOf(err) != connect.CodeInvalidArgument {
+			t.Fatalf("Create(window %q) error = %v, want InvalidArgument", window, err)
+		}
+		if n := len(writer.Messages()); n != commits {
+			t.Fatalf("Create(window %q) commits = %d, want %d", window, n, commits)
+		}
+	}
+	for _, window := range []string{"8784h", "24h"} {
+		if _, err := subscriptions.Create(ctx, &aigridv1.SubscriptionsCreateRequest{Object: subscription("win-"+window, window)}); err != nil {
+			t.Fatalf("Create(window %q) error = %v", window, err)
+		}
+	}
+
+	commits := len(writer.Messages())
+	_, err = subscriptions.Update(ctx, &aigridv1.SubscriptionsUpdateRequest{
+		Object:     subscription("win-24h", "9999h"),
+		UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.model_refs"}},
+	})
+	if connect.CodeOf(err) != connect.CodeInvalidArgument {
+		t.Fatalf("Update(window 9999h) error = %v, want InvalidArgument", err)
+	}
+	if n := len(writer.Messages()); n != commits {
+		t.Fatalf("Update(window 9999h) commits = %d, want %d", n, commits)
+	}
+	got, err := subscriptions.Get(ctx, &aigridv1.SubscriptionsGetRequest{Id: "win-24h"})
+	if err != nil {
+		t.Fatalf("Get(win-24h) error = %v", err)
+	}
+	if w := got.GetObject().GetSpec().GetModelRefs()[0].GetTokenRateLimits()[0].GetWindow(); w != "24h" {
+		t.Fatalf("win-24h window = %q after a refused Update, want 24h", w)
+	}
+}
+
 // The backend's own ACM Search client against the fake Search: List and Get
 // carry each cluster's GPUs from fixtures/default/searchnodes.json, and a
 // token Search rejects leaves them out without failing the call.
