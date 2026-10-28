@@ -25,7 +25,8 @@ is refused, see below), replaces maps as a whole and then puts back what the hub
 controllers own (`name`, `cluster.open-cluster-management.io/clusterset=default` when empty, the
 add-on labels, `clusterID`, `openshiftVersion*`, `open-cluster-management/created-via`; a
 removed `cloud` or `vendor` stays removed), honours `lock` with `Aborted`, refuses an
-`ai-grid/latitude` or `ai-grid/longitude` annotation that is present, not blank and not a number
+`ai-grid/latitude` or `ai-grid/longitude` annotation that is present, not blank and not a plain
+decimal number (no exponent, hex, `NaN` or `Inf`; `internal/geo`, as the real Clusters/Update)
 within -90..90 or -180..180 once trimmed (`InvalidArgument`, a console proposal: the backend
 owns the AI Grid annotation convention, the hub accepts any string; whitespace and an empty
 value pass because the BFF's read side ignores them), refuses a change to any label or

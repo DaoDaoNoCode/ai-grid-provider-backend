@@ -486,6 +486,10 @@ func TestUpdateCluster(t *testing.T) {
 			{map[string]string{"ai-grid/latitude": "north"}, false},
 			{map[string]string{"ai-grid/latitude": "NaN"}, false},
 			{map[string]string{"ai-grid/longitude": "-180.5"}, false},
+			// ParseFloat reads these; status.location doesn't, so neither does Update.
+			{map[string]string{"ai-grid/latitude": "4e1"}, false},
+			{map[string]string{"ai-grid/longitude": "0x1p4"}, false},
+			{map[string]string{"ai-grid/latitude": "40,7"}, false},
 			{map[string]string{"ai-grid/latitude": " 40.4 ", "ai-grid/longitude": "-180"}, true},
 			{map[string]string{"ai-grid/latitude": ""}, true},
 		} {

@@ -6,13 +6,13 @@ import (
 	"math"
 	"slices"
 	"sort"
-	"strconv"
 	"strings"
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
 	aigriddraftv1 "github.com/osac-project/ai-grid-provider-backend/gen/ai_grid/draft/v1"
+	"github.com/osac-project/ai-grid-provider-backend/internal/geo"
 )
 
 // Field-mask paths UpdateManagedCluster accepts. Anything else is
@@ -94,7 +94,9 @@ const (
 // checkCoordinates is the console's proposal for the backend, not
 // API-server behaviour (the hub stores any annotation string): an
 // `ai-grid/latitude` or `ai-grid/longitude` annotation that is present must
-// be a finite decimal number within -90..90 or -180..180 (surrounding
+// be a plain decimal number within -90..90 or -180..180, read by
+// geo.ParseDecimalDegrees as the real server's Clusters/Update reads it, so
+// "4e1", "0x1p4", "NaN" and "Inf" are refused (surrounding
 // whitespace and an empty value are allowed, as the read side ignores them),
 // so a bad value is
 // refused on write instead of vanishing from the map on read (the BFF omits a
@@ -115,8 +117,8 @@ func checkCoordinates(annotations map[string]string) error {
 		if v == "" {
 			continue
 		}
-		f, err := strconv.ParseFloat(v, 64)
-		if err != nil || math.IsNaN(f) || math.IsInf(f, 0) || f < -c.limit || f > c.limit {
+		f, ok := geo.ParseDecimalDegrees(v)
+		if !ok || math.IsInf(f, 0) || f < -c.limit || f > c.limit {
 			return status.Errorf(codes.InvalidArgument, "annotation %q must be a number between %v and %v, got %q", c.key, -c.limit, c.limit, v)
 		}
 	}

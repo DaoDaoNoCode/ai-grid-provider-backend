@@ -15,6 +15,42 @@ at commit `537df38`:
 | `default/` | `mock/fixtures/` | Ten clusters in every state the ACM console distinguishes, six organizations, a timeline of cluster events. |
 | `poc/` | `mock/fixtures-poc/` | The PoC's four sites (`site1`-`site4`) and three organizations; no timeline, so nothing changes over time. Also seeds the same hand-authored MaaS / LLMInferenceService CRs as `default/` so `make dev-fake-poc` exercises Models and Subscriptions. |
 
+`locations/` is **hand-written, not converted**: one ready cluster per edge case of
+`status.location` (README, "Cluster locations"); `make dev-fake-locations` serves it.
+`hack/convert-console-fixtures` doesn't touch it. Each cluster has only what the location,
+state and membership code reads (the `ai-grid/*` annotations, the `ai-grid/enabled` label,
+the platform and region claims, and the Accepted, Joined and Available conditions) plus what
+the fake hub needs to load it and leave it settled: `uid`, `resourceVersion`, `generation`
+and `creationTimestamp` (`LoadFixtures` requires them), and the `name` label, the
+`open-cluster-management/created-via` annotation, the finalizers and the
+`ManagedClusterImportSucceeded=True` condition (the fake's import controller adds them to a
+cluster without them). No capacity, version or other claims.
+
+| Cluster | Annotations | Claims |
+|---|---|---|
+| `loc-annotations` | latitude, longitude and site name | on-premises (`BareMetal`, no region) |
+| `loc-whitespace` | the same, with surrounding spaces, tabs and newlines | on-premises |
+| `loc-null-island` | `0`, `0` | on-premises |
+| `loc-onprem-none` | none | on-premises |
+| `loc-site-name-only` | site name only | on-premises |
+| `loc-latitude-only` | latitude only | on-premises |
+| `loc-decimal-comma` | `40,7128`, `-74,0060` | on-premises |
+| `loc-hemisphere` | `40.7128N`, `74.0060W` | on-premises |
+| `loc-dms` | degrees, minutes and seconds | on-premises |
+| `loc-nan-inf` | `NaN`, `Inf` | on-premises |
+| `loc-out-of-range` | `95`, `200` | on-premises |
+| `loc-swapped` | `151.2093`, `-33.8688` (Sydney, swapped) and a site name | on-premises |
+| `loc-invalid-in-region` | `39,96`, `-83.00` | AWS `us-east-2` |
+| `loc-annotations-in-region` | valid coordinates and a site name | AWS `us-east-2` |
+| `loc-aws-region` | none | AWS `us-east-2` |
+| `loc-aws-region-named` | site name only | AWS `eu-central-1` |
+| `loc-azure-region` | none | Azure `westeurope` |
+| `loc-gcp-region` | none | GCP `asia-northeast1` |
+| `loc-unknown-region` | none | AWS `mars-north-1`, a region no provider has |
+
+The tests (`internal/fakeinfra`, `TestRealClustersServerLocationsOnFakeHub`) read each one
+through the real Clusters server.
+
 `draft/` is different: the draft fake's fixtures, the console's protojson of its draft API
 copied **verbatim, not converted**. `hack/convert-console-fixtures` and everything below about
 the conversion apply only to `default/` and `poc/`. See [`draft/README.md`](draft/README.md).

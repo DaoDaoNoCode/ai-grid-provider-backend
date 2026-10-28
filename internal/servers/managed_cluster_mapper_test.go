@@ -284,6 +284,12 @@ func TestManagedClusterStatusDetails(t *testing.T) {
 			{Name: "consoleurl.cluster.open-cluster-management.io", Value: "https://console.apps.site-a.example.com"},
 			{Name: "platform.open-cluster-management.io", Value: "AWS"},
 		},
+		// Derived from the conditions above (managed_cluster_state_test.go).
+		State:        aigridv1.ManagedClusterState_MANAGED_CLUSTER_STATE_READY,
+		StateMessage: "Managed cluster is available",
+		// No coordinate annotations and no region claim
+		// (managed_cluster_location_test.go).
+		Location: &aigridv1.ManagedClusterLocation{Source: aigridv1.ManagedClusterLocationSource_MANAGED_CLUSTER_LOCATION_SOURCE_NONE},
 	}
 	if got := managedClusterFromUnstructured(*object).GetStatus(); !proto.Equal(got, want) {
 		t.Fatalf("status = %v\nwant %v", got, want)

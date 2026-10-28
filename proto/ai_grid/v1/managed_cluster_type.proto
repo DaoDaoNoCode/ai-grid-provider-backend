@@ -40,7 +40,8 @@ message ManagedClusterStatus {
   bool joined = 2;
 
   // Raw Available condition status ("True", "False", "Unknown", …). Empty when absent.
-  // Used by the Clusters presentation layer to derive Ready/Offline/Unknown.
+  // The backend derives `state` from it and the other conditions; read
+  // `state` for Ready, Offline or Unknown.
   string available_condition = 3;
 
   // AI Grid provisioning, from the cluster's compliance with the hub's
@@ -77,6 +78,142 @@ message ManagedClusterStatus {
   // available or hasn't indexed the cluster; `capacity["nvidia.com/gpu"]`
   // still counts its schedulable GPUs then.
   ClusterGPUs gpus = 10;
+
+  // True when the cluster is an AI Grid member: its `ai-grid/enabled` label
+  // is exactly "true", the label selector the hub's AI Grid Placements
+  // match. A cluster joins or leaves the grid through Update, by setting or
+  // removing that label in `metadata.labels`.
+  bool ai_grid_member = 11;
+
+  // The cluster's lifecycle state, derived from its conditions and its
+  // deletion timestamp in the order the ACM console uses. UNSPECIFIED until
+  // the hub reports any condition.
+  ManagedClusterState state = 12;
+
+  // The message of the condition that decided `state`, for example "Managed
+  // cluster is available" or "Try to import managed cluster, error: ...".
+  // Empty when that condition has no message or is absent.
+  string state_message = 13;
+
+  // Where the cluster is, for a map. Always set.
+  ManagedClusterLocation location = 14;
+}
+
+// Lifecycle state of a ManagedCluster, one per state the ACM console shows.
+// Checked in this order, the first that applies wins:
+//
+//   metadata.deletion_timestamp set                    -> DETACHING
+//   no conditions at all                               -> UNSPECIFIED
+//   HubAcceptedManagedCluster not True                 -> NOT_ACCEPTED
+//   ManagedClusterJoined not True, and
+//     ManagedClusterImportSucceeded False with reason
+//       ManagedClusterImporting                        -> IMPORTING
+//       ManagedClusterImportFailed                     -> IMPORT_FAILED
+//     otherwise                                        -> PENDING_IMPORT
+//   ManagedClusterConditionAvailable True              -> READY
+//   ManagedClusterConditionAvailable False             -> OFFLINE
+//   otherwise (Unknown or absent)                      -> UNKNOWN
+//
+// "Not True" means False or absent. The ACM console's "needs approval" (a
+// pending CSR) and its hosted-cluster states aren't derived: the backend
+// reads neither CSRs nor HostedClusters, so such a cluster is PENDING_IMPORT.
+enum ManagedClusterState {
+  // The hub has reported no condition yet; a client also reads a state added
+  // after it was built as UNSPECIFIED.
+  MANAGED_CLUSTER_STATE_UNSPECIFIED = 0;
+  // Joined and available. ACM console: `ready`.
+  MANAGED_CLUSTER_STATE_READY = 1;
+  // Joined; the agent reports the cluster unavailable (Available False, for
+  // example the kube-apiserver is down). ACM console: `offline`.
+  MANAGED_CLUSTER_STATE_OFFLINE = 2;
+  // Joined; the hub has no current report (Available Unknown or absent,
+  // usually an expired lease). ACM console: `unknown`.
+  MANAGED_CLUSTER_STATE_UNKNOWN = 3;
+  // Accepted, not joined, import not started or not reported. ACM console:
+  // `pendingimport`.
+  MANAGED_CLUSTER_STATE_PENDING_IMPORT = 4;
+  // Accepted, not joined, the import controller is applying the klusterlet.
+  // ACM console: `importing`.
+  MANAGED_CLUSTER_STATE_IMPORTING = 5;
+  // Accepted, not joined, the import failed. ACM console: `importfailed`.
+  MANAGED_CLUSTER_STATE_IMPORT_FAILED = 6;
+  // The hub hasn't accepted the cluster (HubAcceptedManagedCluster absent or
+  // False, for example after hub_accepts_client was set to false). ACM
+  // console: `notaccepted`.
+  MANAGED_CLUSTER_STATE_NOT_ACCEPTED = 7;
+  // The ManagedCluster is being deleted and its agent removed. ACM console:
+  // `detaching`.
+  MANAGED_CLUSTER_STATE_DETACHING = 8;
+}
+
+// Where a cluster is. A hub admin sets it once with the ManagedCluster
+// annotations `ai-grid/latitude`, `ai-grid/longitude` (decimal degrees) and
+// `ai-grid/site-name`; see the README, "Cluster locations".
+//
+// `latitude` and `longitude` are both set or both unset. Without either
+// annotation, a cluster in a known cloud region gets approximate
+// coordinates (source CLOUD_REGION). When the annotations are wrong, the
+// coordinates are unset, `source` is NONE and `problem` says what to fix:
+// the backend never falls back to the region past a mistake.
+message ManagedClusterLocation {
+  option (buf.validate.message).cel = {
+    id: "managed_cluster_location.coordinates_paired"
+    message: "latitude and longitude must be both set or both unset"
+    expression: "has(this.latitude) == has(this.longitude)"
+  };
+
+  // `ai-grid/site-name`, surrounding whitespace removed. Kept whether or not
+  // there are coordinates.
+  string site_name = 1;
+
+  // Decimal degrees, -90..90. Unset when there are no coordinates; 0 is a
+  // valid latitude.
+  optional double latitude = 2 [(buf.validate.field).double = {
+    gte: -90
+    lte: 90
+    finite: true
+  }];
+
+  // Decimal degrees, -180..180. Unset when there are no coordinates; 0 is a
+  // valid longitude.
+  optional double longitude = 3 [(buf.validate.field).double = {
+    gte: -180
+    lte: 180
+    finite: true
+  }];
+
+  // Where `latitude` and `longitude` come from.
+  ManagedClusterLocationSource source = 4;
+
+  // What is wrong with the coordinate annotations, for a hub admin to fix,
+  // for example `ai-grid/latitude "40,7" is not a decimal number of
+  // degrees, such as 40.7128 or -74.006`. Several problems are joined with
+  // "; ". Empty when there is nothing to fix; missing annotations are not a
+  // problem. Meant to be shown as is; match on it in no code.
+  string problem = 5;
+
+  // The cloud region the cluster runs in, from its
+  // `region.open-cluster-management.io` claim (for example "us-east-2"), as
+  // a fact whatever `source` is. Empty when the agent reports none, as on
+  // most on-premises clusters.
+  string region = 6;
+}
+
+// Where a cluster's coordinates come from.
+enum ManagedClusterLocationSource {
+  // Not reported; a client also reads a source added after it was built as
+  // UNSPECIFIED.
+  MANAGED_CLUSTER_LOCATION_SOURCE_UNSPECIFIED = 0;
+  // No coordinates: no annotations and no known cloud region, or
+  // annotations with a `problem`.
+  MANAGED_CLUSTER_LOCATION_SOURCE_NONE = 1;
+  // The `ai-grid/latitude` and `ai-grid/longitude` annotations, as the hub
+  // admin set them.
+  MANAGED_CLUSTER_LOCATION_SOURCE_ANNOTATIONS = 2;
+  // Approximate: the city or area the cloud provider names for `region`,
+  // used when neither annotation is set. Good for a pin on a world map, not
+  // for the data center's position; a UI should say it is approximate.
+  MANAGED_CLUSTER_LOCATION_SOURCE_CLOUD_REGION = 3;
 }
 
 // GPU inventory of one cluster.

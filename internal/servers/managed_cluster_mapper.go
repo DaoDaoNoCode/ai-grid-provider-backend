@@ -2,7 +2,6 @@ package servers
 
 import (
 	"strconv"
-	"strings"
 	"time"
 
 	connect "connectrpc.com/connect/v2"
@@ -28,13 +27,18 @@ func managedClusterFromUnstructured(item unstructured.Unstructured) *aigridv1.Ma
 		meta.DeletionTimestamp = timestamppb.New(ts.Time)
 	}
 
+	status := managedClusterStatusFromUnstructured(item)
+	status.AiGridMember = isAIGridMember(item.GetLabels())
+	status.State, status.StateMessage = managedClusterState(meta.DeletionTimestamp != nil, status.GetConditions())
+	status.Location = managedClusterLocation(item.GetAnnotations(), status.GetClusterClaims())
+
 	return &aigridv1.ManagedCluster{
 		Id:       name,
 		Metadata: meta,
 		Spec: &aigridv1.ManagedClusterSpec{
 			HubAcceptsClient: accepts,
 		},
-		Status: managedClusterStatusFromUnstructured(item),
+		Status: status,
 	}
 }
 
@@ -81,14 +85,14 @@ func managedClusterStatusFromUnstructured(item unstructured.Unstructured) *aigri
 			if status.AvailableCondition == "" {
 				status.AvailableCondition = condStatus
 			}
-			if strings.EqualFold(condStatus, "True") {
+			if conditionTrue(condStatus) {
 				status.Available = true
 			}
 		// The hub writes "ManagedClusterJoined": OCM's constant is named
 		// ManagedClusterConditionJoined but its value is "ManagedClusterJoined"
 		// (open-cluster-management-io/api cluster/v1/types.go).
 		case "ManagedClusterJoined", "Joined":
-			if strings.EqualFold(condStatus, "True") {
+			if conditionTrue(condStatus) {
 				status.Joined = true
 			}
 		}

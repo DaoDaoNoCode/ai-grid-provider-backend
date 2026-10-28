@@ -11,7 +11,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
-var shippedFixtures = []string{"default", "poc"}
+var shippedFixtures = []string{"default", "poc", "locations"}
 
 func loadShipped(t *testing.T, name string) *Fixtures {
 	t.Helper()

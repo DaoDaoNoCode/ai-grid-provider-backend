@@ -1,0 +1,1251 @@
+{
+  "kind": "ManagedClusterList",
+  "apiVersion": "cluster.open-cluster-management.io/v1",
+  "metadata": {},
+  "items": [
+    {
+      "kind": "ManagedCluster",
+      "apiVersion": "cluster.open-cluster-management.io/v1",
+      "metadata": {
+        "name": "loc-annotations",
+        "uid": "e7d98624-8beb-53bd-85d4-b66f8396dd51",
+        "resourceVersion": "52000100",
+        "generation": 1,
+        "creationTimestamp": "2026-10-01T09:00:00Z",
+        "labels": {
+          "ai-grid/enabled": "true",
+          "name": "loc-annotations"
+        },
+        "annotations": {
+          "ai-grid/latitude": "40.7128",
+          "ai-grid/longitude": "-74.0060",
+          "ai-grid/site-name": "New York DC1",
+          "open-cluster-management/created-via": "other"
+        },
+        "finalizers": [
+          "managedcluster-import-controller.open-cluster-management.io/cleanup",
+          "managedclusterinfo.finalizers.open-cluster-management.io",
+          "cluster.open-cluster-management.io/resource-cleanup",
+          "open-cluster-management.io/managedclusterrole",
+          "managedcluster-import-controller.open-cluster-management.io/manifestwork-cleanup",
+          "cluster.open-cluster-management.io/api-resource-cleanup"
+        ]
+      },
+      "spec": {
+        "hubAcceptsClient": true
+      },
+      "status": {
+        "conditions": [
+          {
+            "type": "ManagedClusterImportSucceeded",
+            "status": "True",
+            "reason": "ManagedClusterImported",
+            "message": "Import succeeded"
+          },
+          {
+            "type": "HubAcceptedManagedCluster",
+            "status": "True",
+            "reason": "HubClusterAdminAccepted",
+            "message": "Accepted by hub cluster admin"
+          },
+          {
+            "type": "ManagedClusterJoined",
+            "status": "True",
+            "reason": "ManagedClusterJoined",
+            "message": "Managed cluster joined"
+          },
+          {
+            "type": "ManagedClusterConditionAvailable",
+            "status": "True",
+            "reason": "ManagedClusterAvailable",
+            "message": "Managed cluster is available"
+          }
+        ],
+        "clusterClaims": [
+          {
+            "name": "platform.open-cluster-management.io",
+            "value": "BareMetal"
+          }
+        ]
+      }
+    },
+    {
+      "kind": "ManagedCluster",
+      "apiVersion": "cluster.open-cluster-management.io/v1",
+      "metadata": {
+        "name": "loc-whitespace",
+        "uid": "aca77961-1b7d-5af2-a9ca-4ec5fe7e9d42",
+        "resourceVersion": "52000101",
+        "generation": 1,
+        "creationTimestamp": "2026-10-01T09:00:00Z",
+        "labels": {
+          "ai-grid/enabled": "true",
+          "name": "loc-whitespace"
+        },
+        "annotations": {
+          "ai-grid/latitude": " 52.5200 ",
+          "ai-grid/longitude": "\t13.4050\n",
+          "ai-grid/site-name": " Berlin DC1 ",
+          "open-cluster-management/created-via": "other"
+        },
+        "finalizers": [
+          "managedcluster-import-controller.open-cluster-management.io/cleanup",
+          "managedclusterinfo.finalizers.open-cluster-management.io",
+          "cluster.open-cluster-management.io/resource-cleanup",
+          "open-cluster-management.io/managedclusterrole",
+          "managedcluster-import-controller.open-cluster-management.io/manifestwork-cleanup",
+          "cluster.open-cluster-management.io/api-resource-cleanup"
+        ]
+      },
+      "spec": {
+        "hubAcceptsClient": true
+      },
+      "status": {
+        "conditions": [
+          {
+            "type": "ManagedClusterImportSucceeded",
+            "status": "True",
+            "reason": "ManagedClusterImported",
+            "message": "Import succeeded"
+          },
+          {
+            "type": "HubAcceptedManagedCluster",
+            "status": "True",
+            "reason": "HubClusterAdminAccepted",
+            "message": "Accepted by hub cluster admin"
+          },
+          {
+            "type": "ManagedClusterJoined",
+            "status": "True",
+            "reason": "ManagedClusterJoined",
+            "message": "Managed cluster joined"
+          },
+          {
+            "type": "ManagedClusterConditionAvailable",
+            "status": "True",
+            "reason": "ManagedClusterAvailable",
+            "message": "Managed cluster is available"
+          }
+        ],
+        "clusterClaims": [
+          {
+            "name": "platform.open-cluster-management.io",
+            "value": "BareMetal"
+          }
+        ]
+      }
+    },
+    {
+      "kind": "ManagedCluster",
+      "apiVersion": "cluster.open-cluster-management.io/v1",
+      "metadata": {
+        "name": "loc-null-island",
+        "uid": "fc74b94b-16b4-50f8-836c-96e8b36e2052",
+        "resourceVersion": "52000102",
+        "generation": 1,
+        "creationTimestamp": "2026-10-01T09:00:00Z",
+        "labels": {
+          "name": "loc-null-island"
+        },
+        "annotations": {
+          "ai-grid/latitude": "0",
+          "ai-grid/longitude": "0",
+          "ai-grid/site-name": "Null Island",
+          "open-cluster-management/created-via": "other"
+        },
+        "finalizers": [
+          "managedcluster-import-controller.open-cluster-management.io/cleanup",
+          "managedclusterinfo.finalizers.open-cluster-management.io",
+          "cluster.open-cluster-management.io/resource-cleanup",
+          "open-cluster-management.io/managedclusterrole",
+          "managedcluster-import-controller.open-cluster-management.io/manifestwork-cleanup",
+          "cluster.open-cluster-management.io/api-resource-cleanup"
+        ]
+      },
+      "spec": {
+        "hubAcceptsClient": true
+      },
+      "status": {
+        "conditions": [
+          {
+            "type": "ManagedClusterImportSucceeded",
+            "status": "True",
+            "reason": "ManagedClusterImported",
+            "message": "Import succeeded"
+          },
+          {
+            "type": "HubAcceptedManagedCluster",
+            "status": "True",
+            "reason": "HubClusterAdminAccepted",
+            "message": "Accepted by hub cluster admin"
+          },
+          {
+            "type": "ManagedClusterJoined",
+            "status": "True",
+            "reason": "ManagedClusterJoined",
+            "message": "Managed cluster joined"
+          },
+          {
+            "type": "ManagedClusterConditionAvailable",
+            "status": "True",
+            "reason": "ManagedClusterAvailable",
+            "message": "Managed cluster is available"
+          }
+        ],
+        "clusterClaims": [
+          {
+            "name": "platform.open-cluster-management.io",
+            "value": "BareMetal"
+          }
+        ]
+      }
+    },
+    {
+      "kind": "ManagedCluster",
+      "apiVersion": "cluster.open-cluster-management.io/v1",
+      "metadata": {
+        "name": "loc-onprem-none",
+        "uid": "af4d7c93-d74f-5a7b-86f3-41734f04c5de",
+        "resourceVersion": "52000103",
+        "generation": 1,
+        "creationTimestamp": "2026-10-01T09:00:00Z",
+        "labels": {
+          "ai-grid/enabled": "true",
+          "name": "loc-onprem-none"
+        },
+        "annotations": {
+          "open-cluster-management/created-via": "other"
+        },
+        "finalizers": [
+          "managedcluster-import-controller.open-cluster-management.io/cleanup",
+          "managedclusterinfo.finalizers.open-cluster-management.io",
+          "cluster.open-cluster-management.io/resource-cleanup",
+          "open-cluster-management.io/managedclusterrole",
+          "managedcluster-import-controller.open-cluster-management.io/manifestwork-cleanup",
+          "cluster.open-cluster-management.io/api-resource-cleanup"
+        ]
+      },
+      "spec": {
+        "hubAcceptsClient": true
+      },
+      "status": {
+        "conditions": [
+          {
+            "type": "ManagedClusterImportSucceeded",
+            "status": "True",
+            "reason": "ManagedClusterImported",
+            "message": "Import succeeded"
+          },
+          {
+            "type": "HubAcceptedManagedCluster",
+            "status": "True",
+            "reason": "HubClusterAdminAccepted",
+            "message": "Accepted by hub cluster admin"
+          },
+          {
+            "type": "ManagedClusterJoined",
+            "status": "True",
+            "reason": "ManagedClusterJoined",
+            "message": "Managed cluster joined"
+          },
+          {
+            "type": "ManagedClusterConditionAvailable",
+            "status": "True",
+            "reason": "ManagedClusterAvailable",
+            "message": "Managed cluster is available"
+          }
+        ],
+        "clusterClaims": [
+          {
+            "name": "platform.open-cluster-management.io",
+            "value": "BareMetal"
+          }
+        ]
+      }
+    },
+    {
+      "kind": "ManagedCluster",
+      "apiVersion": "cluster.open-cluster-management.io/v1",
+      "metadata": {
+        "name": "loc-site-name-only",
+        "uid": "2160cde1-d4ed-55e9-b6e6-dd9e9596f694",
+        "resourceVersion": "52000104",
+        "generation": 1,
+        "creationTimestamp": "2026-10-01T09:00:00Z",
+        "labels": {
+          "name": "loc-site-name-only"
+        },
+        "annotations": {
+          "ai-grid/site-name": "Edge closet 3",
+          "open-cluster-management/created-via": "other"
+        },
+        "finalizers": [
+          "managedcluster-import-controller.open-cluster-management.io/cleanup",
+          "managedclusterinfo.finalizers.open-cluster-management.io",
+          "cluster.open-cluster-management.io/resource-cleanup",
+          "open-cluster-management.io/managedclusterrole",
+          "managedcluster-import-controller.open-cluster-management.io/manifestwork-cleanup",
+          "cluster.open-cluster-management.io/api-resource-cleanup"
+        ]
+      },
+      "spec": {
+        "hubAcceptsClient": true
+      },
+      "status": {
+        "conditions": [
+          {
+            "type": "ManagedClusterImportSucceeded",
+            "status": "True",
+            "reason": "ManagedClusterImported",
+            "message": "Import succeeded"
+          },
+          {
+            "type": "HubAcceptedManagedCluster",
+            "status": "True",
+            "reason": "HubClusterAdminAccepted",
+            "message": "Accepted by hub cluster admin"
+          },
+          {
+            "type": "ManagedClusterJoined",
+            "status": "True",
+            "reason": "ManagedClusterJoined",
+            "message": "Managed cluster joined"
+          },
+          {
+            "type": "ManagedClusterConditionAvailable",
+            "status": "True",
+            "reason": "ManagedClusterAvailable",
+            "message": "Managed cluster is available"
+          }
+        ],
+        "clusterClaims": [
+          {
+            "name": "platform.open-cluster-management.io",
+            "value": "BareMetal"
+          }
+        ]
+      }
+    },
+    {
+      "kind": "ManagedCluster",
+      "apiVersion": "cluster.open-cluster-management.io/v1",
+      "metadata": {
+        "name": "loc-latitude-only",
+        "uid": "78d6d31d-309a-51fd-86fa-91db74e8c18b",
+        "resourceVersion": "52000105",
+        "generation": 1,
+        "creationTimestamp": "2026-10-01T09:00:00Z",
+        "labels": {
+          "name": "loc-latitude-only"
+        },
+        "annotations": {
+          "ai-grid/latitude": "48.8566",
+          "open-cluster-management/created-via": "other"
+        },
+        "finalizers": [
+          "managedcluster-import-controller.open-cluster-management.io/cleanup",
+          "managedclusterinfo.finalizers.open-cluster-management.io",
+          "cluster.open-cluster-management.io/resource-cleanup",
+          "open-cluster-management.io/managedclusterrole",
+          "managedcluster-import-controller.open-cluster-management.io/manifestwork-cleanup",
+          "cluster.open-cluster-management.io/api-resource-cleanup"
+        ]
+      },
+      "spec": {
+        "hubAcceptsClient": true
+      },
+      "status": {
+        "conditions": [
+          {
+            "type": "ManagedClusterImportSucceeded",
+            "status": "True",
+            "reason": "ManagedClusterImported",
+            "message": "Import succeeded"
+          },
+          {
+            "type": "HubAcceptedManagedCluster",
+            "status": "True",
+            "reason": "HubClusterAdminAccepted",
+            "message": "Accepted by hub cluster admin"
+          },
+          {
+            "type": "ManagedClusterJoined",
+            "status": "True",
+            "reason": "ManagedClusterJoined",
+            "message": "Managed cluster joined"
+          },
+          {
+            "type": "ManagedClusterConditionAvailable",
+            "status": "True",
+            "reason": "ManagedClusterAvailable",
+            "message": "Managed cluster is available"
+          }
+        ],
+        "clusterClaims": [
+          {
+            "name": "platform.open-cluster-management.io",
+            "value": "BareMetal"
+          }
+        ]
+      }
+    },
+    {
+      "kind": "ManagedCluster",
+      "apiVersion": "cluster.open-cluster-management.io/v1",
+      "metadata": {
+        "name": "loc-decimal-comma",
+        "uid": "554ac9f5-255c-56dc-b18f-3b512e2c1ef6",
+        "resourceVersion": "52000106",
+        "generation": 1,
+        "creationTimestamp": "2026-10-01T09:00:00Z",
+        "labels": {
+          "name": "loc-decimal-comma"
+        },
+        "annotations": {
+          "ai-grid/latitude": "40,7128",
+          "ai-grid/longitude": "-74,0060",
+          "open-cluster-management/created-via": "other"
+        },
+        "finalizers": [
+          "managedcluster-import-controller.open-cluster-management.io/cleanup",
+          "managedclusterinfo.finalizers.open-cluster-management.io",
+          "cluster.open-cluster-management.io/resource-cleanup",
+          "open-cluster-management.io/managedclusterrole",
+          "managedcluster-import-controller.open-cluster-management.io/manifestwork-cleanup",
+          "cluster.open-cluster-management.io/api-resource-cleanup"
+        ]
+      },
+      "spec": {
+        "hubAcceptsClient": true
+      },
+      "status": {
+        "conditions": [
+          {
+            "type": "ManagedClusterImportSucceeded",
+            "status": "True",
+            "reason": "ManagedClusterImported",
+            "message": "Import succeeded"
+          },
+          {
+            "type": "HubAcceptedManagedCluster",
+            "status": "True",
+            "reason": "HubClusterAdminAccepted",
+            "message": "Accepted by hub cluster admin"
+          },
+          {
+            "type": "ManagedClusterJoined",
+            "status": "True",
+            "reason": "ManagedClusterJoined",
+            "message": "Managed cluster joined"
+          },
+          {
+            "type": "ManagedClusterConditionAvailable",
+            "status": "True",
+            "reason": "ManagedClusterAvailable",
+            "message": "Managed cluster is available"
+          }
+        ],
+        "clusterClaims": [
+          {
+            "name": "platform.open-cluster-management.io",
+            "value": "BareMetal"
+          }
+        ]
+      }
+    },
+    {
+      "kind": "ManagedCluster",
+      "apiVersion": "cluster.open-cluster-management.io/v1",
+      "metadata": {
+        "name": "loc-hemisphere",
+        "uid": "058a07a0-babd-55b7-b53e-48a6a1318c23",
+        "resourceVersion": "52000107",
+        "generation": 1,
+        "creationTimestamp": "2026-10-01T09:00:00Z",
+        "labels": {
+          "name": "loc-hemisphere"
+        },
+        "annotations": {
+          "ai-grid/latitude": "40.7128N",
+          "ai-grid/longitude": "74.0060W",
+          "open-cluster-management/created-via": "other"
+        },
+        "finalizers": [
+          "managedcluster-import-controller.open-cluster-management.io/cleanup",
+          "managedclusterinfo.finalizers.open-cluster-management.io",
+          "cluster.open-cluster-management.io/resource-cleanup",
+          "open-cluster-management.io/managedclusterrole",
+          "managedcluster-import-controller.open-cluster-management.io/manifestwork-cleanup",
+          "cluster.open-cluster-management.io/api-resource-cleanup"
+        ]
+      },
+      "spec": {
+        "hubAcceptsClient": true
+      },
+      "status": {
+        "conditions": [
+          {
+            "type": "ManagedClusterImportSucceeded",
+            "status": "True",
+            "reason": "ManagedClusterImported",
+            "message": "Import succeeded"
+          },
+          {
+            "type": "HubAcceptedManagedCluster",
+            "status": "True",
+            "reason": "HubClusterAdminAccepted",
+            "message": "Accepted by hub cluster admin"
+          },
+          {
+            "type": "ManagedClusterJoined",
+            "status": "True",
+            "reason": "ManagedClusterJoined",
+            "message": "Managed cluster joined"
+          },
+          {
+            "type": "ManagedClusterConditionAvailable",
+            "status": "True",
+            "reason": "ManagedClusterAvailable",
+            "message": "Managed cluster is available"
+          }
+        ],
+        "clusterClaims": [
+          {
+            "name": "platform.open-cluster-management.io",
+            "value": "BareMetal"
+          }
+        ]
+      }
+    },
+    {
+      "kind": "ManagedCluster",
+      "apiVersion": "cluster.open-cluster-management.io/v1",
+      "metadata": {
+        "name": "loc-dms",
+        "uid": "d71e57f3-3f7d-5642-89d4-fa6f7c7a3dba",
+        "resourceVersion": "52000108",
+        "generation": 1,
+        "creationTimestamp": "2026-10-01T09:00:00Z",
+        "labels": {
+          "name": "loc-dms"
+        },
+        "annotations": {
+          "ai-grid/latitude": "40°42'46\"N",
+          "ai-grid/longitude": "74°00'22\"W",
+          "open-cluster-management/created-via": "other"
+        },
+        "finalizers": [
+          "managedcluster-import-controller.open-cluster-management.io/cleanup",
+          "managedclusterinfo.finalizers.open-cluster-management.io",
+          "cluster.open-cluster-management.io/resource-cleanup",
+          "open-cluster-management.io/managedclusterrole",
+          "managedcluster-import-controller.open-cluster-management.io/manifestwork-cleanup",
+          "cluster.open-cluster-management.io/api-resource-cleanup"
+        ]
+      },
+      "spec": {
+        "hubAcceptsClient": true
+      },
+      "status": {
+        "conditions": [
+          {
+            "type": "ManagedClusterImportSucceeded",
+            "status": "True",
+            "reason": "ManagedClusterImported",
+            "message": "Import succeeded"
+          },
+          {
+            "type": "HubAcceptedManagedCluster",
+            "status": "True",
+            "reason": "HubClusterAdminAccepted",
+            "message": "Accepted by hub cluster admin"
+          },
+          {
+            "type": "ManagedClusterJoined",
+            "status": "True",
+            "reason": "ManagedClusterJoined",
+            "message": "Managed cluster joined"
+          },
+          {
+            "type": "ManagedClusterConditionAvailable",
+            "status": "True",
+            "reason": "ManagedClusterAvailable",
+            "message": "Managed cluster is available"
+          }
+        ],
+        "clusterClaims": [
+          {
+            "name": "platform.open-cluster-management.io",
+            "value": "BareMetal"
+          }
+        ]
+      }
+    },
+    {
+      "kind": "ManagedCluster",
+      "apiVersion": "cluster.open-cluster-management.io/v1",
+      "metadata": {
+        "name": "loc-nan-inf",
+        "uid": "3240dbe5-0b86-5533-8c0e-97199688160c",
+        "resourceVersion": "52000109",
+        "generation": 1,
+        "creationTimestamp": "2026-10-01T09:00:00Z",
+        "labels": {
+          "name": "loc-nan-inf"
+        },
+        "annotations": {
+          "ai-grid/latitude": "NaN",
+          "ai-grid/longitude": "Inf",
+          "open-cluster-management/created-via": "other"
+        },
+        "finalizers": [
+          "managedcluster-import-controller.open-cluster-management.io/cleanup",
+          "managedclusterinfo.finalizers.open-cluster-management.io",
+          "cluster.open-cluster-management.io/resource-cleanup",
+          "open-cluster-management.io/managedclusterrole",
+          "managedcluster-import-controller.open-cluster-management.io/manifestwork-cleanup",
+          "cluster.open-cluster-management.io/api-resource-cleanup"
+        ]
+      },
+      "spec": {
+        "hubAcceptsClient": true
+      },
+      "status": {
+        "conditions": [
+          {
+            "type": "ManagedClusterImportSucceeded",
+            "status": "True",
+            "reason": "ManagedClusterImported",
+            "message": "Import succeeded"
+          },
+          {
+            "type": "HubAcceptedManagedCluster",
+            "status": "True",
+            "reason": "HubClusterAdminAccepted",
+            "message": "Accepted by hub cluster admin"
+          },
+          {
+            "type": "ManagedClusterJoined",
+            "status": "True",
+            "reason": "ManagedClusterJoined",
+            "message": "Managed cluster joined"
+          },
+          {
+            "type": "ManagedClusterConditionAvailable",
+            "status": "True",
+            "reason": "ManagedClusterAvailable",
+            "message": "Managed cluster is available"
+          }
+        ],
+        "clusterClaims": [
+          {
+            "name": "platform.open-cluster-management.io",
+            "value": "BareMetal"
+          }
+        ]
+      }
+    },
+    {
+      "kind": "ManagedCluster",
+      "apiVersion": "cluster.open-cluster-management.io/v1",
+      "metadata": {
+        "name": "loc-out-of-range",
+        "uid": "bd71a0ab-50d4-5933-8b18-b910cc38c3a0",
+        "resourceVersion": "52000110",
+        "generation": 1,
+        "creationTimestamp": "2026-10-01T09:00:00Z",
+        "labels": {
+          "name": "loc-out-of-range"
+        },
+        "annotations": {
+          "ai-grid/latitude": "95",
+          "ai-grid/longitude": "200",
+          "open-cluster-management/created-via": "other"
+        },
+        "finalizers": [
+          "managedcluster-import-controller.open-cluster-management.io/cleanup",
+          "managedclusterinfo.finalizers.open-cluster-management.io",
+          "cluster.open-cluster-management.io/resource-cleanup",
+          "open-cluster-management.io/managedclusterrole",
+          "managedcluster-import-controller.open-cluster-management.io/manifestwork-cleanup",
+          "cluster.open-cluster-management.io/api-resource-cleanup"
+        ]
+      },
+      "spec": {
+        "hubAcceptsClient": true
+      },
+      "status": {
+        "conditions": [
+          {
+            "type": "ManagedClusterImportSucceeded",
+            "status": "True",
+            "reason": "ManagedClusterImported",
+            "message": "Import succeeded"
+          },
+          {
+            "type": "HubAcceptedManagedCluster",
+            "status": "True",
+            "reason": "HubClusterAdminAccepted",
+            "message": "Accepted by hub cluster admin"
+          },
+          {
+            "type": "ManagedClusterJoined",
+            "status": "True",
+            "reason": "ManagedClusterJoined",
+            "message": "Managed cluster joined"
+          },
+          {
+            "type": "ManagedClusterConditionAvailable",
+            "status": "True",
+            "reason": "ManagedClusterAvailable",
+            "message": "Managed cluster is available"
+          }
+        ],
+        "clusterClaims": [
+          {
+            "name": "platform.open-cluster-management.io",
+            "value": "BareMetal"
+          }
+        ]
+      }
+    },
+    {
+      "kind": "ManagedCluster",
+      "apiVersion": "cluster.open-cluster-management.io/v1",
+      "metadata": {
+        "name": "loc-swapped",
+        "uid": "3102a174-e5ea-504c-848c-8516cd4c3749",
+        "resourceVersion": "52000111",
+        "generation": 1,
+        "creationTimestamp": "2026-10-01T09:00:00Z",
+        "labels": {
+          "ai-grid/enabled": "true",
+          "name": "loc-swapped"
+        },
+        "annotations": {
+          "ai-grid/latitude": "151.2093",
+          "ai-grid/longitude": "-33.8688",
+          "ai-grid/site-name": "Sydney DC1",
+          "open-cluster-management/created-via": "other"
+        },
+        "finalizers": [
+          "managedcluster-import-controller.open-cluster-management.io/cleanup",
+          "managedclusterinfo.finalizers.open-cluster-management.io",
+          "cluster.open-cluster-management.io/resource-cleanup",
+          "open-cluster-management.io/managedclusterrole",
+          "managedcluster-import-controller.open-cluster-management.io/manifestwork-cleanup",
+          "cluster.open-cluster-management.io/api-resource-cleanup"
+        ]
+      },
+      "spec": {
+        "hubAcceptsClient": true
+      },
+      "status": {
+        "conditions": [
+          {
+            "type": "ManagedClusterImportSucceeded",
+            "status": "True",
+            "reason": "ManagedClusterImported",
+            "message": "Import succeeded"
+          },
+          {
+            "type": "HubAcceptedManagedCluster",
+            "status": "True",
+            "reason": "HubClusterAdminAccepted",
+            "message": "Accepted by hub cluster admin"
+          },
+          {
+            "type": "ManagedClusterJoined",
+            "status": "True",
+            "reason": "ManagedClusterJoined",
+            "message": "Managed cluster joined"
+          },
+          {
+            "type": "ManagedClusterConditionAvailable",
+            "status": "True",
+            "reason": "ManagedClusterAvailable",
+            "message": "Managed cluster is available"
+          }
+        ],
+        "clusterClaims": [
+          {
+            "name": "platform.open-cluster-management.io",
+            "value": "BareMetal"
+          }
+        ]
+      }
+    },
+    {
+      "kind": "ManagedCluster",
+      "apiVersion": "cluster.open-cluster-management.io/v1",
+      "metadata": {
+        "name": "loc-invalid-in-region",
+        "uid": "ba3e47f6-0a15-5b8a-baca-fcb8190bdad0",
+        "resourceVersion": "52000112",
+        "generation": 1,
+        "creationTimestamp": "2026-10-01T09:00:00Z",
+        "labels": {
+          "ai-grid/enabled": "true",
+          "name": "loc-invalid-in-region"
+        },
+        "annotations": {
+          "ai-grid/latitude": "39,96",
+          "ai-grid/longitude": "-83.00",
+          "open-cluster-management/created-via": "other"
+        },
+        "finalizers": [
+          "managedcluster-import-controller.open-cluster-management.io/cleanup",
+          "managedclusterinfo.finalizers.open-cluster-management.io",
+          "cluster.open-cluster-management.io/resource-cleanup",
+          "open-cluster-management.io/managedclusterrole",
+          "managedcluster-import-controller.open-cluster-management.io/manifestwork-cleanup",
+          "cluster.open-cluster-management.io/api-resource-cleanup"
+        ]
+      },
+      "spec": {
+        "hubAcceptsClient": true
+      },
+      "status": {
+        "conditions": [
+          {
+            "type": "ManagedClusterImportSucceeded",
+            "status": "True",
+            "reason": "ManagedClusterImported",
+            "message": "Import succeeded"
+          },
+          {
+            "type": "HubAcceptedManagedCluster",
+            "status": "True",
+            "reason": "HubClusterAdminAccepted",
+            "message": "Accepted by hub cluster admin"
+          },
+          {
+            "type": "ManagedClusterJoined",
+            "status": "True",
+            "reason": "ManagedClusterJoined",
+            "message": "Managed cluster joined"
+          },
+          {
+            "type": "ManagedClusterConditionAvailable",
+            "status": "True",
+            "reason": "ManagedClusterAvailable",
+            "message": "Managed cluster is available"
+          }
+        ],
+        "clusterClaims": [
+          {
+            "name": "platform.open-cluster-management.io",
+            "value": "AWS"
+          },
+          {
+            "name": "region.open-cluster-management.io",
+            "value": "us-east-2"
+          }
+        ]
+      }
+    },
+    {
+      "kind": "ManagedCluster",
+      "apiVersion": "cluster.open-cluster-management.io/v1",
+      "metadata": {
+        "name": "loc-annotations-in-region",
+        "uid": "40bab617-822b-5fda-b743-b1d4eba7cec7",
+        "resourceVersion": "52000113",
+        "generation": 1,
+        "creationTimestamp": "2026-10-01T09:00:00Z",
+        "labels": {
+          "ai-grid/enabled": "true",
+          "name": "loc-annotations-in-region"
+        },
+        "annotations": {
+          "ai-grid/latitude": "39.9612",
+          "ai-grid/longitude": "-82.9988",
+          "ai-grid/site-name": "Columbus DC2",
+          "open-cluster-management/created-via": "other"
+        },
+        "finalizers": [
+          "managedcluster-import-controller.open-cluster-management.io/cleanup",
+          "managedclusterinfo.finalizers.open-cluster-management.io",
+          "cluster.open-cluster-management.io/resource-cleanup",
+          "open-cluster-management.io/managedclusterrole",
+          "managedcluster-import-controller.open-cluster-management.io/manifestwork-cleanup",
+          "cluster.open-cluster-management.io/api-resource-cleanup"
+        ]
+      },
+      "spec": {
+        "hubAcceptsClient": true
+      },
+      "status": {
+        "conditions": [
+          {
+            "type": "ManagedClusterImportSucceeded",
+            "status": "True",
+            "reason": "ManagedClusterImported",
+            "message": "Import succeeded"
+          },
+          {
+            "type": "HubAcceptedManagedCluster",
+            "status": "True",
+            "reason": "HubClusterAdminAccepted",
+            "message": "Accepted by hub cluster admin"
+          },
+          {
+            "type": "ManagedClusterJoined",
+            "status": "True",
+            "reason": "ManagedClusterJoined",
+            "message": "Managed cluster joined"
+          },
+          {
+            "type": "ManagedClusterConditionAvailable",
+            "status": "True",
+            "reason": "ManagedClusterAvailable",
+            "message": "Managed cluster is available"
+          }
+        ],
+        "clusterClaims": [
+          {
+            "name": "platform.open-cluster-management.io",
+            "value": "AWS"
+          },
+          {
+            "name": "region.open-cluster-management.io",
+            "value": "us-east-2"
+          }
+        ]
+      }
+    },
+    {
+      "kind": "ManagedCluster",
+      "apiVersion": "cluster.open-cluster-management.io/v1",
+      "metadata": {
+        "name": "loc-aws-region",
+        "uid": "ec585542-4471-5b82-b3d0-b6a9f2fa3cf8",
+        "resourceVersion": "52000114",
+        "generation": 1,
+        "creationTimestamp": "2026-10-01T09:00:00Z",
+        "labels": {
+          "ai-grid/enabled": "true",
+          "name": "loc-aws-region"
+        },
+        "annotations": {
+          "open-cluster-management/created-via": "other"
+        },
+        "finalizers": [
+          "managedcluster-import-controller.open-cluster-management.io/cleanup",
+          "managedclusterinfo.finalizers.open-cluster-management.io",
+          "cluster.open-cluster-management.io/resource-cleanup",
+          "open-cluster-management.io/managedclusterrole",
+          "managedcluster-import-controller.open-cluster-management.io/manifestwork-cleanup",
+          "cluster.open-cluster-management.io/api-resource-cleanup"
+        ]
+      },
+      "spec": {
+        "hubAcceptsClient": true
+      },
+      "status": {
+        "conditions": [
+          {
+            "type": "ManagedClusterImportSucceeded",
+            "status": "True",
+            "reason": "ManagedClusterImported",
+            "message": "Import succeeded"
+          },
+          {
+            "type": "HubAcceptedManagedCluster",
+            "status": "True",
+            "reason": "HubClusterAdminAccepted",
+            "message": "Accepted by hub cluster admin"
+          },
+          {
+            "type": "ManagedClusterJoined",
+            "status": "True",
+            "reason": "ManagedClusterJoined",
+            "message": "Managed cluster joined"
+          },
+          {
+            "type": "ManagedClusterConditionAvailable",
+            "status": "True",
+            "reason": "ManagedClusterAvailable",
+            "message": "Managed cluster is available"
+          }
+        ],
+        "clusterClaims": [
+          {
+            "name": "platform.open-cluster-management.io",
+            "value": "AWS"
+          },
+          {
+            "name": "region.open-cluster-management.io",
+            "value": "us-east-2"
+          }
+        ]
+      }
+    },
+    {
+      "kind": "ManagedCluster",
+      "apiVersion": "cluster.open-cluster-management.io/v1",
+      "metadata": {
+        "name": "loc-aws-region-named",
+        "uid": "200a428a-1439-5567-8ca4-4fe0ed0ab15b",
+        "resourceVersion": "52000115",
+        "generation": 1,
+        "creationTimestamp": "2026-10-01T09:00:00Z",
+        "labels": {
+          "ai-grid/enabled": "true",
+          "name": "loc-aws-region-named"
+        },
+        "annotations": {
+          "ai-grid/site-name": "Frankfurt cloud",
+          "open-cluster-management/created-via": "other"
+        },
+        "finalizers": [
+          "managedcluster-import-controller.open-cluster-management.io/cleanup",
+          "managedclusterinfo.finalizers.open-cluster-management.io",
+          "cluster.open-cluster-management.io/resource-cleanup",
+          "open-cluster-management.io/managedclusterrole",
+          "managedcluster-import-controller.open-cluster-management.io/manifestwork-cleanup",
+          "cluster.open-cluster-management.io/api-resource-cleanup"
+        ]
+      },
+      "spec": {
+        "hubAcceptsClient": true
+      },
+      "status": {
+        "conditions": [
+          {
+            "type": "ManagedClusterImportSucceeded",
+            "status": "True",
+            "reason": "ManagedClusterImported",
+            "message": "Import succeeded"
+          },
+          {
+            "type": "HubAcceptedManagedCluster",
+            "status": "True",
+            "reason": "HubClusterAdminAccepted",
+            "message": "Accepted by hub cluster admin"
+          },
+          {
+            "type": "ManagedClusterJoined",
+            "status": "True",
+            "reason": "ManagedClusterJoined",
+            "message": "Managed cluster joined"
+          },
+          {
+            "type": "ManagedClusterConditionAvailable",
+            "status": "True",
+            "reason": "ManagedClusterAvailable",
+            "message": "Managed cluster is available"
+          }
+        ],
+        "clusterClaims": [
+          {
+            "name": "platform.open-cluster-management.io",
+            "value": "AWS"
+          },
+          {
+            "name": "region.open-cluster-management.io",
+            "value": "eu-central-1"
+          }
+        ]
+      }
+    },
+    {
+      "kind": "ManagedCluster",
+      "apiVersion": "cluster.open-cluster-management.io/v1",
+      "metadata": {
+        "name": "loc-azure-region",
+        "uid": "9d8d5e5e-1ee7-539e-81ae-1c799bb5d36e",
+        "resourceVersion": "52000116",
+        "generation": 1,
+        "creationTimestamp": "2026-10-01T09:00:00Z",
+        "labels": {
+          "name": "loc-azure-region"
+        },
+        "annotations": {
+          "open-cluster-management/created-via": "other"
+        },
+        "finalizers": [
+          "managedcluster-import-controller.open-cluster-management.io/cleanup",
+          "managedclusterinfo.finalizers.open-cluster-management.io",
+          "cluster.open-cluster-management.io/resource-cleanup",
+          "open-cluster-management.io/managedclusterrole",
+          "managedcluster-import-controller.open-cluster-management.io/manifestwork-cleanup",
+          "cluster.open-cluster-management.io/api-resource-cleanup"
+        ]
+      },
+      "spec": {
+        "hubAcceptsClient": true
+      },
+      "status": {
+        "conditions": [
+          {
+            "type": "ManagedClusterImportSucceeded",
+            "status": "True",
+            "reason": "ManagedClusterImported",
+            "message": "Import succeeded"
+          },
+          {
+            "type": "HubAcceptedManagedCluster",
+            "status": "True",
+            "reason": "HubClusterAdminAccepted",
+            "message": "Accepted by hub cluster admin"
+          },
+          {
+            "type": "ManagedClusterJoined",
+            "status": "True",
+            "reason": "ManagedClusterJoined",
+            "message": "Managed cluster joined"
+          },
+          {
+            "type": "ManagedClusterConditionAvailable",
+            "status": "True",
+            "reason": "ManagedClusterAvailable",
+            "message": "Managed cluster is available"
+          }
+        ],
+        "clusterClaims": [
+          {
+            "name": "platform.open-cluster-management.io",
+            "value": "Azure"
+          },
+          {
+            "name": "region.open-cluster-management.io",
+            "value": "westeurope"
+          }
+        ]
+      }
+    },
+    {
+      "kind": "ManagedCluster",
+      "apiVersion": "cluster.open-cluster-management.io/v1",
+      "metadata": {
+        "name": "loc-gcp-region",
+        "uid": "a5aa6cd7-a2b3-5e9d-9a2b-5748d33a1471",
+        "resourceVersion": "52000117",
+        "generation": 1,
+        "creationTimestamp": "2026-10-01T09:00:00Z",
+        "labels": {
+          "name": "loc-gcp-region"
+        },
+        "annotations": {
+          "open-cluster-management/created-via": "other"
+        },
+        "finalizers": [
+          "managedcluster-import-controller.open-cluster-management.io/cleanup",
+          "managedclusterinfo.finalizers.open-cluster-management.io",
+          "cluster.open-cluster-management.io/resource-cleanup",
+          "open-cluster-management.io/managedclusterrole",
+          "managedcluster-import-controller.open-cluster-management.io/manifestwork-cleanup",
+          "cluster.open-cluster-management.io/api-resource-cleanup"
+        ]
+      },
+      "spec": {
+        "hubAcceptsClient": true
+      },
+      "status": {
+        "conditions": [
+          {
+            "type": "ManagedClusterImportSucceeded",
+            "status": "True",
+            "reason": "ManagedClusterImported",
+            "message": "Import succeeded"
+          },
+          {
+            "type": "HubAcceptedManagedCluster",
+            "status": "True",
+            "reason": "HubClusterAdminAccepted",
+            "message": "Accepted by hub cluster admin"
+          },
+          {
+            "type": "ManagedClusterJoined",
+            "status": "True",
+            "reason": "ManagedClusterJoined",
+            "message": "Managed cluster joined"
+          },
+          {
+            "type": "ManagedClusterConditionAvailable",
+            "status": "True",
+            "reason": "ManagedClusterAvailable",
+            "message": "Managed cluster is available"
+          }
+        ],
+        "clusterClaims": [
+          {
+            "name": "platform.open-cluster-management.io",
+            "value": "GCP"
+          },
+          {
+            "name": "region.open-cluster-management.io",
+            "value": "asia-northeast1"
+          }
+        ]
+      }
+    },
+    {
+      "kind": "ManagedCluster",
+      "apiVersion": "cluster.open-cluster-management.io/v1",
+      "metadata": {
+        "name": "loc-unknown-region",
+        "uid": "287c120d-c0fa-5acf-ae78-fa339bb6e9a8",
+        "resourceVersion": "52000118",
+        "generation": 1,
+        "creationTimestamp": "2026-10-01T09:00:00Z",
+        "labels": {
+          "name": "loc-unknown-region"
+        },
+        "annotations": {
+          "open-cluster-management/created-via": "other"
+        },
+        "finalizers": [
+          "managedcluster-import-controller.open-cluster-management.io/cleanup",
+          "managedclusterinfo.finalizers.open-cluster-management.io",
+          "cluster.open-cluster-management.io/resource-cleanup",
+          "open-cluster-management.io/managedclusterrole",
+          "managedcluster-import-controller.open-cluster-management.io/manifestwork-cleanup",
+          "cluster.open-cluster-management.io/api-resource-cleanup"
+        ]
+      },
+      "spec": {
+        "hubAcceptsClient": true
+      },
+      "status": {
+        "conditions": [
+          {
+            "type": "ManagedClusterImportSucceeded",
+            "status": "True",
+            "reason": "ManagedClusterImported",
+            "message": "Import succeeded"
+          },
+          {
+            "type": "HubAcceptedManagedCluster",
+            "status": "True",
+            "reason": "HubClusterAdminAccepted",
+            "message": "Accepted by hub cluster admin"
+          },
+          {
+            "type": "ManagedClusterJoined",
+            "status": "True",
+            "reason": "ManagedClusterJoined",
+            "message": "Managed cluster joined"
+          },
+          {
+            "type": "ManagedClusterConditionAvailable",
+            "status": "True",
+            "reason": "ManagedClusterAvailable",
+            "message": "Managed cluster is available"
+          }
+        ],
+        "clusterClaims": [
+          {
+            "name": "platform.open-cluster-management.io",
+            "value": "AWS"
+          },
+          {
+            "name": "region.open-cluster-management.io",
+            "value": "mars-north-1"
+          }
+        ]
+      }
+    }
+  ]
+}

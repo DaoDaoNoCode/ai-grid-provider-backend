@@ -62,6 +62,94 @@ ManagedCluster RPCs use the Kubernetes dynamic client against:
 cluster.open-cluster-management.io/v1/managedclusters
 ```
 
+### Cluster membership, state and location
+
+Every cluster the Clusters API returns carries three fields the backend
+derives, so no client has to:
+
+- `status.ai_grid_member`: the `ai-grid/enabled` label is exactly `"true"`,
+  the selector the hub's AI Grid Placements match. A cluster joins or leaves
+  the grid through `Clusters/Update` by setting or removing that label.
+- `status.state` and `status.state_message`: the lifecycle state the ACM
+  console shows (`READY`, `OFFLINE`, `UNKNOWN`, `PENDING_IMPORT`, `IMPORTING`,
+  `IMPORT_FAILED`, `NOT_ACCEPTED`, `DETACHING`; `UNSPECIFIED` before the hub
+  reports any condition), derived from the conditions in the ACM console's
+  order, and the message of the condition that decided it. The order is in
+  the comment on `ManagedClusterState` in
+  `proto/ai_grid/v1/managed_cluster_type.proto`.
+- `status.location`: where the cluster is, for a map, described below.
+
+#### Cluster locations
+
+ACM has no field for a cluster's position, so a hub admin sets it once as
+annotations on the `ManagedCluster`. Annotations, not labels: a label value
+can't start with `-`, and half the world's coordinates are negative.
+
+| Annotation | Value |
+| --- | --- |
+| `ai-grid/latitude` | Decimal degrees, `-90` to `90` (north is positive), for example `39.9612` |
+| `ai-grid/longitude` | Decimal degrees, `-180` to `180` (east is positive), for example `-82.9988` |
+| `ai-grid/site-name` | Optional; the name a map shows, for example `Columbus DC2` |
+
+Write plain decimal numbers: a `.` for the decimal point, a leading `-` for
+south and west, no exponent, no `N`/`S`/`E`/`W`, no degrees-minutes-seconds.
+Surrounding whitespace is ignored.
+
+With `oc` (or the ManagedCluster's YAML editor in the OpenShift console):
+
+```sh
+oc annotate managedcluster site-a \
+  ai-grid/latitude=39.9612 ai-grid/longitude=-82.9988 \
+  ai-grid/site-name="Columbus DC2" --overwrite
+# remove them again
+oc annotate managedcluster site-a ai-grid/latitude- ai-grid/longitude- ai-grid/site-name-
+```
+
+With GitOps, apply a partial `ManagedCluster` server-side, so only these
+annotations are owned by Git and ACM keeps the rest of the object. Quote the
+values: unquoted, YAML reads `-82.9988` as a number and the API server
+refuses it, since annotations are strings.
+
+```yaml
+apiVersion: cluster.open-cluster-management.io/v1
+kind: ManagedCluster
+metadata:
+  name: site-a
+  annotations:
+    ai-grid/latitude: "39.9612"
+    ai-grid/longitude: "-82.9988"
+    ai-grid/site-name: "Columbus DC2"
+    # Argo CD: never prune or delete the ManagedCluster itself; deleting it
+    # detaches the cluster from the hub.
+    argocd.argoproj.io/sync-options: ServerSideApply=true,Prune=false,Delete=false
+```
+
+`oc apply --server-side --field-manager=ai-grid-locations -f site-a.yaml`
+does the same by hand.
+
+What a client gets in `status.location` (`site_name` is always the trimmed
+`ai-grid/site-name`, and `region` the cluster's
+`region.open-cluster-management.io` claim, whatever else applies):
+
+| The cluster has | `latitude`, `longitude` | `source` | `problem` |
+| --- | --- | --- | --- |
+| both annotations, valid | the annotations | `ANNOTATIONS` | empty |
+| `0` and `0` | `0`, `0` (a valid position) | `ANNOTATIONS` | empty |
+| no annotations, a known AWS, Azure or GCP region | the region's city, approximate | `CLOUD_REGION` | empty |
+| no annotations, an unknown region or none (on-premises) | unset | `NONE` | empty |
+| only one of the two | unset | `NONE` | names the missing one |
+| a value that isn't a plain decimal (`40,7`, `40.7N`, DMS, `NaN`, `Inf`, `4e1`) | unset | `NONE` | quotes the value |
+| a value out of range | unset | `NONE` | quotes it and gives the range |
+| out of range, but valid with the two swapped | unset | `NONE` | says they look swapped |
+
+Wrong annotations never fall back to the region: the cluster has no
+coordinates until the admin fixes them, and `problem` (all problems, joined
+with `; `) says what to fix. `Clusters/Update` refuses the same wrong values.
+The region table is `internal/servers/cloud_regions.go`, with its sources;
+a UI should say a `CLOUD_REGION` position is approximate. `make
+dev-fake-locations` serves one cluster per row (see
+[fixtures/README.md](fixtures/README.md)).
+
 
 ### Git catalog
 
@@ -523,6 +611,8 @@ make dev-fake                         # fixtures/default: ten clusters in every 
                                       # (a cluster joins at 20s, one detaches at 30s, ...)
 make dev-fake-poc                     # fixtures/poc: the PoC's four sites and three organizations, static
                                       # (and fixtures/draft/poc for the draft fake)
+make dev-fake-locations               # fixtures/locations: one cluster per status.location edge case
+                                      # (and fixtures/draft/default for the draft fake)
 make dev-fake DEV_GRPC_PORT=19090 DEV_HUB_PORT=19091 DEV_HTTP_PORT=19092 DEV_KEYCLOAK_PORT=19093 DEV_DRAFT_PORT=19094
                                       # when the default ports are taken
 

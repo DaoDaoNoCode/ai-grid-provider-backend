@@ -71,7 +71,7 @@ deploy/acm-hub/                 RHACM hub development assets
 hack/                           development, smoke, and deployment helpers
 cmd/ai-grid-fake-infra/         fake hub API and fake Keycloak for make dev-fake
 internal/fakeinfra/             fakes of the hub API (hub/) and Keycloak (keycloak/); TLS and kubeconfig (devserve/)
-fixtures/                       fake infrastructure fixtures (default/, poc/), converted; see fixtures/README.md
+fixtures/                       fake infrastructure fixtures (default/, poc/ converted; locations/ hand-written); see fixtures/README.md
 proto/ai_grid/draft/v1/         the console's draft proto (ai_grid.draft.v1); proto/buf.gen.draft.yaml generates it
 gen/ai_grid/draft/v1/           generated draft protobuf and gRPC code (no gateway, no OpenAPI)
 internal/fakeinfra/draft/       fake of the draft API, served on --draft-address (make dev-fake :9094)
@@ -200,6 +200,7 @@ Run this for changes affecting Kubernetes behavior, OCM/RHACM resources, Keycloa
 ```bash
 make dev-fake         # real backend on the fake hub (:9091) and fake Keycloak (:9093); gRPC :9090, REST :9092; draft fake :9094
 make dev-fake-poc     # the same on fixtures/poc and fixtures/draft/poc; override ports with DEV_*_PORT=...
+make dev-fake-locations  # the same on fixtures/locations (and fixtures/draft/default for the draft fake), one cluster per status.location edge case
 ```
 
 `make dev-fake` runs the unmodified backend against `internal/fakeinfra` (README.md, "Dev mode with fake infrastructure"). With the console, run `make -j2 dev-bff-fake dev-frontend-fake` in the console repo in a second terminal. It is a development aid, not a substitute for `make kind-test`.
