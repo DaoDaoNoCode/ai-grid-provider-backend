@@ -149,7 +149,13 @@ Hub-side ACM/OCM `ManagedCluster` CRs. **Does not provision spoke clusters.**
   "status": {
     "available": false,
     "joined": false,
-    "available_condition": ""
+    "available_condition": "",
+    "ai_grid_member": true,
+    "state": "MANAGED_CLUSTER_STATE_PENDING_IMPORT",
+    "state_message": "Wait for importing",
+    "location": {
+      "source": "MANAGED_CLUSTER_LOCATION_SOURCE_NONE"
+    }
   }
 }
 ```
@@ -164,7 +170,11 @@ Hub-side ACM/OCM `ManagedCluster` CRs. **Does not provision spoke clusters.**
 | `status.capacity` / `allocatable` | Kubernetes quantity strings by resource name, for example `"cpu": "68"`, `"memory": "273509824Ki"`, `"nvidia.com/gpu": "1"`; absent until the agent reports them |
 | `status.cluster_claims` | `{name, value}` pairs the agent reports, for example the console URL (`consoleurl.cluster.open-cluster-management.io`), platform and product |
 | `status.gpus` | The cluster's GPUs from ACM Search (its nodes' NVIDIA GPU Feature Discovery labels); absent when Search is off, unavailable or hasn't indexed the cluster (`capacity["nvidia.com/gpu"]` still counts schedulable GPUs then). `total` GPU devices as GPU Feature Discovery counts them (physical GPUs; MIG devices on a node with MIG strategy `"single"`, where GFD reports no physical count) and `node_count` GPU nodes; `configurations[]`: `{vendor, product, memory_mib, gpus_per_node, node_count, sharing}`, most nodes first (for a list cell such as "NVIDIA-L4 · 1 per node"); `nodes[]`: `{name, vendor, product, count, memory_mib, family, compute_capability, driver_version, cuda_runtime_version, sharing, instance_type, ready}` by name. `sharing`: `{strategy` (`"none"`, `"time-slicing"`, `"mps"` or `"mig"`), `replicas` (schedulable units per GPU), `mig_capable`, `mig_strategy` (`"single"` / `"mixed"`)`}`. With time-slicing, `capacity["nvidia.com/gpu"]` is `total` × `replicas`. |
-| `metadata.labels["ai-grid/enabled"]` | Enroll-style flag (string `"true"` / `"false"`) |
+| `status.ai_grid_member` | The cluster is an AI Grid member: its `ai-grid/enabled` label is exactly `"true"`. Join or leave by setting or removing that label with PATCH |
+| `status.state` | Lifecycle state, as the ACM console shows it: `MANAGED_CLUSTER_STATE_` + `READY`, `OFFLINE`, `UNKNOWN`, `PENDING_IMPORT`, `IMPORTING`, `IMPORT_FAILED`, `NOT_ACCEPTED` or `DETACHING`; `UNSPECIFIED` before the hub reports any condition (and for a state added after the client was built). Derived from `status.conditions` in the order the comment on `ManagedClusterState` gives |
+| `status.state_message` | The message of the condition that decided `state`, for example `"Managed cluster is available"`; may be empty |
+| `status.location` | Always set. `site_name` (`ai-grid/site-name`, trimmed); `latitude` and `longitude` in decimal degrees, both present or both absent (absent is not `0`: `0, 0` is a valid position); `source`: `MANAGED_CLUSTER_LOCATION_SOURCE_ANNOTATIONS` (the `ai-grid/latitude` / `ai-grid/longitude` annotations), `..._CLOUD_REGION` (approximate, from a known cloud region; say so in the UI) or `..._NONE` (no coordinates); `problem`: what is wrong with the annotations, to show a provider admin as is (empty when nothing is); `region`: the `region.open-cluster-management.io` claim, for example `"us-east-2"`, empty on most on-premises clusters. Wrong annotations give no coordinates, never the region's. README, "Cluster locations", has every case |
+| `metadata.labels["ai-grid/enabled"]` | Enroll-style flag (string `"true"` / `"false"`); read `status.ai_grid_member` instead of comparing it |
 
 ---
 

@@ -171,9 +171,10 @@ message ManagedClusterLocation {
   ManagedClusterLocationSource source = 4;
 
   // What is wrong with the coordinate annotations, for a hub admin to fix,
-  // for example `ai-grid/latitude "40,7" is not a decimal number such as
-  // 40.7128`. Several problems are joined with "; ". Empty when there is
-  // nothing to fix; missing annotations are not a problem.
+  // for example `ai-grid/latitude "40,7" is not a decimal number of
+  // degrees, such as 40.7128 or -74.006`. Several problems are joined with
+  // "; ". Empty when there is nothing to fix; missing annotations are not a
+  // problem. Meant to be shown as is; match on it in no code.
   string problem = 5;
 
   // The cloud region the cluster runs in, from its

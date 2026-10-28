@@ -515,9 +515,10 @@ type ManagedClusterLocation struct {
 	// Where `latitude` and `longitude` come from.
 	Source ManagedClusterLocationSource `protobuf:"varint,4,opt,name=source,proto3,enum=ai_grid.v1.ManagedClusterLocationSource" json:"source,omitempty"`
 	// What is wrong with the coordinate annotations, for a hub admin to fix,
-	// for example `ai-grid/latitude "40,7" is not a decimal number such as
-	// 40.7128`. Several problems are joined with "; ". Empty when there is
-	// nothing to fix; missing annotations are not a problem.
+	// for example `ai-grid/latitude "40,7" is not a decimal number of
+	// degrees, such as 40.7128 or -74.006`. Several problems are joined with
+	// "; ". Empty when there is nothing to fix; missing annotations are not a
+	// problem. Meant to be shown as is; match on it in no code.
 	Problem string `protobuf:"bytes,5,opt,name=problem,proto3" json:"problem,omitempty"`
 	// The cloud region the cluster runs in, from its
 	// `region.open-cluster-management.io` claim (for example "us-east-2"), as

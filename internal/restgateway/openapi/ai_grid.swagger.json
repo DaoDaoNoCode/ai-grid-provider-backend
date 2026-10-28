@@ -1434,7 +1434,7 @@
         },
         "problem": {
           "type": "string",
-          "description": "What is wrong with the coordinate annotations, for a hub admin to fix,\nfor example `ai-grid/latitude \"40,7\" is not a decimal number such as\n40.7128`. Several problems are joined with \"; \". Empty when there is\nnothing to fix; missing annotations are not a problem."
+          "description": "What is wrong with the coordinate annotations, for a hub admin to fix,\nfor example `ai-grid/latitude \"40,7\" is not a decimal number of\ndegrees, such as 40.7128 or -74.006`. Several problems are joined with\n\"; \". Empty when there is nothing to fix; missing annotations are not a\nproblem. Meant to be shown as is; match on it in no code."
         },
         "region": {
           "type": "string",
