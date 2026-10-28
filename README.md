@@ -276,11 +276,14 @@ For models:
   `NotReady`, when a report says not ready; `PENDING`, reason `NoReport`,
   when one is missing; its message says what the cluster reported, such as
   `LLMInferenceService ready; MaaSModelRef not ready`. `status.phase` is
-  `READY` when every placed cluster is ready and every ingress cluster the
-  status Policy is placed on has its `MaaSModelRef` ready;
+  `READY` when every placed cluster is ready and every ingress cluster (the
+  ones the catalog status Policy is placed on, and the ones labelled
+  `ai-grid/enabled: "true"` and `ai-grid/role` `ingress` or `combined`) has
+  its `MaaSModelRef` ready, and there is at least one;
   `PARTIALLY_AVAILABLE`, reason `PartiallyAvailable`, when every ingress
   cluster has the `MaaSModelRef` ready and some, not all, placed clusters are
-  ready; otherwise `PENDING`, reason `NotReady`. The message covers every
+  ready, with at least one ingress cluster too; otherwise `PENDING`, reason
+  `NotReady`. The message covers every
   cluster, such as `Not ready on site-a; ready on site-b`. With no report at
   all, it has no phase, reason `SavedToGit` and no `clusters`. It is never
   `FAILED`: the Policies can't tell a failed model from one that is starting.

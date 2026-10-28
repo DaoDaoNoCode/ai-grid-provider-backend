@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"slices"
@@ -16,6 +17,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/dynamic/fake"
 	clienttesting "k8s.io/client-go/testing"
 )
@@ -102,7 +104,8 @@ func TestModelsGitStatus(t *testing.T) {
 				clusterPolicy("site-a", modelsStatusPolicy, modelReady(false)),
 				clusterPolicy("site-b", modelsStatusPolicy, modelReady(true)),
 			},
-			wantPhase: phasePartial, wantReason: "PartiallyAvailable", wantMessage: "Not ready on site-a; ready on site-b",
+			// No ingress cluster: nothing shows the model published.
+			wantPhase: phasePending, wantReason: "NotReady", wantMessage: "Not ready on site-a; ready on site-b; no ingress cluster has reported the MaaSModelRef",
 			wantClusters: []*aigridv1.ModelClusterStatus{
 				clusterStatus("site-a", phasePending, "NotReady", "LLMInferenceService not ready"),
 				clusterStatus("site-b", phaseReady, "Ready", "LLMInferenceService ready"),
@@ -142,7 +145,7 @@ func TestModelsGitStatus(t *testing.T) {
 				clusterPolicy("site-a", modelsStatusPolicy, modelReady(false)),
 				clusterPolicy("site-b", modelsStatusPolicy, modelReady(false)),
 			},
-			wantPhase: phasePending, wantReason: "NotReady", wantMessage: "Not ready on site-a, site-b",
+			wantPhase: phasePending, wantReason: "NotReady", wantMessage: "Not ready on site-a, site-b; no ingress cluster has reported the MaaSModelRef",
 			wantClusters: []*aigridv1.ModelClusterStatus{
 				clusterStatus("site-a", phasePending, "NotReady", "LLMInferenceService not ready"),
 				clusterStatus("site-b", phasePending, "NotReady", "LLMInferenceService not ready"),
@@ -168,7 +171,7 @@ func TestModelsGitStatus(t *testing.T) {
 				clusterPolicy("site-a", modelsStatusPolicy, modelReady(true)),
 				clusterPolicy("site-b", modelsStatusPolicy, map[string]string{modelsReadyCheck: "models-ready contains no object templates to check, and thus has no violations"}),
 			},
-			wantPhase: phasePartial, wantReason: "PartiallyAvailable", wantMessage: "Ready on site-a; no report from site-b",
+			wantPhase: phasePending, wantReason: "NotReady", wantMessage: "Ready on site-a; no report from site-b; no ingress cluster has reported the MaaSModelRef",
 			wantClusters: []*aigridv1.ModelClusterStatus{
 				clusterStatus("site-a", phaseReady, "Ready", "LLMInferenceService ready"),
 				clusterStatus("site-b", phasePending, "NoReport", "No LLMInferenceService report"),
@@ -179,7 +182,7 @@ func TestModelsGitStatus(t *testing.T) {
 				rootPolicy(modelsStatusPolicy, "site-a"),
 				clusterPolicy("site-a", modelsStatusPolicy, modelReady(true)),
 			},
-			wantPhase: phasePartial, wantReason: "PartiallyAvailable", wantMessage: "Ready on site-a; no report from site-b",
+			wantPhase: phasePending, wantReason: "NotReady", wantMessage: "Ready on site-a; no report from site-b; no ingress cluster has reported the MaaSModelRef",
 			wantClusters: []*aigridv1.ModelClusterStatus{
 				clusterStatus("site-a", phaseReady, "Ready", "LLMInferenceService ready"),
 				clusterStatus("site-b", phasePending, "NoReport", "No LLMInferenceService report"),
@@ -517,4 +520,124 @@ func hubStatusPolicies(t *testing.T) []runtime.Object {
 		objects = append(objects, &unstructured.Unstructured{Object: item})
 	}
 	return objects
+}
+
+// TestModelsGitStatusIngressClusters checks that READY and
+// PARTIALLY_AVAILABLE need ingress evidence. With no ingress report and no
+// cluster labelled as ingress, a model ready on every placed cluster is
+// PENDING, not READY (as on main) or PARTIALLY_AVAILABLE. A cluster labelled
+// ai-grid/enabled "true" and ai-grid/role ingress or combined must report
+// the MaaSModelRef even when the catalog Policy doesn't list it (not placed
+// there yet, or the Policy can't be read).
+func TestModelsGitStatusIngressClusters(t *testing.T) {
+	t.Parallel()
+	ingress := map[string]string{"ai-grid/enabled": "true", "ai-grid/role": "ingress"}
+	modelsReady := []runtime.Object{
+		rootPolicy(modelsStatusPolicy, "site-a", "site-b"),
+		clusterPolicy("site-a", modelsStatusPolicy, modelReady(true)),
+		clusterPolicy("site-b", modelsStatusPolicy, modelReady(true)),
+	}
+	partial := []runtime.Object{
+		rootPolicy(modelsStatusPolicy, "site-a", "site-b"),
+		clusterPolicy("site-a", modelsStatusPolicy, modelReady(false)),
+		clusterPolicy("site-b", modelsStatusPolicy, modelReady(true)),
+	}
+	hubReports := func(ready bool) []runtime.Object {
+		return []runtime.Object{rootPolicy(catalogStatusPolicy, "hub"), clusterPolicy("hub", catalogStatusPolicy, modelRefReady(ready))}
+	}
+	for name, tc := range map[string]struct {
+		objects     []runtime.Object
+		listFails   bool
+		wantPhase   aigridv1.ModelPhase
+		wantMessage string
+		wantSiteA   string
+	}{
+		"no ingress at all": {
+			objects:   modelsReady,
+			wantPhase: phasePending, wantMessage: "Ready on site-a, site-b; no ingress cluster has reported the MaaSModelRef",
+		},
+		"labelled ingress, not reported": {
+			objects:   append(slices.Clone(modelsReady), managedCluster("hub", ingress, true)),
+			wantPhase: phasePending, wantMessage: "Ready on site-a, site-b; no report from hub",
+		},
+		"labelled ingress, reported ready": {
+			objects:   append(append(slices.Clone(modelsReady), hubReports(true)...), managedCluster("hub", ingress, true)),
+			wantPhase: phaseReady, wantMessage: "Ready on hub, site-a, site-b",
+		},
+		"partial, labelled ingress reported ready": {
+			objects:   append(append(slices.Clone(partial), hubReports(true)...), managedCluster("hub", ingress, true)),
+			wantPhase: phasePartial, wantMessage: "Not ready on site-a; ready on hub, site-b",
+			wantSiteA: "LLMInferenceService not ready",
+		},
+		"partial, labelled ingress not reported": {
+			objects:   append(slices.Clone(partial), managedCluster("hub", ingress, true)),
+			wantPhase: phasePending, wantMessage: "Not ready on site-a; ready on site-b; no report from hub",
+			wantSiteA: "LLMInferenceService not ready",
+		},
+		"labelled combined cluster, not reported": {
+			objects: append(append(slices.Clone(modelsReady), hubReports(true)...),
+				managedCluster("hub", ingress, true),
+				managedCluster("site-a", map[string]string{"ai-grid/enabled": "true", "ai-grid/role": "combined"}, true)),
+			wantPhase: phasePending, wantMessage: "Ready on hub, site-b; no report from site-a",
+			wantSiteA: "LLMInferenceService ready; no MaaSModelRef report",
+		},
+		"ingress label on a cluster not in the grid": {
+			objects: append(slices.Clone(modelsReady),
+				managedCluster("hub", map[string]string{"ai-grid/role": "ingress"}, true)),
+			wantPhase: phasePending, wantMessage: "Ready on site-a, site-b; no ingress cluster has reported the MaaSModelRef",
+		},
+		"cluster list fails": {
+			objects:   append(append(slices.Clone(modelsReady), hubReports(true)...), managedCluster("edge", ingress, true)),
+			listFails: true,
+			wantPhase: phaseReady, wantMessage: "Ready on hub, site-a, site-b",
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			ctx := context.Background()
+			// The placed clusters must exist (checkPlacementClusters); a case
+			// may give site-a its own labels.
+			objects := slices.Clone(tc.objects)
+			for _, name := range []string{"site-a", "site-b"} {
+				if !slices.ContainsFunc(objects, func(o runtime.Object) bool {
+					u, ok := o.(*unstructured.Unstructured)
+					return ok && u.GetKind() == "ManagedCluster" && u.GetName() == name
+				}) {
+					objects = append(objects, managedCluster(name, nil, true))
+				}
+			}
+			client := fake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(), map[schema.GroupVersionResource]string{
+				policiesResource:        "PolicyList",
+				managedClustersResource: "ManagedClusterList",
+			}, objects...)
+			srv, err := NewModelsServer().SetLogger(slog.New(slog.DiscardHandler)).SetWriter(gitops.NewMemoryWriter(nil)).
+				SetCatalogStatus(NewCatalogStatusReader(client, "")).SetDynamicClient(client).Build()
+			if err != nil {
+				t.Fatalf("Build() error = %v", err)
+			}
+			if _, err := srv.Create(ctx, &aigridv1.ModelsCreateRequest{Object: gitSampleModel("granite", "site-a", "site-b")}); err != nil {
+				t.Fatalf("Create() error = %v", err)
+			}
+			if tc.listFails {
+				client.PrependReactor("list", "managedclusters", func(clienttesting.Action) (bool, runtime.Object, error) {
+					return true, nil, errors.New("hub unavailable")
+				})
+			}
+			got, err := srv.Get(ctx, &aigridv1.ModelsGetRequest{Id: "granite"})
+			if err != nil {
+				t.Fatalf("Get() error = %v", err)
+			}
+			st := got.GetObject().GetStatus()
+			if st.GetPhase() != tc.wantPhase || st.GetMessage() != tc.wantMessage {
+				t.Errorf("status = %v, %q; want %v, %q", st.GetPhase(), st.GetMessage(), tc.wantPhase, tc.wantMessage)
+			}
+			wantSiteA := tc.wantSiteA
+			if wantSiteA == "" {
+				wantSiteA = "LLMInferenceService ready"
+			}
+			if len(st.GetClusters()) != 2 || st.GetClusters()[0].GetMessage() != wantSiteA {
+				t.Errorf("status.clusters = %v; want site-a %q", st.GetClusters(), wantSiteA)
+			}
+		})
+	}
 }

@@ -294,6 +294,12 @@ message ModelStatus {
 //   - PENDING (reason NotReady): otherwise, including while an ingress
 //     cluster reports the MaaSModelRef not ready or hasn't reported it.
 //
+// The ingress clusters are those the catalog status Policy lists and those
+// labelled ai-grid/enabled "true" and ai-grid/role ingress or combined; each
+// must report. READY and PARTIALLY_AVAILABLE need at least one: with none,
+// nothing shows the model published, so it is PENDING, and the message ends
+// "no ingress cluster has reported the MaaSModelRef".
+//
 // Git mode never reports FAILED: the status Policies can't tell a model
 // that failed from one that is still starting. The order is the one the
 // console's Models page uses (READY, PARTIALLY_AVAILABLE, FAILED, then the

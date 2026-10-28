@@ -553,7 +553,9 @@ from the hub's status Policies, or reason
 `SavedToGit` with no phase when no cluster has reported. Once one has,
 `status.phase` is `MODEL_PHASE_READY`, `MODEL_PHASE_PARTIALLY_AVAILABLE`
 (ready on some placed clusters, not all, and published on every ingress
-cluster) or `MODEL_PHASE_PENDING`, in that order of precedence (the comment on
+cluster) or `MODEL_PHASE_PENDING`; READY and PARTIALLY_AVAILABLE need at least
+one ingress cluster's report, and a cluster labelled `ai-grid/role` `ingress` or
+`combined` must report even before the catalog Policy lists it; in that order of precedence (the comment on
 `ModelPhase`), and `status.clusters` gives each placed cluster's own status
 (below). `spec.main.requests` and `limits` take Kubernetes quantities with
 Kubernetes' container rules: non-negative, whole numbers for extended
