@@ -214,7 +214,7 @@ func (c *Client) GPUNodes(ctx context.Context, labelKeys ...string) ([]Node, err
 				Cluster: string(item.Cluster),
 				Name:    string(item.Name),
 				Labels:  parsePairs(string(item.Label), keep),
-				Ready:   parsePairs(string(item.Condition), map[string]bool{"Ready": true})["Ready"] == "True",
+				Ready:   conditionTrue(parsePairs(string(item.Condition), map[string]bool{"Ready": true})["Ready"]),
 			}
 			if node.Cluster == "" || node.Name == "" {
 				continue
@@ -230,6 +230,13 @@ func (c *Client) GPUNodes(ctx context.Context, labelKeys ...string) ([]Node, err
 	})
 	return nodes, nil
 }
+
+// conditionTrue reads a Node condition's status as Search renders it, the
+// Node's own value ("Ready=True"; Kubernetes admits True, False and
+// Unknown). It is the rule the servers package uses for ManagedCluster
+// conditions (servers.conditionTrue), case-insensitive, so the two can't
+// disagree; this package can't import that one.
+func conditionTrue(status string) bool { return strings.EqualFold(status, "True") }
 
 // parsePairs reads the keys in keep from Search's "k=v; k=v" encoding of a
 // map, and skips the others. A pair without "=" is a key with an empty

@@ -93,6 +93,41 @@ func TestGPUNodesKeepsOnlyTheNamedLabels(t *testing.T) {
 	}
 }
 
+// A node is Ready when Search renders its Ready condition True, read as
+// ManagedCluster conditions are (case-insensitive). The first case is what
+// hf299's search-v2 answered for a ready node (read-only query, 2026-10-28).
+func TestGPUNodesReady(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		condition string
+		ready     bool
+	}{
+		{"DiskPressure=False; MemoryPressure=False; PIDPressure=False; Ready=True", true},
+		{"Ready=True", true},
+		{"Ready=true", true},
+		{"Ready=False", false},
+		{"Ready=Unknown", false},
+		{"DiskPressure=True", false},
+		{"", false},
+	} {
+		t.Run(tc.condition, func(t *testing.T) {
+			t.Parallel()
+			item, _ := json.Marshal(map[string]string{"cluster": "site-a", "name": "n", "condition": tc.condition})
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				_, _ = fmt.Fprintf(w, `{"data":{"searchResult":[{"items":[%s]}]}}`, item)
+			}))
+			defer srv.Close()
+			nodes, err := New(srv.URL, srv.Client()).GPUNodes(context.Background())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(nodes) != 1 || nodes[0].Ready != tc.ready {
+				t.Fatalf("nodes = %+v, want one with Ready %v", nodes, tc.ready)
+			}
+		})
+	}
+}
+
 func TestGPUNodesErrors(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
