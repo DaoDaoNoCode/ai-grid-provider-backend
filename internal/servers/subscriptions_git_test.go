@@ -2,11 +2,13 @@ package servers
 
 import (
 	"context"
+	"errors"
 	"path"
 	"slices"
 	"strings"
 	"testing"
 
+	"buf.build/go/protovalidate"
 	connect "connectrpc.com/connect/v2"
 	aigridv1 "github.com/osac-project/ai-grid-provider-backend/gen/ai_grid/v1"
 	"github.com/osac-project/ai-grid-provider-backend/internal/gitops"
@@ -217,6 +219,8 @@ func TestSubscriptionsGitValidation(t *testing.T) {
 // controller's maxWindowSeconds. With at most four digits, only hours can
 // exceed it; 527041m and 31622401s are refused by the pattern. A refused
 // window commits nothing, and its message names the window and the maximum.
+// The same rules are declared on TokenRateLimit.window (buf.validate), and
+// protovalidate must accept and refuse exactly the windows the server does.
 func TestSubscriptionsGitTokenWindow(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
@@ -245,6 +249,16 @@ func TestSubscriptionsGitTokenWindow(t *testing.T) {
 	} {
 		t.Run(tc.window, func(t *testing.T) {
 			t.Parallel()
+			err := protovalidate.Validate(&aigridv1.TokenRateLimit{Limit: 1, Window: tc.window})
+			var verr *protovalidate.ValidationError
+			switch {
+			case tc.ok && err != nil:
+				t.Fatalf("protovalidate(window %q) error = %v, want none", tc.window, err)
+			case !tc.ok && !errors.As(err, &verr):
+				// A compile or runtime error is not a refusal.
+				t.Fatalf("protovalidate(window %q) error = %v, want a ValidationError", tc.window, err)
+			}
+
 			ctx := context.Background()
 			writer := gitops.NewMemoryWriter(gitModelSeed("sim-model"))
 			srv := mustGitSubscriptionsServer(t, writer)
@@ -268,7 +282,7 @@ func TestSubscriptionsGitTokenWindow(t *testing.T) {
 
 			create := gitSampleSubscription("team-a")
 			create.Spec.ModelRefs[0].TokenRateLimits[0].Window = tc.window
-			_, err := srv.Create(ctx, &aigridv1.SubscriptionsCreateRequest{Object: create})
+			_, err = srv.Create(ctx, &aigridv1.SubscriptionsCreateRequest{Object: create})
 			check("Create", err, 0)
 
 			if _, err := srv.Create(ctx, &aigridv1.SubscriptionsCreateRequest{Object: gitSampleSubscription("team-b")}); err != nil {

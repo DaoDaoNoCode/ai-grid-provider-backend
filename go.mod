@@ -4,6 +4,7 @@ go 1.26.3
 
 require (
 	buf.build/gen/go/bufbuild/protovalidate/protocolbuffers/go v1.36.12-20260825204119-511051f7f437.2
+	buf.build/go/protovalidate v1.4.0
 	connectrpc.com/connect/v2 v2.0.1
 	connectrpc.com/grpchealth/v2 v2.0.0
 	connectrpc.com/grpcreflect/v2 v2.0.0
@@ -12,8 +13,8 @@ require (
 	github.com/go-git/go-git/v5 v5.19.3
 	github.com/google/cel-go v0.31.0
 	github.com/grpc-ecosystem/grpc-gateway/v2 v2.29.0
-	google.golang.org/genproto/googleapis/api v0.0.0-20260706201446-f0a921348800
-	google.golang.org/genproto/googleapis/rpc v0.0.0-20260706201446-f0a921348800
+	google.golang.org/genproto/googleapis/api v0.0.0-20260819154853-08b0e4226688
+	google.golang.org/genproto/googleapis/rpc v0.0.0-20260819154853-08b0e4226688
 	google.golang.org/grpc v1.84.0
 	google.golang.org/protobuf v1.36.12
 	gopkg.in/evanphx/json-patch.v4 v4.12.0
@@ -24,7 +25,8 @@ require (
 )
 
 require (
-	cel.dev/expr v0.25.2 // indirect
+	cel.dev/cel-go v0.32.0 // indirect
+	cel.dev/expr v0.25.3 // indirect
 	dario.cat/mergo v1.0.0 // indirect
 	github.com/Microsoft/go-winio v0.6.2 // indirect
 	github.com/ProtonMail/go-crypto v1.1.6 // indirect
@@ -60,7 +62,7 @@ require (
 	go.yaml.in/yaml/v2 v2.4.2 // indirect
 	go.yaml.in/yaml/v3 v3.0.5 // indirect
 	golang.org/x/crypto v0.57.0 // indirect
-	golang.org/x/exp v0.0.0-20260410095643-746e56fc9e2f // indirect
+	golang.org/x/exp v0.0.0-20260820142414-ca536658362e // indirect
 	golang.org/x/net v0.59.0 // indirect
 	golang.org/x/oauth2 v0.36.0 // indirect
 	golang.org/x/sys v0.48.0 // indirect
