@@ -106,11 +106,37 @@ message ModelContainer {
   // Runtime image. Empty uses the preset's.
   string image = 1;
 
-  // Resource requests (cpu, memory, nvidia.com/gpu, ...).
-  map<string, string> requests = 2;
+  // Resource requests (cpu, memory, nvidia.com/gpu, ...): Kubernetes
+  // quantities, which must parse and be non-negative. The values the
+  // container can't have are InvalidArgument, as Kubernetes would refuse
+  // them on every cluster: an extended resource such as nvidia.com/gpu that
+  // isn't a whole number, a request above its limit, and, for the resources
+  // Kubernetes can't overcommit (extended resources and hugepages-*), a
+  // request that differs from its limit. Such a resource with a request and
+  // no limit is saved with the request as its limit, as Kubernetes requires
+  // the limit (validateResourceRequirements in kubernetes/kubernetes
+  // pkg/apis/core/validation). A rule across the two maps is checked by the
+  // server only.
+  map<string, string> requests = 2 [(buf.validate.field).map = {
+    keys: {
+      string: {min_len: 1}
+    }
+    values: {
+      // A Kubernetes quantity (k8s.io/apimachinery resource.ParseQuantity)
+      // without a minus sign.
+      string: {pattern: "^\\+?[0-9.]+[eEinumkKMGTP]*[-+]?[0-9]*$"}
+    }
+  }];
 
-  // Resource limits.
-  map<string, string> limits = 3;
+  // Resource limits: Kubernetes quantities, as requests.
+  map<string, string> limits = 3 [(buf.validate.field).map = {
+    keys: {
+      string: {min_len: 1}
+    }
+    values: {
+      string: {pattern: "^\\+?[0-9.]+[eEinumkKMGTP]*[-+]?[0-9]*$"}
+    }
+  }];
 
   // Environment variables (for example VLLM_ADDITIONAL_ARGS).
   repeated ModelEnvVar env = 4;

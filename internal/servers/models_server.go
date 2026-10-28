@@ -205,6 +205,7 @@ func (s *ModelsServer) Create(ctx context.Context, req *aigridv1.ModelsCreateReq
 	object.Metadata.Name = id
 	object.Id = id
 
+	normalizeModelResources(object.GetSpec().GetMain())
 	if err := validateModelSpec(object.GetSpec()); err != nil {
 		return nil, err
 	}
@@ -680,6 +681,9 @@ func validateModelSpec(spec *aigridv1.ModelSpec) error {
 		}
 		if strings.ContainsAny(img, " \t") {
 			return connect.NewError(connect.CodeInvalidArgument, "spec.main.image must not contain whitespace")
+		}
+		if err := validateModelResources(main); err != nil {
+			return err
 		}
 	}
 	if placement := spec.GetPlacement(); placement != nil {

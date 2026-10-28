@@ -1658,14 +1658,14 @@
           "additionalProperties": {
             "type": "string"
           },
-          "description": "Resource requests (cpu, memory, nvidia.com/gpu, ...)."
+          "description": "Resource requests (cpu, memory, nvidia.com/gpu, ...): Kubernetes\nquantities, which must parse and be non-negative. The values the\ncontainer can't have are InvalidArgument, as Kubernetes would refuse\nthem on every cluster: an extended resource such as nvidia.com/gpu that\nisn't a whole number, a request above its limit, and, for the resources\nKubernetes can't overcommit (extended resources and hugepages-*), a\nrequest that differs from its limit. Such a resource with a request and\nno limit is saved with the request as its limit, as Kubernetes requires\nthe limit (validateResourceRequirements in kubernetes/kubernetes\npkg/apis/core/validation). A rule across the two maps is checked by the\nserver only."
         },
         "limits": {
           "type": "object",
           "additionalProperties": {
             "type": "string"
           },
-          "description": "Resource limits."
+          "description": "Resource limits: Kubernetes quantities, as requests."
         },
         "env": {
           "type": "array",

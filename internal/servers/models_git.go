@@ -151,6 +151,7 @@ func (s *ModelsServer) gitUpdate(ctx context.Context, req *aigridv1.ModelsUpdate
 	if err := validateGitMetadata(merged.GetMetadata()); err != nil {
 		return nil, err
 	}
+	normalizeModelResources(merged.GetSpec().GetMain())
 	if err := validateModelSpec(merged.GetSpec()); err != nil {
 		return nil, err
 	}
