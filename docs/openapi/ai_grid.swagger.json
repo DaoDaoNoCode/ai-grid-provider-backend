@@ -451,13 +451,36 @@
     },
     "/api/v1/models:listLocations": {
       "get": {
-        "summary": "Locations a model can be placed on: unique sorted names of the\nManagedClusters labelled ai-grid/enabled \"true\" and ai-grid/role\ninference or combined that are Available and Compliant with the ready\nPolicy (AI_GRID_READY_POLICY). A location is a cluster: the values a\nplacement's `name In [...]` takes.",
+        "summary": "Deprecated: use ListPlacementClusters, which answers the same list as\n`clusters`. Despite its name, this RPC answers cluster names, not values\nof the cluster's `location` label (those are in a model's\nstatus.placement.locations). It is removed once its clients have moved\n(docs/API_CONTRACT.md, \"Expand, migrate, contract\").",
         "operationId": "Models_ListLocations",
         "responses": {
           "200": {
             "description": "A successful response.",
             "schema": {
               "$ref": "#/definitions/v1ModelsListLocationsResponse"
+            }
+          },
+          "default": {
+            "description": "An unexpected error response.",
+            "schema": {
+              "$ref": "#/definitions/rpcStatus"
+            }
+          }
+        },
+        "tags": [
+          "Models"
+        ]
+      }
+    },
+    "/api/v1/models:listPlacementClusters": {
+      "get": {
+        "summary": "Clusters a model can be placed on: unique sorted names of the\nManagedClusters labelled ai-grid/enabled \"true\" and ai-grid/role\ninference or combined that are Available and Compliant with the ready\nPolicy (AI_GRID_READY_POLICY). These are the values a placement's\n`name In [...]` takes.",
+        "operationId": "Models_ListPlacementClusters",
+        "responses": {
+          "200": {
+            "description": "A successful response.",
+            "schema": {
+              "$ref": "#/definitions/v1ModelsListPlacementClustersResponse"
             }
           },
           "default": {
@@ -1682,7 +1705,7 @@
           "items": {
             "type": "string"
           },
-          "description": "Selected cluster names."
+          "description": "Selected cluster names (ManagedCluster names): the values of the\nplacement's `name In [...]`, as ListPlacementClusters answers them."
         },
         "conditions": {
           "type": "array",
@@ -1697,7 +1720,7 @@
           "items": {
             "type": "string"
           },
-          "description": "Unique sorted `location` labels of decided clusters (P8). A decided\ncluster without a location label adds nothing. Output only.",
+          "description": "Unique sorted values of the `location` label of the selected clusters\n(P8): where they are, not which clusters they are. Several clusters can\nshare one location, so these are not cluster names and a placement can't\nname them; use selected_clusters for that. A selected cluster without a\nlocation label adds nothing. Output only.",
           "readOnly": true
         }
       },
@@ -2001,10 +2024,23 @@
           "items": {
             "type": "string"
           },
-          "description": "Unique sorted names of AI Grid member clusters that are Available."
+          "description": "Despite the name, cluster names, not `location` labels: the same list as\nModelsListPlacementClustersResponse.clusters."
         }
       },
-      "description": "Response of ListLocations (P7)."
+      "description": "Response of ListLocations (P7). ListLocations is deprecated: use\nListPlacementClusters."
+    },
+    "v1ModelsListPlacementClustersResponse": {
+      "type": "object",
+      "properties": {
+        "clusters": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Unique sorted ManagedCluster names (metadata.name, which ACM also sets as\nthe cluster's `name` label): the values a placement's `name In [...]`\ntakes."
+        }
+      },
+      "description": "Response of ListPlacementClusters."
     },
     "v1ModelsListResponse": {
       "type": "object",

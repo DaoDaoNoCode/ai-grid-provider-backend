@@ -299,6 +299,8 @@ else
   else
     call_grpc 'Models/List' '{}' 'ai_grid.v1.Models/List'
     call_grpc 'Models/List (limit=1)' '{"limit":1}' 'ai_grid.v1.Models/List'
+    call_grpc 'Models/ListPlacementClusters' '{}' 'ai_grid.v1.Models/ListPlacementClusters'
+    call_http 'GET /api/v1/models:listPlacementClusters' GET '/api/v1/models:listPlacementClusters'
     grpcurl -plaintext -d "{\"id\":\"${smoke_model_grpc}\"}" "$addr" \
       ai_grid.v1.Models/Delete >/dev/null 2>&1 || true
 

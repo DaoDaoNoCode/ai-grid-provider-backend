@@ -1134,12 +1134,16 @@ type ModelPlacementStatus struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// Number of clusters selected.
 	NumberOfSelectedClusters int32 `protobuf:"varint,1,opt,name=number_of_selected_clusters,json=numberOfSelectedClusters,proto3" json:"number_of_selected_clusters,omitempty"`
-	// Selected cluster names.
+	// Selected cluster names (ManagedCluster names): the values of the
+	// placement's `name In [...]`, as ListPlacementClusters answers them.
 	SelectedClusters []string `protobuf:"bytes,2,rep,name=selected_clusters,json=selectedClusters,proto3" json:"selected_clusters,omitempty"`
 	// Placement conditions when present.
 	Conditions []*Condition `protobuf:"bytes,3,rep,name=conditions,proto3" json:"conditions,omitempty"`
-	// Unique sorted `location` labels of decided clusters (P8). A decided
-	// cluster without a location label adds nothing. Output only.
+	// Unique sorted values of the `location` label of the selected clusters
+	// (P8): where they are, not which clusters they are. Several clusters can
+	// share one location, so these are not cluster names and a placement can't
+	// name them; use selected_clusters for that. A selected cluster without a
+	// location label adds nothing. Output only.
 	Locations     []string `protobuf:"bytes,4,rep,name=locations,proto3" json:"locations,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache

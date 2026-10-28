@@ -375,7 +375,8 @@ func kustomizationResources(t *testing.T, writer gitops.Writer, p string) []stri
 }
 
 // Git mode reads the ManagedClusters only for status.placement.locations, from
-// each placed cluster's location label, and for ListLocations.
+// each placed cluster's location label, and for ListPlacementClusters and
+// ListLocations.
 func TestModelsGitLocations(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -404,19 +405,25 @@ func TestModelsGitLocations(t *testing.T) {
 		t.Fatalf("List locations = %v, want %v", got, want)
 	}
 
-	// Without a client there are no locations, and no error.
+	// Without a client there are no locations or placement clusters, and no
+	// error.
 	noClient := mustGitModelsServer(t, gitops.NewMemoryWriter(nil))
 	locations, err := noClient.ListLocations(ctx, &aigridv1.ModelsListLocationsRequest{})
 	if err != nil || len(locations.GetLocations()) != 0 {
 		t.Fatalf("ListLocations() without a client = %v, %v", locations, err)
 	}
+	clusters, err := noClient.ListPlacementClusters(ctx, &aigridv1.ModelsListPlacementClustersRequest{})
+	if err != nil || len(clusters.GetClusters()) != 0 {
+		t.Fatalf("ListPlacementClusters() without a client = %v, %v", clusters, err)
+	}
 }
 
-// ListLocations answers the names of the clusters a model can be placed on,
-// since git mode places by cluster name: AI Grid members (ai-grid/enabled and
-// ai-grid/provisioned "true") that are Available, with or without a location
-// label, unique and sorted.
-func TestModelsListLocationsAnswersClusterNames(t *testing.T) {
+// ListPlacementClusters answers the names of the clusters a model can be
+// placed on, since git mode places by cluster name: AI Grid members
+// (ai-grid/enabled "true", role inference or combined, Compliant with the
+// ready Policy) that are Available, with or without a location label, unique
+// and sorted. The deprecated ListLocations answers the same list.
+func TestModelsListPlacementClustersAnswersClusterNames(t *testing.T) {
 	t.Parallel()
 	available := []map[string]interface{}{{"type": "ManagedClusterConditionAvailable", "status": "True"}}
 	unavailable := []map[string]interface{}{{"type": "ManagedClusterConditionAvailable", "status": "False"}}
@@ -451,11 +458,19 @@ func TestModelsListLocationsAnswersClusterNames(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Build() error = %v", err)
 	}
+	want := []string{"site-a", "site-b"}
+	clusters, err := srv.ListPlacementClusters(context.Background(), &aigridv1.ModelsListPlacementClustersRequest{})
+	if err != nil {
+		t.Fatalf("ListPlacementClusters() error = %v", err)
+	}
+	if !slices.Equal(clusters.GetClusters(), want) {
+		t.Fatalf("ListPlacementClusters() = %v, want %v", clusters.GetClusters(), want)
+	}
 	got, err := srv.ListLocations(context.Background(), &aigridv1.ModelsListLocationsRequest{})
 	if err != nil {
 		t.Fatalf("ListLocations() error = %v", err)
 	}
-	if want := []string{"site-a", "site-b"}; !slices.Equal(got.GetLocations(), want) {
+	if !slices.Equal(got.GetLocations(), want) {
 		t.Fatalf("ListLocations() = %v, want %v", got.GetLocations(), want)
 	}
 }

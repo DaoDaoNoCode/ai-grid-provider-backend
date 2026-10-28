@@ -72,13 +72,27 @@ message ModelsDeleteRequest {
 
 message ModelsDeleteResponse {}
 
-// Request of ListLocations (P7). Empty.
+// Request of ListLocations (P7). Empty. ListLocations is deprecated: use
+// ListPlacementClusters.
 message ModelsListLocationsRequest {}
 
-// Response of ListLocations (P7).
+// Response of ListLocations (P7). ListLocations is deprecated: use
+// ListPlacementClusters.
 message ModelsListLocationsResponse {
-  // Unique sorted names of AI Grid member clusters that are Available.
+  // Despite the name, cluster names, not `location` labels: the same list as
+  // ModelsListPlacementClustersResponse.clusters.
   repeated string locations = 1;
+}
+
+// Request of ListPlacementClusters. Empty.
+message ModelsListPlacementClustersRequest {}
+
+// Response of ListPlacementClusters.
+message ModelsListPlacementClustersResponse {
+  // Unique sorted ManagedCluster names (metadata.name, which ACM also sets as
+  // the cluster's `name` label): the values a placement's `name In [...]`
+  // takes.
+  repeated string clusters = 1;
 }
 
 // Models manage LLMInferenceService deployments in the backend's Git catalog,
@@ -119,12 +133,22 @@ service Models {
     option (google.api.http) = {delete: "/api/v1/models/{id}"};
   }
 
-  // Locations a model can be placed on: unique sorted names of the
+  // Deprecated: use ListPlacementClusters, which answers the same list as
+  // `clusters`. Despite its name, this RPC answers cluster names, not values
+  // of the cluster's `location` label (those are in a model's
+  // status.placement.locations). It is removed once its clients have moved
+  // (docs/API_CONTRACT.md, "Expand, migrate, contract").
+  rpc ListLocations(ModelsListLocationsRequest) returns (ModelsListLocationsResponse) {
+    option deprecated = true;
+    option (google.api.http) = {get: "/api/v1/models:listLocations"};
+  }
+
+  // Clusters a model can be placed on: unique sorted names of the
   // ManagedClusters labelled ai-grid/enabled "true" and ai-grid/role
   // inference or combined that are Available and Compliant with the ready
-  // Policy (AI_GRID_READY_POLICY). A location is a cluster: the values a
-  // placement's `name In [...]` takes.
-  rpc ListLocations(ModelsListLocationsRequest) returns (ModelsListLocationsResponse) {
-    option (google.api.http) = {get: "/api/v1/models:listLocations"};
+  // Policy (AI_GRID_READY_POLICY). These are the values a placement's
+  // `name In [...]` takes.
+  rpc ListPlacementClusters(ModelsListPlacementClustersRequest) returns (ModelsListPlacementClustersResponse) {
+    option (google.api.http) = {get: "/api/v1/models:listPlacementClusters"};
   }
 }

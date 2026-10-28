@@ -38,8 +38,8 @@ type ModelsServerBuilder struct {
 // is an LLMInferenceService that Argo CD delivers to the clusters its
 // placement names, and an ExternalModel and MaaSModelRef for the ingress
 // clusters (models_git.go). It never writes to the cluster; it reads the
-// ManagedClusters for locations, and status from the hub through its
-// CatalogStatusReader.
+// ManagedClusters for ListPlacementClusters and status.placement.locations,
+// and status from the hub through its CatalogStatusReader.
 type ModelsServer struct {
 	aigridv1connect.UnimplementedModelsHandler
 	logger                *slog.Logger
@@ -73,9 +73,9 @@ func (b *ModelsServerBuilder) SetWriter(writer gitops.Writer) *ModelsServerBuild
 	return b
 }
 
-// SetDynamicClient sets the hub client that ListLocations and
-// status.placement.locations read ManagedClusters with. Optional; without it
-// both are empty.
+// SetDynamicClient sets the hub client that ListPlacementClusters (and the
+// deprecated ListLocations) and status.placement.locations read
+// ManagedClusters with. Optional; without it all are empty.
 func (b *ModelsServerBuilder) SetDynamicClient(client dynamic.Interface) *ModelsServerBuilder {
 	b.client = client
 	return b
@@ -276,21 +276,40 @@ func listModelItems(ctx context.Context, req *aigridv1.ModelsListRequest, items 
 	}, nil
 }
 
-// ListLocations returns the unique sorted names of the clusters a model can
-// be placed on: the values a placement's name In [...] takes, since git mode
-// places a model by cluster name. A cluster qualifies when it is labelled
-// ai-grid/enabled=true and ai-grid/role inference or combined, is Available,
-// and is Compliant with the ready Policy (provisioned).
+// ListPlacementClusters returns the unique sorted names of the clusters a
+// model can be placed on: the values a placement's name In [...] takes, since
+// git mode places a model by cluster name. A cluster qualifies when it is
+// labelled ai-grid/enabled=true and ai-grid/role inference or combined, is
+// Available, and is Compliant with the ready Policy (provisioned).
+func (s *ModelsServer) ListPlacementClusters(ctx context.Context, _ *aigridv1.ModelsListPlacementClustersRequest) (*aigridv1.ModelsListPlacementClustersResponse, error) {
+	names, err := s.placementClusters(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return &aigridv1.ModelsListPlacementClustersResponse{Clusters: names}, nil
+}
+
+// ListLocations is the deprecated name of ListPlacementClusters: the same
+// cluster names, as locations (docs/API_CONTRACT.md, expand step).
 func (s *ModelsServer) ListLocations(ctx context.Context, _ *aigridv1.ModelsListLocationsRequest) (*aigridv1.ModelsListLocationsResponse, error) {
+	names, err := s.placementClusters(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return &aigridv1.ModelsListLocationsResponse{Locations: names}, nil
+}
+
+// placementClusters answers ListPlacementClusters and ListLocations.
+func (s *ModelsServer) placementClusters(ctx context.Context) ([]string, error) {
 	if s.client == nil {
-		return &aigridv1.ModelsListLocationsResponse{}, nil
+		return nil, nil
 	}
 	list, err := s.client.Resource(managedClustersResource).List(ctx, metav1.ListOptions{})
 	if err != nil {
 		if apierrors.IsNotFound(err) {
-			return &aigridv1.ModelsListLocationsResponse{}, nil
+			return nil, nil
 		}
-		return nil, mapModelAPIError("list locations", "", err)
+		return nil, mapModelAPIError("list placement clusters", "", err)
 	}
 	provisioned := readProvisioning(ctx, s.client, s.logger, s.readyPolicyNamespace, s.readyPolicyName)
 	var names []string
@@ -300,7 +319,7 @@ func (s *ModelsServer) ListLocations(ctx context.Context, _ *aigridv1.ModelsList
 		}
 	}
 	sort.Strings(names)
-	return &aigridv1.ModelsListLocationsResponse{Locations: slices.Compact(names)}, nil
+	return slices.Compact(names), nil
 }
 
 func isModelLocation(item unstructured.Unstructured, provisioned map[string]string) bool {

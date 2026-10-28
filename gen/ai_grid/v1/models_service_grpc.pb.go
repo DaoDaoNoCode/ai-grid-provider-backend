@@ -19,12 +19,13 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	Models_List_FullMethodName          = "/ai_grid.v1.Models/List"
-	Models_Get_FullMethodName           = "/ai_grid.v1.Models/Get"
-	Models_Create_FullMethodName        = "/ai_grid.v1.Models/Create"
-	Models_Update_FullMethodName        = "/ai_grid.v1.Models/Update"
-	Models_Delete_FullMethodName        = "/ai_grid.v1.Models/Delete"
-	Models_ListLocations_FullMethodName = "/ai_grid.v1.Models/ListLocations"
+	Models_List_FullMethodName                  = "/ai_grid.v1.Models/List"
+	Models_Get_FullMethodName                   = "/ai_grid.v1.Models/Get"
+	Models_Create_FullMethodName                = "/ai_grid.v1.Models/Create"
+	Models_Update_FullMethodName                = "/ai_grid.v1.Models/Update"
+	Models_Delete_FullMethodName                = "/ai_grid.v1.Models/Delete"
+	Models_ListLocations_FullMethodName         = "/ai_grid.v1.Models/ListLocations"
+	Models_ListPlacementClusters_FullMethodName = "/ai_grid.v1.Models/ListPlacementClusters"
 )
 
 // ModelsClient is the client API for Models service.
@@ -43,12 +44,19 @@ type ModelsClient interface {
 	Create(ctx context.Context, in *ModelsCreateRequest, opts ...grpc.CallOption) (*ModelsCreateResponse, error)
 	Update(ctx context.Context, in *ModelsUpdateRequest, opts ...grpc.CallOption) (*ModelsUpdateResponse, error)
 	Delete(ctx context.Context, in *ModelsDeleteRequest, opts ...grpc.CallOption) (*ModelsDeleteResponse, error)
-	// Locations a model can be placed on: unique sorted names of the
+	// Deprecated: Do not use.
+	// Deprecated: use ListPlacementClusters, which answers the same list as
+	// `clusters`. Despite its name, this RPC answers cluster names, not values
+	// of the cluster's `location` label (those are in a model's
+	// status.placement.locations). It is removed once its clients have moved
+	// (docs/API_CONTRACT.md, "Expand, migrate, contract").
+	ListLocations(ctx context.Context, in *ModelsListLocationsRequest, opts ...grpc.CallOption) (*ModelsListLocationsResponse, error)
+	// Clusters a model can be placed on: unique sorted names of the
 	// ManagedClusters labelled ai-grid/enabled "true" and ai-grid/role
 	// inference or combined that are Available and Compliant with the ready
-	// Policy (AI_GRID_READY_POLICY). A location is a cluster: the values a
-	// placement's `name In [...]` takes.
-	ListLocations(ctx context.Context, in *ModelsListLocationsRequest, opts ...grpc.CallOption) (*ModelsListLocationsResponse, error)
+	// Policy (AI_GRID_READY_POLICY). These are the values a placement's
+	// `name In [...]` takes.
+	ListPlacementClusters(ctx context.Context, in *ModelsListPlacementClustersRequest, opts ...grpc.CallOption) (*ModelsListPlacementClustersResponse, error)
 }
 
 type modelsClient struct {
@@ -109,10 +117,21 @@ func (c *modelsClient) Delete(ctx context.Context, in *ModelsDeleteRequest, opts
 	return out, nil
 }
 
+// Deprecated: Do not use.
 func (c *modelsClient) ListLocations(ctx context.Context, in *ModelsListLocationsRequest, opts ...grpc.CallOption) (*ModelsListLocationsResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(ModelsListLocationsResponse)
 	err := c.cc.Invoke(ctx, Models_ListLocations_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *modelsClient) ListPlacementClusters(ctx context.Context, in *ModelsListPlacementClustersRequest, opts ...grpc.CallOption) (*ModelsListPlacementClustersResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ModelsListPlacementClustersResponse)
+	err := c.cc.Invoke(ctx, Models_ListPlacementClusters_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -135,12 +154,19 @@ type ModelsServer interface {
 	Create(context.Context, *ModelsCreateRequest) (*ModelsCreateResponse, error)
 	Update(context.Context, *ModelsUpdateRequest) (*ModelsUpdateResponse, error)
 	Delete(context.Context, *ModelsDeleteRequest) (*ModelsDeleteResponse, error)
-	// Locations a model can be placed on: unique sorted names of the
+	// Deprecated: Do not use.
+	// Deprecated: use ListPlacementClusters, which answers the same list as
+	// `clusters`. Despite its name, this RPC answers cluster names, not values
+	// of the cluster's `location` label (those are in a model's
+	// status.placement.locations). It is removed once its clients have moved
+	// (docs/API_CONTRACT.md, "Expand, migrate, contract").
+	ListLocations(context.Context, *ModelsListLocationsRequest) (*ModelsListLocationsResponse, error)
+	// Clusters a model can be placed on: unique sorted names of the
 	// ManagedClusters labelled ai-grid/enabled "true" and ai-grid/role
 	// inference or combined that are Available and Compliant with the ready
-	// Policy (AI_GRID_READY_POLICY). A location is a cluster: the values a
-	// placement's `name In [...]` takes.
-	ListLocations(context.Context, *ModelsListLocationsRequest) (*ModelsListLocationsResponse, error)
+	// Policy (AI_GRID_READY_POLICY). These are the values a placement's
+	// `name In [...]` takes.
+	ListPlacementClusters(context.Context, *ModelsListPlacementClustersRequest) (*ModelsListPlacementClustersResponse, error)
 	mustEmbedUnimplementedModelsServer()
 }
 
@@ -168,6 +194,9 @@ func (UnimplementedModelsServer) Delete(context.Context, *ModelsDeleteRequest) (
 }
 func (UnimplementedModelsServer) ListLocations(context.Context, *ModelsListLocationsRequest) (*ModelsListLocationsResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method ListLocations not implemented")
+}
+func (UnimplementedModelsServer) ListPlacementClusters(context.Context, *ModelsListPlacementClustersRequest) (*ModelsListPlacementClustersResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method ListPlacementClusters not implemented")
 }
 func (UnimplementedModelsServer) mustEmbedUnimplementedModelsServer() {}
 func (UnimplementedModelsServer) testEmbeddedByValue()                {}
@@ -298,6 +327,24 @@ func _Models_ListLocations_Handler(srv interface{}, ctx context.Context, dec fun
 	return interceptor(ctx, in, info, handler)
 }
 
+func _Models_ListPlacementClusters_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ModelsListPlacementClustersRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ModelsServer).ListPlacementClusters(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Models_ListPlacementClusters_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ModelsServer).ListPlacementClusters(ctx, req.(*ModelsListPlacementClustersRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // Models_ServiceDesc is the grpc.ServiceDesc for Models service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -328,6 +375,10 @@ var Models_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "ListLocations",
 			Handler:    _Models_ListLocations_Handler,
+		},
+		{
+			MethodName: "ListPlacementClusters",
+			Handler:    _Models_ListPlacementClusters_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

@@ -29,6 +29,9 @@ import (
 	"github.com/osac-project/ai-grid-provider-backend/internal/keycloak"
 	"github.com/osac-project/ai-grid-provider-backend/internal/servers"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
@@ -523,6 +526,67 @@ func TestRealCatalogStatusOnFakeHub(t *testing.T) {
 	}
 	if phase := sub.GetObject().GetStatus().GetPhase(); phase != "Active" {
 		t.Fatalf("subscription phase = %q, want Active", phase)
+	}
+}
+
+// The real Models server on the fake hub: ListPlacementClusters and the
+// deprecated ListLocations answer cluster names, status.placement.locations
+// answers location labels. The stock fixtures have no ai-grid/role label, so
+// the test adds it the way an admin
+// would, with a merge patch.
+func TestRealModelsPlacementClustersOnFakeHub(t *testing.T) {
+	h, srv := startHub(t)
+	cfg := &rest.Config{Host: srv.URL, BearerToken: h.ServiceAccountToken(), QPS: 1000, Burst: 1000}
+	client, err := dynamic.NewForConfig(cfg)
+	if err != nil {
+		t.Fatalf("dynamic.NewForConfig() error = %v", err)
+	}
+	ctx := context.Background()
+	managedClusters := client.Resource(schema.GroupVersionResource{Group: "cluster.open-cluster-management.io", Version: "v1", Resource: "managedclusters"})
+	for _, name := range []string{"site-paris-1", "site-madrid-1", "site-ashburn-1"} {
+		patch := []byte(`{"metadata":{"labels":{"ai-grid/role":"inference"}}}`)
+		if _, err := managedClusters.Patch(ctx, name, types.MergePatchType, patch, metav1.PatchOptions{}); err != nil {
+			t.Fatalf("label %s: %v", name, err)
+		}
+	}
+	models, err := servers.NewModelsServer().SetLogger(slog.New(slog.DiscardHandler)).
+		SetWriter(gitops.NewMemoryWriter(nil)).SetCatalogStatus(servers.NewCatalogStatusReader(client, "")).
+		SetDynamicClient(client).Build()
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+
+	// site-madrid-1 is not Available and site-ashburn-1 is not Compliant with
+	// the ready Policy in fixtures/default.
+	clusters, err := models.ListPlacementClusters(ctx, &aigridv1.ModelsListPlacementClustersRequest{})
+	if err != nil {
+		t.Fatalf("ListPlacementClusters() error = %v", err)
+	}
+	if want := []string{"site-paris-1"}; !slices.Equal(clusters.GetClusters(), want) {
+		t.Fatalf("ListPlacementClusters() = %v, want %v", clusters.GetClusters(), want)
+	}
+	locations, err := models.ListLocations(ctx, &aigridv1.ModelsListLocationsRequest{})
+	if err != nil || !slices.Equal(locations.GetLocations(), clusters.GetClusters()) {
+		t.Fatalf("ListLocations() = %v, %v; want %v", locations.GetLocations(), err, clusters.GetClusters())
+	}
+
+	placed := func(id string, names ...string) *aigridv1.Model {
+		replicas := int32(1)
+		return &aigridv1.Model{Id: id, Spec: &aigridv1.ModelSpec{
+			Model:    &aigridv1.ModelSource{Uri: "hf://ibm-granite/granite-3b"},
+			Replicas: &replicas,
+			Placement: &aigridv1.ModelPlacement{LabelSelector: &aigridv1.ModelLabelSelector{
+				MatchExpressions: []*aigridv1.ModelLabelSelectorRequirement{{Key: "name", Operator: "In", Values: names}},
+			}},
+		}}
+	}
+	created, err := models.Create(ctx, &aigridv1.ModelsCreateRequest{Object: placed("granite-3b", "site-madrid-1", "site-paris-1")})
+	if err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	st := created.GetObject().GetStatus().GetPlacement()
+	if !slices.Equal(st.GetSelectedClusters(), []string{"site-madrid-1", "site-paris-1"}) || !slices.Equal(st.GetLocations(), []string{"madrid", "paris"}) {
+		t.Fatalf("status.placement = %v, want clusters [site-madrid-1 site-paris-1] at [madrid paris]", st)
 	}
 }
 

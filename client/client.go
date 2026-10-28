@@ -220,8 +220,20 @@ func (c *Client) DeleteModel(ctx context.Context, id string) error {
 	return err
 }
 
-// ListModelLocations returns the unique sorted names of the Available AI Grid
-// member clusters, the clusters a model can be placed on.
+// ListModelPlacementClusters returns the unique sorted names of the clusters a
+// model can be placed on: the values a placement's name In [...] takes.
+func (c *Client) ListModelPlacementClusters(ctx context.Context) ([]string, error) {
+	response, err := c.models.ListPlacementClusters(ctx, &aigridv1.ModelsListPlacementClustersRequest{})
+	if err != nil {
+		return nil, err
+	}
+	return response.GetClusters(), nil
+}
+
+// ListModelLocations calls the deprecated Models/ListLocations, which answers
+// the same cluster names as ListModelPlacementClusters.
+//
+// Deprecated: use ListModelPlacementClusters.
 func (c *Client) ListModelLocations(ctx context.Context) ([]string, error) {
 	response, err := c.models.ListLocations(ctx, &aigridv1.ModelsListLocationsRequest{})
 	if err != nil {
