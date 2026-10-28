@@ -212,6 +212,80 @@ func TestSubscriptionsGitValidation(t *testing.T) {
 	assertConnectCode(t, err, connect.CodeNotFound)
 }
 
+// TestSubscriptionsGitTokenWindow checks the rate-limit window on Create and
+// Update: the MaaS pattern, and at most 366 days (8784h), the MaaS
+// controller's maxWindowSeconds. With at most four digits, only hours can
+// exceed it; 527041m and 31622401s are refused by the pattern. A refused
+// window commits nothing, and its message names the window and the maximum.
+func TestSubscriptionsGitTokenWindow(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		window string
+		ok     bool
+	}{
+		{"1s", true},
+		{"9999s", true},
+		{"1m", true},
+		{"9999m", true},
+		{"1h", true},
+		{"24h", true},
+		{"8784h", true},
+		{"8785h", false},
+		{"9999h", false},
+		{"10000s", false},
+		{"31622400s", false},
+		{"31622401s", false},
+		{"10000m", false},
+		{"527040m", false},
+		{"527041m", false},
+		{"10000h", false},
+		{"0h", false},
+		{"1d", false},
+		{"", false},
+	} {
+		t.Run(tc.window, func(t *testing.T) {
+			t.Parallel()
+			ctx := context.Background()
+			writer := gitops.NewMemoryWriter(gitModelSeed("sim-model"))
+			srv := mustGitSubscriptionsServer(t, writer)
+			check := func(op string, err error, commits int) {
+				t.Helper()
+				if tc.ok {
+					if err != nil {
+						t.Fatalf("%s(window %q) error = %v", op, tc.window, err)
+					}
+					return
+				}
+				assertConnectCode(t, err, connect.CodeInvalidArgument)
+				msg := err.Error()
+				if !strings.Contains(msg, `"`+tc.window+`"`) || !strings.Contains(msg, "8784h") {
+					t.Fatalf("%s(window %q) message = %q, want the window and 8784h", op, tc.window, msg)
+				}
+				if n := len(writer.Messages()); n != commits {
+					t.Fatalf("%s(window %q) commits = %d, want %d", op, tc.window, n, commits)
+				}
+			}
+
+			create := gitSampleSubscription("team-a")
+			create.Spec.ModelRefs[0].TokenRateLimits[0].Window = tc.window
+			_, err := srv.Create(ctx, &aigridv1.SubscriptionsCreateRequest{Object: create})
+			check("Create", err, 0)
+
+			if _, err := srv.Create(ctx, &aigridv1.SubscriptionsCreateRequest{Object: gitSampleSubscription("team-b")}); err != nil {
+				t.Fatalf("Create(team-b) error = %v", err)
+			}
+			commits := len(writer.Messages())
+			update := gitSampleSubscription("team-b")
+			update.Spec.ModelRefs[0].TokenRateLimits[0].Window = tc.window
+			_, err = srv.Update(ctx, &aigridv1.SubscriptionsUpdateRequest{
+				Object:     update,
+				UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.model_refs"}},
+			})
+			check("Update", err, commits)
+		})
+	}
+}
+
 // TestSubscriptionsGitOwnerGroups checks the organization qualification:
 // groups are written as <organization>/<group> in both the subscription and
 // its policy, and read back bare. A group already qualified with the same

@@ -2463,7 +2463,7 @@
         },
         "window": {
           "type": "string",
-          "description": "Window duration, e.g. \"1m\", \"30s\", \"2h\". Pattern: ^[1-9]\\d{0,3}(s|m|h)$."
+          "description": "Window duration, e.g. \"1m\", \"30s\", \"2h\". Pattern: ^[1-9]\\d{0,3}(s|m|h)$,\nand at most 8784h (366 days), the longest window MaaS accepts."
         }
       },
       "description": "TokenRateLimit caps token usage over a time window."

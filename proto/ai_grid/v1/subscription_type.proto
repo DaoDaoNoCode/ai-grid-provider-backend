@@ -111,7 +111,8 @@ message TokenRateLimit {
   // Maximum tokens allowed in the window. CRD range is typically 1..1e9.
   int64 limit = 1;
 
-  // Window duration, e.g. "1m", "30s", "2h". Pattern: ^[1-9]\d{0,3}(s|m|h)$.
+  // Window duration, e.g. "1m", "30s", "2h". Pattern: ^[1-9]\d{0,3}(s|m|h)$,
+  // and at most 8784h (366 days), the longest window MaaS accepts.
   string window = 2;
 }
 

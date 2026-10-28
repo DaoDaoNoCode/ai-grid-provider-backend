@@ -418,7 +418,8 @@ type TokenRateLimit struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// Maximum tokens allowed in the window. CRD range is typically 1..1e9.
 	Limit int64 `protobuf:"varint,1,opt,name=limit,proto3" json:"limit,omitempty"`
-	// Window duration, e.g. "1m", "30s", "2h". Pattern: ^[1-9]\d{0,3}(s|m|h)$.
+	// Window duration, e.g. "1m", "30s", "2h". Pattern: ^[1-9]\d{0,3}(s|m|h)$,
+	// and at most 8784h (366 days), the longest window MaaS accepts.
 	Window        string `protobuf:"bytes,2,opt,name=window,proto3" json:"window,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache

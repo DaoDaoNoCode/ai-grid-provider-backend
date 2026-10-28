@@ -671,7 +671,7 @@ Subscription ids must leave room for the `-policy` suffix (max 56 chars).
 | --- | --- | --- |
 | `name` | string | MaaSModelRef name |
 | `namespace` | string | Defaults to the subscription namespace on write |
-| `token_rate_limits[]` | object | Required unless `unlimited` |
+| `token_rate_limits[]` | object | Required unless `unlimited`. `{ limit, window }`: `limit` 1 to 1000000000; `window` matches `^[1-9]\d{0,3}(s\|m\|h)$` and is at most `8784h` (366 days, the MaaS maximum), else `InvalidArgument` |
 | `unlimited` | bool | Mutually exclusive with `token_rate_limits` |
 | `billing_rate.per_token` | string | Optional |
 | `guardrails[]` | object | Per-model guardrails |
