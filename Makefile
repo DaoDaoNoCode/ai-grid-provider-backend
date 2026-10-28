@@ -52,7 +52,7 @@ HTTP_ADDR ?= http://localhost:8081
 .PHONY: help all binary build-bin build test unit smoke smoke-openshift vet fmt-check lint verify generate check-generated \
 	image container push build-and-push run \
 	keycloak-up keycloak-down keycloak-seed \
-	build-fake-infra dev-fake dev-fake-poc dev-catalog-reset dev-catalog-log \
+	build-fake-infra dev-fake dev-fake-poc dev-fake-locations dev-catalog-reset dev-catalog-log \
 	prereqs kind-test clean-kind openshift-up openshift-down acm-hub-up acm-hub-down
 
 help: ## Show available targets
@@ -98,6 +98,10 @@ dev-fake: build build-fake-infra ## Run the real backend on a fake hub and Keycl
 # The same on the PoC preset (fixtures/poc, fixtures/draft/poc).
 dev-fake-poc: ## dev-fake on the PoC preset (fixtures/poc, fixtures/draft/poc)
 	@$(MAKE) --no-print-directory dev-fake DEV_FIXTURES=fixtures/poc DEV_DRAFT_FIXTURES=fixtures/draft/poc
+
+# One cluster per edge case of status.location (fixtures/locations).
+dev-fake-locations: ## dev-fake on the cluster location edge cases (fixtures/locations)
+	@$(MAKE) --no-print-directory dev-fake DEV_FIXTURES=fixtures/locations
 
 dev-catalog-reset: ## Delete the dev catalog repository (bin/dev-catalog.git) and create it again
 	@DEV_CATALOG="$(DEV_CATALOG)" bash hack/dev-catalog.sh reset

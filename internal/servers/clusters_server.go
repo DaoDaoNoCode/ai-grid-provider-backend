@@ -435,20 +435,22 @@ func checkConsoleKeys(kind string, current, requested map[string]string) error {
 }
 
 // checkCoordinates refuses an ai-grid/latitude or ai-grid/longitude
-// annotation that isn't a finite number within -90..90 or -180..180. Blank
-// values and surrounding whitespace are allowed, as readers ignore them.
+// annotation that isn't a plain decimal number within -90..90 or
+// -180..180, parsed as status.location parses it (parseDecimalDegrees), so
+// a value Update accepts never reads back as a problem of format or range.
+// Blank values and surrounding whitespace are allowed, as the reader
+// ignores them.
 func checkCoordinates(annotations map[string]string) error {
 	for _, c := range []struct {
 		key   string
 		limit float64
-	}{{"ai-grid/latitude", 90}, {"ai-grid/longitude", 180}} {
+	}{{annotationLatitude, maxLatitude}, {annotationLongitude, maxLongitude}} {
 		v := strings.TrimSpace(annotations[c.key])
 		if v == "" {
 			continue
 		}
-		f, err := strconv.ParseFloat(v, 64)
-		if err != nil || math.IsNaN(f) || math.IsInf(f, 0) || f < -c.limit || f > c.limit {
-			return connect.Errorf(connect.CodeInvalidArgument, "annotation %q must be a number between %v and %v, got %q", c.key, -c.limit, c.limit, v)
+		if f, ok := parseDecimalDegrees(v); !ok || math.Abs(f) > c.limit {
+			return connect.Errorf(connect.CodeInvalidArgument, "annotation %q must be a decimal number between %v and %v, got %q", c.key, -c.limit, c.limit, v)
 		}
 	}
 	return nil

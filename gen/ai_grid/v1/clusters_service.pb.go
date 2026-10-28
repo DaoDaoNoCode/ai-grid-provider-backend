@@ -341,7 +341,8 @@ type ClustersUpdateRequest struct {
 	// and the location label, so one on the hub but left out is removed. Other
 	// keys may be sent back as read; adding or changing one is InvalidArgument,
 	// and so is an ai-grid/latitude or ai-grid/longitude annotation that isn't
-	// a number within -90..90 or -180..180.
+	// a plain decimal number (no exponent, no comma, no N/S/E/W) within
+	// -90..90 or -180..180, the values status.location reads.
 	Object     *ManagedCluster        `protobuf:"bytes,1,opt,name=object,proto3" json:"object,omitempty"`
 	UpdateMask *fieldmaskpb.FieldMask `protobuf:"bytes,2,opt,name=update_mask,json=updateMask,proto3" json:"update_mask,omitempty"`
 	// Lock requires object.metadata.version: without one the request is

@@ -1,0 +1,14 @@
+{
+  "_comment": "Who the fake hub accepts, as in fixtures/default/access.json: a request without a bearer token or with one of rejectedTokens is 401, one of deniedTokens gets allowed: false and 403, any other token is allowed while defaultAllowed is true. serviceAccount is the identity bin/fake-kubeconfig gives the backend. Hand-written for this preset, not converted.",
+  "defaultAllowed": true,
+  "deniedTokens": [
+    "viewer-token"
+  ],
+  "rejectedTokens": [
+    "expired-token"
+  ],
+  "serviceAccount": {
+    "token": "fake-ai-grid-provider-backend-sa-token",
+    "username": "system:serviceaccount:ai-grid:ai-grid-provider-backend"
+  }
+}

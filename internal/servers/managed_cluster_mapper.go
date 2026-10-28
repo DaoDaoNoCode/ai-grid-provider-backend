@@ -31,6 +31,7 @@ func managedClusterFromUnstructured(item unstructured.Unstructured) *aigridv1.Ma
 	status := managedClusterStatusFromUnstructured(item)
 	status.AiGridMember = isAIGridMember(item.GetLabels())
 	status.State, status.StateMessage = managedClusterState(meta.DeletionTimestamp != nil, status.GetConditions())
+	status.Location = managedClusterLocation(item.GetAnnotations(), status.GetClusterClaims())
 
 	return &aigridv1.ManagedCluster{
 		Id:       name,

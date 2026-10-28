@@ -44,7 +44,12 @@ var fixturesDir = filepath.Join("..", "..", "fixtures", "default")
 
 func startHub(t *testing.T) (*hub.Hub, *httptest.Server) {
 	t.Helper()
-	fx, err := hub.LoadFixtures(fixturesDir)
+	return startHubFrom(t, fixturesDir)
+}
+
+func startHubFrom(t *testing.T, dir string) (*hub.Hub, *httptest.Server) {
+	t.Helper()
+	fx, err := hub.LoadFixtures(dir)
 	if err != nil {
 		t.Fatalf("hub.LoadFixtures() error = %v", err)
 	}
@@ -187,6 +192,77 @@ func TestRealClustersServerStateOnFakeHub(t *testing.T) {
 	}
 	if !maps.Equal(got, want) {
 		t.Fatalf("state and membership = %v\nwant %v", got, want)
+	}
+}
+
+// TestRealClustersServerLocationsOnFakeHub reads every cluster of
+// fixtures/locations, one per location edge case, through the real server.
+func TestRealClustersServerLocationsOnFakeHub(t *testing.T) {
+	h, srv := startHubFrom(t, filepath.Join("..", "..", "fixtures", "locations"))
+	s := clustersServer(t, &rest.Config{Host: srv.URL, BearerToken: h.ServiceAccountToken()})
+
+	list, err := s.List(context.Background(), &aigridv1.ClustersListRequest{})
+	if err != nil {
+		t.Fatalf("List() error = %v", err)
+	}
+	const (
+		none        = aigridv1.ManagedClusterLocationSource_MANAGED_CLUSTER_LOCATION_SOURCE_NONE
+		annotations = aigridv1.ManagedClusterLocationSource_MANAGED_CLUSTER_LOCATION_SOURCE_ANNOTATIONS
+	)
+	type want struct {
+		source         aigridv1.ManagedClusterLocationSource
+		lat, lon       float64 // when source isn't NONE
+		siteName       string
+		region         string
+		problemPrefix  string // "" means no problem
+		problemPresent bool
+	}
+	wants := map[string]want{
+		"loc-annotations":           {source: annotations, lat: 40.7128, lon: -74.006, siteName: "New York DC1"},
+		"loc-whitespace":            {source: annotations, lat: 52.52, lon: 13.405, siteName: "Berlin DC1"},
+		"loc-null-island":           {source: annotations, lat: 0, lon: 0, siteName: "Null Island"},
+		"loc-onprem-none":           {source: none},
+		"loc-site-name-only":        {source: none, siteName: "Edge closet 3"},
+		"loc-annotations-in-region": {source: annotations, lat: 39.9612, lon: -82.9988, siteName: "Columbus DC2", region: "us-east-2"},
+		"loc-aws-region":            {source: none, region: "us-east-2"},
+		"loc-aws-region-named":      {source: none, siteName: "Frankfurt cloud", region: "eu-central-1"},
+		"loc-azure-region":          {source: none, region: "westeurope"},
+		"loc-gcp-region":            {source: none, region: "asia-northeast1"},
+		"loc-unknown-region":        {source: none, region: "mars-north-1"},
+	}
+	for name, prefix := range map[string]string{
+		"loc-latitude-only":     "ai-grid/latitude is set but ai-grid/longitude is not",
+		"loc-decimal-comma":     `ai-grid/latitude "40,7128" is not a decimal number`,
+		"loc-hemisphere":        `ai-grid/latitude "40.7128N" is not a decimal number`,
+		"loc-dms":               `ai-grid/latitude "40°42'46\"N" is not a decimal number`,
+		"loc-nan-inf":           `ai-grid/latitude "NaN" is not a decimal number`,
+		"loc-out-of-range":      `ai-grid/latitude "95" is outside -90..90; ai-grid/longitude "200" is outside -180..180`,
+		"loc-swapped":           `ai-grid/latitude "151.2093" and ai-grid/longitude "-33.8688" look swapped`,
+		"loc-invalid-in-region": `ai-grid/latitude "39,96" is not a decimal number`,
+	} {
+		w := want{source: none, problemPrefix: prefix, problemPresent: true}
+		switch name {
+		case "loc-swapped":
+			w.siteName = "Sydney DC1"
+		case "loc-invalid-in-region":
+			// Invalid annotations don't fall back to the region, which is still reported.
+			w.region = "us-east-2"
+		}
+		wants[name] = w
+	}
+
+	if len(list.GetItems()) != len(wants) {
+		t.Fatalf("List() = %d clusters, want %d", len(list.GetItems()), len(wants))
+	}
+	for _, c := range list.GetItems() {
+		loc, w := c.GetStatus().GetLocation(), wants[c.GetId()]
+		hasCoordinates := loc.Latitude != nil && loc.Longitude != nil
+		if loc.GetSource() != w.source || loc.GetSiteName() != w.siteName || loc.GetRegion() != w.region ||
+			hasCoordinates != (w.source != none) || (loc.Latitude == nil) != (loc.Longitude == nil) ||
+			(hasCoordinates && (loc.GetLatitude() != w.lat || loc.GetLongitude() != w.lon)) ||
+			(loc.GetProblem() != "") != w.problemPresent || !strings.HasPrefix(loc.GetProblem(), w.problemPrefix) {
+			t.Errorf("%s: location = %v, want %+v", c.GetId(), loc, w)
+		}
 	}
 }
 
