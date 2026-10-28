@@ -77,3 +77,42 @@ func TestModelsGitImageFromPreset(t *testing.T) {
 		t.Fatalf("refused calls committed %d times", n-commits)
 	}
 }
+
+// TestModelsGitEmptyBaseRef checks that a blank preset name is refused: it
+// would count as a preset for the image rule, then read back as no preset
+// (model_mapper.go drops an empty baseRefs name), leaving a model with no
+// image that no later Update accepts. The base_refs rule (buf.validate) must
+// refuse the same names.
+func TestModelsGitEmptyBaseRef(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	writer := gitops.NewMemoryWriter(nil)
+	srv := mustGitModelsServer(t, writer)
+	for name, refs := range map[string][]string{
+		"empty":          {""},
+		"blank":          {" "},
+		"tab":            {"\t"},
+		"inner space":    {"ai-grid gpu"},
+		"one of two":     {"ai-grid-gpu", ""},
+		"padded":         {" ai-grid-gpu"},
+		"newline inside": {"ai-grid-gpu\n"},
+	} {
+		model := presetModel("blank-ref", refs...)
+		var verr *protovalidate.ValidationError
+		if err := protovalidate.Validate(model.GetSpec()); !errors.As(err, &verr) {
+			t.Errorf("%s: protovalidate(base_refs %q) error = %v, want a ValidationError", name, refs, err)
+		}
+		_, err := srv.Create(ctx, &aigridv1.ModelsCreateRequest{Object: model})
+		if connect.CodeOf(err) != connect.CodeInvalidArgument {
+			t.Errorf("%s: Create(base_refs %q) error = %v, want InvalidArgument", name, refs, err)
+		}
+	}
+	if _, err := srv.Create(ctx, &aigridv1.ModelsCreateRequest{Object: presetModel("granite", "ai-grid-gpu")}); err != nil {
+		t.Fatalf("Create(base_refs [ai-grid-gpu]) error = %v", err)
+	}
+	_, err := srv.Update(ctx, &aigridv1.ModelsUpdateRequest{Object: presetModel("granite", ""), UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.base_refs"}}})
+	assertConnectCode(t, err, connect.CodeInvalidArgument)
+	if n := len(writer.Messages()); n != 1 {
+		t.Fatalf("commits = %d, want 1 (only the valid create)", n)
+	}
+}

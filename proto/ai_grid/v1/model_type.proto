@@ -44,8 +44,11 @@ message ModelSpec {
   // Static replica count. Mutually exclusive with scaling.
   optional int32 replicas = 2;
 
-  // LLMInferenceServiceConfig preset names merged under the spec.
-  repeated string base_refs = 3;
+  // LLMInferenceServiceConfig preset names merged under the spec. Each is a
+  // name with no whitespace; an empty or blank name is InvalidArgument.
+  repeated string base_refs = 3 [(buf.validate.field).repeated.items = {
+    string: {pattern: "^\\S+$"}
+  }];
 
   // Optional ServingRuntime / ClusterServingRuntime name.
   string runtime = 4;

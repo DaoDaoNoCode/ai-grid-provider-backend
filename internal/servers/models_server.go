@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"regexp"
 	"slices"
 	"sort"
 	"strconv"
@@ -633,6 +634,9 @@ func validateModelID(id string) error {
 	return nil
 }
 
+// baseRefRE is the buf.validate pattern on ModelSpec.base_refs items.
+var baseRefRE = regexp.MustCompile(`^\S+$`)
+
 func validateModelSpec(spec *aigridv1.ModelSpec) error {
 	if spec == nil {
 		return connect.NewError(connect.CodeInvalidArgument, "spec is required")
@@ -675,6 +679,13 @@ func validateModelSpec(spec *aigridv1.ModelSpec) error {
 		}
 		if len(sc.GetTriggers()) == 0 {
 			return connect.NewError(connect.CodeInvalidArgument, "at least one trigger is required when using direct KEDA scaling")
+		}
+	}
+	for i, ref := range spec.GetBaseRefs() {
+		// The buf.validate pattern on ModelSpec.base_refs. A blank name would
+		// count as a preset below and read back as none (model_mapper.go).
+		if !baseRefRE.MatchString(ref) {
+			return connect.Errorf(connect.CodeInvalidArgument, "spec.base_refs[%d] %q must be a preset name with no whitespace", i, ref)
 		}
 	}
 	if main := spec.GetMain(); main != nil {

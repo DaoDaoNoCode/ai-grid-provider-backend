@@ -2004,7 +2004,7 @@
           "items": {
             "type": "string"
           },
-          "description": "LLMInferenceServiceConfig preset names merged under the spec."
+          "description": "LLMInferenceServiceConfig preset names merged under the spec. Each is a\nname with no whitespace; an empty or blank name is InvalidArgument."
         },
         "runtime": {
           "type": "string",

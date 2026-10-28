@@ -566,7 +566,8 @@ removed GPU request removes the GPU limit too).
 one it may be left empty, and KServe uses the presets' image, because an empty
 image in the model doesn't override theirs. The backend can't see the presets
 on the clusters: if none sets an image, Kubernetes refuses the workload on the
-cluster and the model stays not ready there. Labels and
+cluster and the model stays not ready there. A `base_refs` item must be a
+name with no whitespace; an empty one is `InvalidArgument`. Labels and
 annotations take only unprefixed keys plus `openshift.io/display-name` and
 `openshift.io/description`.
 
