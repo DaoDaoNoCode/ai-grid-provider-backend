@@ -11,6 +11,7 @@ import (
 const (
 	sourceNone        = aigridv1.ManagedClusterLocationSource_MANAGED_CLUSTER_LOCATION_SOURCE_NONE
 	sourceAnnotations = aigridv1.ManagedClusterLocationSource_MANAGED_CLUSTER_LOCATION_SOURCE_ANNOTATIONS
+	sourceCloudRegion = aigridv1.ManagedClusterLocationSource_MANAGED_CLUSTER_LOCATION_SOURCE_CLOUD_REGION
 )
 
 func coords(lat, lon float64) func(*aigridv1.ManagedClusterLocation) {
@@ -152,9 +153,60 @@ func TestManagedClusterLocation(t *testing.T) {
 				`latitude must be within -90..90 and longitude within -180..180`},
 		},
 		{
-			name:   "the region claim is reported",
-			claims: withRegionClaim("us-east-2"),
+			name:        "no annotations in a known region: the region's approximate coordinates",
+			claims:      withRegionClaim("us-east-2"),
+			want:        &aigridv1.ManagedClusterLocation{Source: sourceCloudRegion, Region: "us-east-2"},
+			coordinates: coords(39.96, -83),
+		},
+		{
+			name:        "a site name without coordinates is kept beside the region's",
+			annotations: map[string]string{"ai-grid/site-name": "Frankfurt cloud"},
+			claims:      withRegionClaim("eu-central-1"),
+			want:        &aigridv1.ManagedClusterLocation{SiteName: "Frankfurt cloud", Source: sourceCloudRegion, Region: "eu-central-1"},
+			coordinates: coords(50.11, 8.68),
+		},
+		{
+			name: "an Azure region",
+			claims: []*aigridv1.ManagedClusterClaim{
+				{Name: "platform.open-cluster-management.io", Value: "Azure"},
+				{Name: "region.open-cluster-management.io", Value: "westeurope"},
+			},
+			want:        &aigridv1.ManagedClusterLocation{Source: sourceCloudRegion, Region: "westeurope"},
+			coordinates: coords(52.37, 4.9),
+		},
+		{
+			name: "a GCP region",
+			claims: []*aigridv1.ManagedClusterClaim{
+				{Name: "platform.open-cluster-management.io", Value: "GCP"},
+				{Name: "region.open-cluster-management.io", Value: "europe-west4"},
+			},
+			want:        &aigridv1.ManagedClusterLocation{Source: sourceCloudRegion, Region: "europe-west4"},
+			coordinates: coords(53.44, 6.83),
+		},
+		{
+			name:   "an unknown region: no coordinates, and that isn't a problem",
+			claims: withRegionClaim("mars-north-1"),
+			want:   &aigridv1.ManagedClusterLocation{Source: sourceNone, Region: "mars-north-1"},
+		},
+		{
+			name: "a region looked up by the wrong cloud is unknown",
+			claims: []*aigridv1.ManagedClusterClaim{
+				{Name: "platform.open-cluster-management.io", Value: "GCP"},
+				{Name: "region.open-cluster-management.io", Value: "us-east-2"},
+			},
+			want: &aigridv1.ManagedClusterLocation{Source: sourceNone, Region: "us-east-2"},
+		},
+		{
+			name:   "a region without a platform claim is unknown",
+			claims: []*aigridv1.ManagedClusterClaim{{Name: "region.open-cluster-management.io", Value: "us-east-2"}},
 			want:   &aigridv1.ManagedClusterLocation{Source: sourceNone, Region: "us-east-2"},
+		},
+		{
+			name:        "one coordinate is a problem, and the region isn't used",
+			annotations: map[string]string{"ai-grid/latitude": "39.96"},
+			claims:      withRegionClaim("us-east-2"),
+			want: &aigridv1.ManagedClusterLocation{Source: sourceNone, Region: "us-east-2",
+				Problem: "ai-grid/latitude is set but ai-grid/longitude is not; set both or neither"},
 		},
 		{
 			name:        "annotations win, and the region is still reported",
@@ -216,5 +268,21 @@ func TestManagedClusterFromUnstructuredLocation(t *testing.T) {
 	}
 	if got := managedClusterFromUnstructured(*managedClusterUnstructured("new", nil, nil, true, nil)).GetStatus().GetLocation(); got.GetSource() != sourceNone {
 		t.Fatalf("location of a new cluster = %v, want source NONE", got)
+	}
+}
+
+// Every point in the table is a real position, and no region sits at 0,0,
+// which would mean a missing entry.
+func TestCloudRegions(t *testing.T) {
+	t.Parallel()
+	for platform, regions := range cloudRegions {
+		if len(regions) == 0 {
+			t.Errorf("%s: no regions", platform)
+		}
+		for region, p := range regions {
+			if p.lat < -maxLatitude || p.lat > maxLatitude || p.lon < -maxLongitude || p.lon > maxLongitude || (p.lat == 0 && p.lon == 0) {
+				t.Errorf("%s %s = %v, want a position within range", platform, region, p)
+			}
+		}
 	}
 }

@@ -57,9 +57,10 @@ func parseDecimalDegrees(v string) (degrees float64, ok bool) {
 }
 
 // managedClusterLocation reads a cluster's location from its annotations and
-// claims (ManagedClusterLocation in the proto). Explicit annotations are the
-// only source of coordinates; when they are wrong there are none and
-// `problem` says why.
+// claims (ManagedClusterLocation in the proto). Explicit annotations win.
+// Without any, a known cloud region gives approximate coordinates
+// (cloudRegions). Wrong annotations give none, not the region's: the hub
+// admin should see the mistake, so `problem` says what it is.
 func managedClusterLocation(annotations map[string]string, claims []*aigridv1.ManagedClusterClaim) *aigridv1.ManagedClusterLocation {
 	loc := &aigridv1.ManagedClusterLocation{
 		SiteName: strings.TrimSpace(annotations[annotationSiteName]),
@@ -73,6 +74,11 @@ func managedClusterLocation(annotations map[string]string, claims []*aigridv1.Ma
 	case set:
 		loc.Latitude, loc.Longitude = &lat, &lon
 		loc.Source = aigridv1.ManagedClusterLocationSource_MANAGED_CLUSTER_LOCATION_SOURCE_ANNOTATIONS
+	default:
+		if p, ok := cloudRegionPoint(claimValue(claims, claimPlatform), loc.Region); ok {
+			loc.Latitude, loc.Longitude = &p.lat, &p.lon
+			loc.Source = aigridv1.ManagedClusterLocationSource_MANAGED_CLUSTER_LOCATION_SOURCE_CLOUD_REGION
+		}
 	}
 	return loc
 }

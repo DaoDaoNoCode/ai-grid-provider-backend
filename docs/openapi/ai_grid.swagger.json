@@ -1441,17 +1441,18 @@
           "description": "The cloud region the cluster runs in, from its\n`region.open-cluster-management.io` claim (for example \"us-east-2\"), as\na fact whatever `source` is. Empty when the agent reports none, as on\nmost on-premises clusters."
         }
       },
-      "description": "Where a cluster is. A hub admin sets it once with the ManagedCluster\nannotations `ai-grid/latitude`, `ai-grid/longitude` (decimal degrees) and\n`ai-grid/site-name`; see the README, \"Cluster locations\".\n\n`latitude` and `longitude` are both set or both unset. When the\nannotations are wrong, the coordinates are unset, `source` is NONE and\n`problem` says what to fix: the backend never guesses past a mistake."
+      "description": "Where a cluster is. A hub admin sets it once with the ManagedCluster\nannotations `ai-grid/latitude`, `ai-grid/longitude` (decimal degrees) and\n`ai-grid/site-name`; see the README, \"Cluster locations\".\n\n`latitude` and `longitude` are both set or both unset. Without either\nannotation, a cluster in a known cloud region gets approximate\ncoordinates (source CLOUD_REGION). When the annotations are wrong, the\ncoordinates are unset, `source` is NONE and `problem` says what to fix:\nthe backend never falls back to the region past a mistake."
     },
     "v1ManagedClusterLocationSource": {
       "type": "string",
       "enum": [
         "MANAGED_CLUSTER_LOCATION_SOURCE_UNSPECIFIED",
         "MANAGED_CLUSTER_LOCATION_SOURCE_NONE",
-        "MANAGED_CLUSTER_LOCATION_SOURCE_ANNOTATIONS"
+        "MANAGED_CLUSTER_LOCATION_SOURCE_ANNOTATIONS",
+        "MANAGED_CLUSTER_LOCATION_SOURCE_CLOUD_REGION"
       ],
       "default": "MANAGED_CLUSTER_LOCATION_SOURCE_UNSPECIFIED",
-      "description": "Where a cluster's coordinates come from.\n\n - MANAGED_CLUSTER_LOCATION_SOURCE_UNSPECIFIED: Not reported; a client also reads a source added after it was built as\nUNSPECIFIED.\n - MANAGED_CLUSTER_LOCATION_SOURCE_NONE: No coordinates: none are set, or the ones set have a `problem`.\n - MANAGED_CLUSTER_LOCATION_SOURCE_ANNOTATIONS: The `ai-grid/latitude` and `ai-grid/longitude` annotations, as the hub\nadmin set them."
+      "description": "Where a cluster's coordinates come from.\n\n - MANAGED_CLUSTER_LOCATION_SOURCE_UNSPECIFIED: Not reported; a client also reads a source added after it was built as\nUNSPECIFIED.\n - MANAGED_CLUSTER_LOCATION_SOURCE_NONE: No coordinates: no annotations and no known cloud region, or\nannotations with a `problem`.\n - MANAGED_CLUSTER_LOCATION_SOURCE_ANNOTATIONS: The `ai-grid/latitude` and `ai-grid/longitude` annotations, as the hub\nadmin set them.\n - MANAGED_CLUSTER_LOCATION_SOURCE_CLOUD_REGION: Approximate: the city or area the cloud provider names for `region`,\nused when neither annotation is set. Good for a pin on a world map, not\nfor the data center's position; a UI should say it is approximate."
     },
     "v1ManagedClusterSpec": {
       "type": "object",

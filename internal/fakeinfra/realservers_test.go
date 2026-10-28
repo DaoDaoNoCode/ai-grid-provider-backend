@@ -208,6 +208,7 @@ func TestRealClustersServerLocationsOnFakeHub(t *testing.T) {
 	const (
 		none        = aigridv1.ManagedClusterLocationSource_MANAGED_CLUSTER_LOCATION_SOURCE_NONE
 		annotations = aigridv1.ManagedClusterLocationSource_MANAGED_CLUSTER_LOCATION_SOURCE_ANNOTATIONS
+		cloudRegion = aigridv1.ManagedClusterLocationSource_MANAGED_CLUSTER_LOCATION_SOURCE_CLOUD_REGION
 	)
 	type want struct {
 		source         aigridv1.ManagedClusterLocationSource
@@ -224,10 +225,10 @@ func TestRealClustersServerLocationsOnFakeHub(t *testing.T) {
 		"loc-onprem-none":           {source: none},
 		"loc-site-name-only":        {source: none, siteName: "Edge closet 3"},
 		"loc-annotations-in-region": {source: annotations, lat: 39.9612, lon: -82.9988, siteName: "Columbus DC2", region: "us-east-2"},
-		"loc-aws-region":            {source: none, region: "us-east-2"},
-		"loc-aws-region-named":      {source: none, siteName: "Frankfurt cloud", region: "eu-central-1"},
-		"loc-azure-region":          {source: none, region: "westeurope"},
-		"loc-gcp-region":            {source: none, region: "asia-northeast1"},
+		"loc-aws-region":            {source: cloudRegion, lat: 39.96, lon: -83, region: "us-east-2"},
+		"loc-aws-region-named":      {source: cloudRegion, lat: 50.11, lon: 8.68, siteName: "Frankfurt cloud", region: "eu-central-1"},
+		"loc-azure-region":          {source: cloudRegion, lat: 52.37, lon: 4.9, region: "westeurope"},
+		"loc-gcp-region":            {source: cloudRegion, lat: 35.68, lon: 139.69, region: "asia-northeast1"},
 		"loc-unknown-region":        {source: none, region: "mars-north-1"},
 	}
 	for name, prefix := range map[string]string{
