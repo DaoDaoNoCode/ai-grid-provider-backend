@@ -40,7 +40,8 @@ message ManagedClusterStatus {
   bool joined = 2;
 
   // Raw Available condition status ("True", "False", "Unknown", …). Empty when absent.
-  // Used by the Clusters presentation layer to derive Ready/Offline/Unknown.
+  // The backend derives `state` from it and the other conditions; read
+  // `state` for Ready, Offline or Unknown.
   string available_condition = 3;
 
   // AI Grid provisioning, from the cluster's compliance with the hub's

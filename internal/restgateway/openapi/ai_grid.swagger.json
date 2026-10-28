@@ -1494,7 +1494,7 @@
         },
         "available_condition": {
           "type": "string",
-          "description": "Raw Available condition status (\"True\", \"False\", \"Unknown\", …). Empty when absent.\nUsed by the Clusters presentation layer to derive Ready/Offline/Unknown."
+          "description": "Raw Available condition status (\"True\", \"False\", \"Unknown\", …). Empty when absent.\nThe backend derives `state` from it and the other conditions; read\n`state` for Ready, Offline or Unknown."
         },
         "provisioning": {
           "type": "string",

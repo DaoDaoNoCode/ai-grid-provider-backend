@@ -314,7 +314,8 @@ type ManagedClusterStatus struct {
 	// True when the ManagedCluster Joined condition is True.
 	Joined bool `protobuf:"varint,2,opt,name=joined,proto3" json:"joined,omitempty"`
 	// Raw Available condition status ("True", "False", "Unknown", …). Empty when absent.
-	// Used by the Clusters presentation layer to derive Ready/Offline/Unknown.
+	// The backend derives `state` from it and the other conditions; read
+	// `state` for Ready, Offline or Unknown.
 	AvailableCondition string `protobuf:"bytes,3,opt,name=available_condition,json=availableCondition,proto3" json:"available_condition,omitempty"`
 	// AI Grid provisioning, from the cluster's compliance with the hub's
 	// ai-grid-ready Policy (by default ai-grid-policies/ai-grid-ready):
