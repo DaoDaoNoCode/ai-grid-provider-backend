@@ -1651,7 +1651,7 @@
       "properties": {
         "image": {
           "type": "string",
-          "description": "Runtime image. Empty uses the preset's."
+          "description": "Runtime image. Required when spec.base_refs is empty. With base_refs it\nmay be empty, and the presets' image applies: KServe merges the\nLLMInferenceServiceConfigs named in baseRefs under the service's own\nspec, and an empty image in the service doesn't override theirs\n(combineBaseRefsConfig and mergeSpecs in\npkg/controller/v1alpha2/llmisvc/config_merge.go,\nred-hat-data-services/kserve rhoai-3.6 at 40fa1a1). The backend can't\nsee the presets on the clusters, so it can't check that one sets an\nimage: if none does, Kubernetes refuses the workload on the cluster\n(\"image: Required value\"), the model never becomes ready there, and its\nstatus says so. A blank image, or one with a space or tab, is\nInvalidArgument."
         },
         "requests": {
           "type": "object",
@@ -2016,7 +2016,7 @@
         },
         "main": {
           "$ref": "#/definitions/v1ModelContainer",
-          "description": "Main container of the workload template."
+          "description": "Main container of the workload template. Its image may be empty only\nwhen base_refs names a preset (see ModelContainer.image)."
         },
         "scaling": {
           "$ref": "#/definitions/v1ModelScaling",

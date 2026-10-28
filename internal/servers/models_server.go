@@ -675,9 +675,11 @@ func validateModelSpec(spec *aigridv1.ModelSpec) error {
 		}
 	}
 	if main := spec.GetMain(); main != nil {
+		// With base_refs the presets may provide the image (ModelContainer.image
+		// in model_type.proto); without them nothing does.
 		img := strings.TrimSpace(main.GetImage())
-		if img == "" {
-			return connect.NewError(connect.CodeInvalidArgument, "spec.main.image is required when spec.main is set")
+		if img == "" && (main.GetImage() != "" || len(spec.GetBaseRefs()) == 0) {
+			return connect.NewError(connect.CodeInvalidArgument, "spec.main.image is required when spec.base_refs names no preset")
 		}
 		if strings.ContainsAny(img, " \t") {
 			return connect.NewError(connect.CodeInvalidArgument, "spec.main.image must not contain whitespace")

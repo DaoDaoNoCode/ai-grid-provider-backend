@@ -32,6 +32,12 @@ message Model {
 
 // Desired state of a Model (trimmed LLMInferenceService.spec + ACM placement).
 message ModelSpec {
+  option (buf.validate.message).cel = {
+    id: "model_spec.main_image"
+    message: "spec.main.image is required when spec.base_refs names no preset"
+    expression: "!has(this.main) || this.main.image != '' || size(this.base_refs) > 0"
+  };
+
   // Where the artifact comes from and the name clients send.
   ModelSource model = 1;
 
@@ -47,7 +53,8 @@ message ModelSpec {
   // Router / gateway configuration.
   ModelRouter router = 5;
 
-  // Main container of the workload template.
+  // Main container of the workload template. Its image may be empty only
+  // when base_refs names a preset (see ModelContainer.image).
   ModelContainer main = 6;
 
   // Autoscaling. Mutually exclusive with replicas.
@@ -103,7 +110,18 @@ message ModelGatewayRef {
 
 // Main container resources and environment.
 message ModelContainer {
-  // Runtime image. Empty uses the preset's.
+  // Runtime image. Required when spec.base_refs is empty. With base_refs it
+  // may be empty, and the presets' image applies: KServe merges the
+  // LLMInferenceServiceConfigs named in baseRefs under the service's own
+  // spec, and an empty image in the service doesn't override theirs
+  // (combineBaseRefsConfig and mergeSpecs in
+  // pkg/controller/v1alpha2/llmisvc/config_merge.go,
+  // red-hat-data-services/kserve rhoai-3.6 at 40fa1a1). The backend can't
+  // see the presets on the clusters, so it can't check that one sets an
+  // image: if none does, Kubernetes refuses the workload on the cluster
+  // ("image: Required value"), the model never becomes ready there, and its
+  // status says so. A blank image, or one with a space or tab, is
+  // InvalidArgument.
   string image = 1;
 
   // Resource requests (cpu, memory, nvidia.com/gpu, ...): Kubernetes

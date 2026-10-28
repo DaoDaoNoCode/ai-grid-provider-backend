@@ -559,7 +559,12 @@ cluster) or `MODEL_PHASE_PENDING`, in that order of precedence (the comment on
 Kubernetes' container rules: non-negative, whole numbers for extended
 resources such as `nvidia.com/gpu`, a request at most its limit and equal to
 it for extended resources and hugepages; anything else is `InvalidArgument`.
-A GPU request with no limit is saved with the request as its limit. Labels and
+A GPU request with no limit is saved with the request as its limit.
+`spec.main.image` is required unless `spec.base_refs` names a preset; with
+one it may be left empty, and KServe uses the presets' image, because an empty
+image in the model doesn't override theirs. The backend can't see the presets
+on the clusters: if none sets an image, Kubernetes refuses the workload on the
+cluster and the model stays not ready there. Labels and
 annotations take only unprefixed keys plus `openshift.io/display-name` and
 `openshift.io/description`.
 
