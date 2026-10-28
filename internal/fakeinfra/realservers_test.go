@@ -602,7 +602,13 @@ func TestRealClustersServerProvisioning(t *testing.T) {
 // status Policies, commits to an in-memory repository, which is returned.
 func startCatalogServers(t *testing.T) (*servers.ModelsServer, *servers.SubscriptionsServer, *gitops.MemoryWriter) {
 	t.Helper()
-	h, srv := startHub(t)
+	return startCatalogServersFrom(t, fixturesDir)
+}
+
+// startCatalogServersFrom is startCatalogServers on the fixtures in dir.
+func startCatalogServersFrom(t *testing.T, dir string) (*servers.ModelsServer, *servers.SubscriptionsServer, *gitops.MemoryWriter) {
+	t.Helper()
+	h, srv := startHubFrom(t, dir)
 	cfg := &rest.Config{Host: srv.URL, BearerToken: h.ServiceAccountToken(), QPS: 1000, Burst: 1000}
 	client, err := dynamic.NewForConfig(cfg)
 	if err != nil {
@@ -678,6 +684,38 @@ func TestRealCatalogStatusOnFakeHub(t *testing.T) {
 	}
 	if phase := sub.GetAuthPolicy().GetPhase(); phase != "Active" {
 		t.Fatalf("auth policy %q phase = %q, want Active", sub.GetAuthPolicy().GetId(), phase)
+	}
+}
+
+// The real Models server on fixtures/poc, as in make dev-fake-poc: its status
+// Policies report granite-3b as fixtures/default does, on the PoC's sites, so
+// a model placed on site1 and site2 is partially available.
+func TestRealModelsPartiallyAvailableOnPocFakeHub(t *testing.T) {
+	models, _, _ := startCatalogServersFrom(t, filepath.Join("..", "..", "fixtures", "poc"))
+	replicas := int32(1)
+	created, err := models.Create(context.Background(), &aigridv1.ModelsCreateRequest{Object: &aigridv1.Model{
+		Id: "granite-3b",
+		Spec: &aigridv1.ModelSpec{
+			Model:    &aigridv1.ModelSource{Uri: "hf://ibm-granite/granite-3b"},
+			Replicas: &replicas,
+			Placement: &aigridv1.ModelPlacement{LabelSelector: &aigridv1.ModelLabelSelector{
+				MatchExpressions: []*aigridv1.ModelLabelSelectorRequirement{{Key: "name", Operator: "In", Values: []string{"site1", "site2"}}},
+			}},
+		},
+	}})
+	if err != nil {
+		t.Fatalf("Models Create() error = %v", err)
+	}
+	st := created.GetObject().GetStatus()
+	if st.GetPhase() != aigridv1.ModelPhase_MODEL_PHASE_PARTIALLY_AVAILABLE || st.GetMessage() != "Not ready on site2; ready on site1, site3" {
+		t.Fatalf("model status = %v, %q", st.GetPhase(), st.GetMessage())
+	}
+	wantClusters := []*aigridv1.ModelClusterStatus{
+		{Cluster: "site1", Phase: aigridv1.ModelPhase_MODEL_PHASE_READY, Reason: "Ready", Message: "LLMInferenceService ready"},
+		{Cluster: "site2", Phase: aigridv1.ModelPhase_MODEL_PHASE_PENDING, Reason: "NotReady", Message: "LLMInferenceService not ready"},
+	}
+	if !slices.EqualFunc(st.GetClusters(), wantClusters, func(a, b *aigridv1.ModelClusterStatus) bool { return proto.Equal(a, b) }) {
+		t.Fatalf("model status.clusters = %v, want %v", st.GetClusters(), wantClusters)
 	}
 }
 
