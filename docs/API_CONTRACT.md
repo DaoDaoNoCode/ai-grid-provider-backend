@@ -110,6 +110,19 @@ A field's type can never be changed in place. `int32` to `string` is always a ne
 **Never reuse a field number**, not even after a long time: an old binary client would read
 the new value as the old field and no error would tell anyone.
 
+### Recorded deviations from path 1
+
+Each entry names the change, why the expand step was skipped, and the condition that keeps it
+safe.
+
+- **`ModelSource.name` (2026-10-29, backend #47).** Its meaning changed in one step, from "the
+  name clients send" to "empty or the model's id": a model is served as its id, and any other
+  value is `InvalidArgument`. The field is `[deprecated = true]` and still filled on output.
+  Expand and migrate were skipped because the only consumer, the console, stopped sending the
+  field in console #86 before this change merged. **Condition:** a deployment moves its
+  backend and console pins together, and never runs a backend at or past #47 with a console
+  older than #86. Another client that sends a served name gets `InvalidArgument`.
+
 ### 2. Unstable areas
 
 The draft package is ignored by the breaking check. Anything else that's experimental

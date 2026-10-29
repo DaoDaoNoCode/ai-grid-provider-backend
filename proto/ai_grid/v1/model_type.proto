@@ -87,8 +87,14 @@ message ModelSource {
     max_len: 2048
   }];
 
-  // Identifier clients send in the request model field. Defaults to id.
-  string name = 2;
+  // Deprecated: a model is served as its id, the name tenants send in the
+  // request model field. Output: always the name the model is served as,
+  // which is the id, or for a model saved before that change, the name it
+  // still serves until its next update switches it to the id. Input: must be
+  // empty or the id (or, on update, the name a read returned); any other value
+  // is InvalidArgument. For a human-readable name, use annotation
+  // openshift.io/display-name.
+  string name = 2 [deprecated = true];
 }
 
 // Router configuration (spec.router).

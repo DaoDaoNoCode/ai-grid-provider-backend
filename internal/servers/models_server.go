@@ -210,6 +210,9 @@ func (s *ModelsServer) Create(ctx context.Context, req *aigridv1.ModelsCreateReq
 	if err := validateModelSpec(object.GetSpec()); err != nil {
 		return nil, err
 	}
+	if err := normalizeServedName(id, object.GetSpec()); err != nil {
+		return nil, err
+	}
 	m, err := s.gitCreate(ctx, object)
 	if err != nil {
 		return nil, err

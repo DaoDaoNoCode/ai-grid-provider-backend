@@ -1982,7 +1982,7 @@
         },
         "name": {
           "type": "string",
-          "description": "Identifier clients send in the request model field. Defaults to id."
+          "description": "Deprecated: a model is served as its id, the name tenants send in the\nrequest model field. Output: always the name the model is served as,\nwhich is the id, or for a model saved before that change, the name it\nstill serves until its next update switches it to the id. Input: must be\nempty or the id (or, on update, the name a read returned); any other value\nis InvalidArgument. For a human-readable name, use annotation\nopenshift.io/display-name."
         }
       },
       "description": "Model artifact source (spec.model)."

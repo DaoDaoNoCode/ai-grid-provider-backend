@@ -73,7 +73,7 @@ func TestModelsGitCRUD(t *testing.T) {
 		t.Fatalf("catalog[0] kind = %q, namespace = %q", external.GetKind(), external.GetNamespace())
 	}
 	refs, _, _ := unstructured.NestedSlice(external.Object, "spec", "externalProviderRefs")
-	if len(refs) != 1 || refs[0].(map[string]interface{})["targetModel"] != "facebook/opt-125m" {
+	if len(refs) != 1 || refs[0].(map[string]interface{})["targetModel"] != "sim" {
 		t.Fatalf("ExternalModel externalProviderRefs = %v", refs)
 	}
 	if kind, _, _ := unstructured.NestedString(modelRef.Object, "spec", "modelRef", "kind"); modelRef.GetKind() != maasModelRefKind || kind != "ExternalModel" || modelRef.GetNamespace() != "models-as-a-service" {
@@ -350,7 +350,7 @@ func gitSampleModel(id string, clusters ...string) *aigridv1.Model {
 		Id:       id,
 		Metadata: &aigridv1.Metadata{Name: id, Annotations: map[string]string{"openshift.io/display-name": id}},
 		Spec: &aigridv1.ModelSpec{
-			Model:    &aigridv1.ModelSource{Uri: "hf://facebook/opt-125m", Name: "facebook/opt-125m"},
+			Model:    &aigridv1.ModelSource{Uri: "hf://facebook/opt-125m"},
 			Replicas: &replicas,
 			Main:     &aigridv1.ModelContainer{Image: "quay.io/example/vllm:latest"},
 		},

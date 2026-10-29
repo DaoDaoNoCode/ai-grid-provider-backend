@@ -35,6 +35,11 @@ linters:
       - linters:
           - errcheck
         path: _test\.go
+      # ModelSource.name is deprecated for clients (proto/ai_grid/v1/model_type.proto):
+      # a model is served as its id. The server still reads, checks and returns it.
+      - linters:
+          - staticcheck
+        text: 'SA1019: .*\.(Get)?Name is deprecated: (a model is served as its id|Marked as deprecated in ai_grid/v1/model_type\.proto)'
 
 issues:
   uniq-by-line: true

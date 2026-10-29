@@ -279,6 +279,25 @@ For models:
   8000 and 9090.
 - The version is an `ai-grid/version` annotation on the `LLMInferenceService`,
   and `ai-grid/clusters` records the placement. Neither shows in the API.
+- The model is served and routed as its id. MaaS lists the model under its id
+  and forwards the request body unchanged, so the `model` a tenant sends is
+  the id all the way to vLLM: the `LLMInferenceService`'s `spec.model.name`
+  (vLLM's served name) and the `ExternalModel`'s `targetModel` are the id.
+  As in odh-dashboard, the served name is the resource name. The proto
+  deprecates `spec.model.name` for clients: Create takes it empty or equal to
+  the id, Update also takes the name a read returned, and any other value is
+  `InvalidArgument`. A human-readable name goes in annotation
+  `openshift.io/display-name`.
+- **Models saved before this rule** may serve another name, such as
+  `facebook/opt-125m`. Until such a model is rewritten, a read returns the
+  name it actually serves. Its next update, whatever it changes (a replica
+  count, a display name), switches it to serve the id: vLLM's served name
+  changes, so its pods restart once, and callers that used the old name must
+  send the id from then on. Through MaaS those callers already got 404. The
+  same update drops annotation `ai-grid/model-name`, which only the first
+  builds that served the id wrote (those entries already serve the id). To
+  switch every model at a time you choose, save each one once, for example
+  by re-saving its display name; a one-time migration is a follow-up.
 - `status.placement` lists the clusters the file places the model on
   (`selected_clusters`, cluster names), and the distinct values of their
   `location` labels (`locations`, read from the ManagedClusters; not cluster

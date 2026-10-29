@@ -595,7 +595,7 @@ annotations take only unprefixed keys plus `openshift.io/display-name` and
     }
   },
   "spec": {
-    "model": {"uri": "hf://facebook/opt-125m", "name": "facebook/opt-125m"},
+    "model": {"uri": "hf://facebook/opt-125m"},
     "replicas": 1,
     "base_refs": ["v3-6-0-kserve-config-llm-template-cpu"],
     "main": {
@@ -613,6 +613,11 @@ annotations take only unprefixed keys plus `openshift.io/display-name` and
   }
 }
 ```
+
+Leave `spec.model.name` out, or send the id: it's deprecated. The model is served as its id,
+`facebook-opt-125m`, which is the `model` tenants send through MaaS. Any other value is
+`InvalidArgument`. A read returns the name the model is served as: the id, or for a model saved
+before this rule, the name it still serves until its next update switches it to the id.
 
 A placed model's status names its clusters and, separately, where they are:
 
@@ -862,7 +867,7 @@ curl -sS -X PATCH 'http://localhost:8081/api/v1/clusters/demo-cluster' \
 # Models (Create commits the model to the Git catalog)
 curl -sS -X POST 'http://localhost:8081/api/v1/models' \
   -H 'Content-Type: application/json' \
-  -d '{"id":"facebook-opt-125m","metadata":{"name":"facebook-opt-125m","annotations":{"openshift.io/display-name":"Facebook OPT 125M"}},"spec":{"model":{"uri":"hf://facebook/opt-125m","name":"facebook/opt-125m"},"replicas":1,"main":{"image":"quay.io/example/vllm:latest","requests":{"cpu":"100m","memory":"1Gi"},"limits":{"cpu":"1","memory":"2Gi"}}}}'
+  -d '{"id":"facebook-opt-125m","metadata":{"name":"facebook-opt-125m","annotations":{"openshift.io/display-name":"Facebook OPT 125M"}},"spec":{"model":{"uri":"hf://facebook/opt-125m"},"replicas":1,"main":{"image":"quay.io/example/vllm:latest","requests":{"cpu":"100m","memory":"1Gi"},"limits":{"cpu":"1","memory":"2Gi"}}}}'
 
 curl -sS 'http://localhost:8081/api/v1/models/facebook-opt-125m'
 curl -sS -X PATCH 'http://localhost:8081/api/v1/models/facebook-opt-125m?update_mask=spec.replicas' \
