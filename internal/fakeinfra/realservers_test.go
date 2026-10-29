@@ -799,8 +799,10 @@ func TestRealSubscriptionsTokenWindowOnFakeHub(t *testing.T) {
 // deprecated ListLocations answer cluster names, status.placement.locations
 // answers location labels, and a placement copied from those labels is
 // InvalidArgument naming them instead of a model deployed nowhere. The stock
-// fixtures have no ai-grid/role label, so the test adds it the way an admin
-// would, with a merge patch.
+// fixtures label site-paris-1 and site-madrid-1 inference and site-ashburn-1
+// ingress; the test changes them the way an admin would, with merge patches:
+// site-paris-1 loses its role, which reads as combined, so it stays a
+// placement cluster, and site-ashburn-1 becomes inference.
 func TestRealModelsPlacementClustersOnFakeHub(t *testing.T) {
 	h, srv := startHub(t)
 	cfg := &rest.Config{Host: srv.URL, BearerToken: h.ServiceAccountToken(), QPS: 1000, Burst: 1000}
@@ -810,9 +812,11 @@ func TestRealModelsPlacementClustersOnFakeHub(t *testing.T) {
 	}
 	ctx := context.Background()
 	managedClusters := client.Resource(schema.GroupVersionResource{Group: "cluster.open-cluster-management.io", Version: "v1", Resource: "managedclusters"})
-	for _, name := range []string{"site-paris-1", "site-madrid-1", "site-ashburn-1"} {
-		patch := []byte(`{"metadata":{"labels":{"ai-grid/role":"inference"}}}`)
-		if _, err := managedClusters.Patch(ctx, name, types.MergePatchType, patch, metav1.PatchOptions{}); err != nil {
+	for name, patch := range map[string]string{
+		"site-paris-1":   `{"metadata":{"labels":{"ai-grid/role":null}}}`,
+		"site-ashburn-1": `{"metadata":{"labels":{"ai-grid/role":"inference"}}}`,
+	} {
+		if _, err := managedClusters.Patch(ctx, name, types.MergePatchType, []byte(patch), metav1.PatchOptions{}); err != nil {
 			t.Fatalf("label %s: %v", name, err)
 		}
 	}

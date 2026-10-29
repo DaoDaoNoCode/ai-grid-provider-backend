@@ -90,8 +90,8 @@ func (ModelRolloutStrategy) EnumDescriptor() ([]byte, []int) {
 //     cluster reports the MaaSModelRef not ready or hasn't reported it.
 //
 // The ingress clusters are those the catalog status Policy lists and those
-// labelled ai-grid/enabled "true" and ai-grid/role ingress or combined; each
-// must report. READY and PARTIALLY_AVAILABLE need at least one: with none,
+// labelled ai-grid/enabled "true" and ai-grid/role ingress or combined, or
+// with no ai-grid/role label (as combined); each must report. READY and PARTIALLY_AVAILABLE need at least one: with none,
 // nothing shows the model published, so it is PENDING, and the message ends
 // "no ingress cluster has reported the MaaSModelRef".
 //

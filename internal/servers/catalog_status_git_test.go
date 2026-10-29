@@ -526,9 +526,10 @@ func hubStatusPolicies(t *testing.T) []runtime.Object {
 // PARTIALLY_AVAILABLE need ingress evidence. With no ingress report and no
 // cluster labelled as ingress, a model ready on every placed cluster is
 // PENDING, not READY (as on main) or PARTIALLY_AVAILABLE. A cluster labelled
-// ai-grid/enabled "true" and ai-grid/role ingress or combined must report
-// the MaaSModelRef even when the catalog Policy doesn't list it (not placed
-// there yet, or the Policy can't be read).
+// ai-grid/enabled "true" and ai-grid/role ingress or combined, or with no
+// ai-grid/role label, must report the MaaSModelRef even when the catalog
+// Policy doesn't list it (not placed there yet, or the Policy can't be read).
+// One with an empty or unknown role runs no MaaS, so it needn't.
 func TestModelsGitStatusIngressClusters(t *testing.T) {
 	t.Parallel()
 	ingress := map[string]string{"ai-grid/enabled": "true", "ai-grid/role": "ingress"}
@@ -580,6 +581,25 @@ func TestModelsGitStatusIngressClusters(t *testing.T) {
 				managedCluster("site-a", map[string]string{"ai-grid/enabled": "true", "ai-grid/role": "combined"}, true)),
 			wantPhase: phasePending, wantMessage: "Ready on hub, site-b; no report from site-a",
 			wantSiteA: "LLMInferenceService ready; no MaaSModelRef report",
+		},
+		"enabled cluster with no role, not reported": {
+			objects: append(append(slices.Clone(modelsReady), hubReports(true)...),
+				managedCluster("edge", map[string]string{"ai-grid/enabled": "true"}, true)),
+			wantPhase: phasePending, wantMessage: "Ready on hub, site-a, site-b; no report from edge",
+		},
+		"enabled cluster with no role, reported ready": {
+			objects:   append(append(slices.Clone(modelsReady), hubReports(true)...), managedCluster("hub", map[string]string{"ai-grid/enabled": "true"}, true)),
+			wantPhase: phaseReady, wantMessage: "Ready on hub, site-a, site-b",
+		},
+		"enabled cluster with an empty role": {
+			objects: append(append(slices.Clone(modelsReady), hubReports(true)...),
+				managedCluster("edge", map[string]string{"ai-grid/enabled": "true", "ai-grid/role": ""}, true)),
+			wantPhase: phaseReady, wantMessage: "Ready on hub, site-a, site-b",
+		},
+		"enabled cluster with an unknown role": {
+			objects: append(append(slices.Clone(modelsReady), hubReports(true)...),
+				managedCluster("edge", map[string]string{"ai-grid/enabled": "true", "ai-grid/role": "edge"}, true)),
+			wantPhase: phaseReady, wantMessage: "Ready on hub, site-a, site-b",
 		},
 		"ingress label on a cluster not in the grid": {
 			objects: append(slices.Clone(modelsReady),

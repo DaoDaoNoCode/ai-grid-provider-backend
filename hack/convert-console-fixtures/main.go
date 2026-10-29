@@ -44,12 +44,16 @@ func convert(src, out string) error {
 	if err := os.MkdirAll(out, 0o755); err != nil {
 		return err
 	}
+	roles, err := statusPolicyRoles(filepath.Join(out, hub.PoliciesFile))
+	if err != nil {
+		return fmt.Errorf("%s: %w", hub.PoliciesFile, err)
+	}
 	steps := []struct {
 		file string
 		fn   func([]byte) (any, error)
 		dst  string
 	}{
-		{"managedclusters.json", convertClusters, hub.ManagedClustersFile},
+		{"managedclusters.json", func(raw []byte) (any, error) { return convertClusters(raw, roles) }, hub.ManagedClustersFile},
 		{"tenants.json", convertTenants, keycloak.OrganizationsFile},
 		{"access.json", convertAccess, hub.AccessFile},
 		{"scenarios.json", convertScenarios, hub.ScenariosFile},
@@ -187,7 +191,84 @@ func convertClaims(in []pbClaim) []hub.ManagedClusterClaim {
 	return out
 }
 
-func convertClusters(raw []byte) (any, error) {
+// The status Policies of policies.json (hand-authored, not converted) and the
+// ai-grid/role each one covers. The hub's GitOps binds ai-grid-models-status
+// to the inference and combined sites and ai-grid-catalog-status to the
+// ingress and combined ones (kahowell/ai-grid-tenant,
+// apps/ai-grid-policies/manifests/10-catalog-status.yaml).
+const (
+	statusPolicyNamespace = "ai-grid-policies"
+	modelsStatusPolicy    = "ai-grid-models-status"
+	catalogStatusPolicy   = "ai-grid-catalog-status"
+	labelEnabled          = "ai-grid/enabled"
+	labelRole             = "ai-grid/role"
+)
+
+// statusPolicyRoles reads the root status Policies of the policies.json at
+// path and answers the role of each cluster they report on: inference for
+// ai-grid-models-status only, ingress for ai-grid-catalog-status only,
+// combined for both. Without the file it answers none.
+func statusPolicyRoles(path string) (map[string]string, error) {
+	raw, err := os.ReadFile(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	var doc struct {
+		Items []struct {
+			Metadata struct {
+				Name      string `json:"name"`
+				Namespace string `json:"namespace"`
+			} `json:"metadata"`
+			Status struct {
+				Status []struct {
+					ClusterName string `json:"clustername"`
+				} `json:"status"`
+			} `json:"status"`
+		} `json:"items"`
+	}
+	if err := json.Unmarshal(raw, &doc); err != nil {
+		return nil, err
+	}
+	inference, ingress := map[string]bool{}, map[string]bool{}
+	for _, p := range doc.Items {
+		if p.Metadata.Namespace != statusPolicyNamespace {
+			continue
+		}
+		var covers map[string]bool
+		switch p.Metadata.Name {
+		case modelsStatusPolicy:
+			covers = inference
+		case catalogStatusPolicy:
+			covers = ingress
+		default:
+			continue
+		}
+		for _, s := range p.Status.Status {
+			covers[s.ClusterName] = true
+		}
+	}
+	roles := map[string]string{}
+	for name := range inference {
+		roles[name] = "inference"
+	}
+	for name := range ingress {
+		if inference[name] {
+			roles[name] = "combined"
+		} else {
+			roles[name] = "ingress"
+		}
+	}
+	return roles, nil
+}
+
+// convertClusters converts the console's clusters. An AI Grid member a status
+// Policy reports on gets the ai-grid/role that Policy covers (roles), so the
+// Policies and the labels agree: the backend reads a member with no role as
+// combined, which both Policies would have to report on.
+func convertClusters(raw []byte, roles map[string]string) (any, error) {
 	var doc struct {
 		Comment  string      `json:"_comment"`
 		Clusters []pbCluster `json:"clusters"`
@@ -203,6 +284,11 @@ func convertClusters(raw []byte) (any, error) {
 		c, err := convertCluster(pc)
 		if err != nil {
 			return nil, fmt.Errorf("cluster %q: %w", pc.Name, err)
+		}
+		if role := roles[c.Name]; role != "" && c.Labels[labelEnabled] == "true" {
+			if _, set := c.Labels[labelRole]; !set {
+				c.Labels[labelRole] = role
+			}
 		}
 		list.Items = append(list.Items, c)
 	}

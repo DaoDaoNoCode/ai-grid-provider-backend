@@ -28,6 +28,48 @@ func isAIGridMember(labels map[string]string) bool {
 	return labels[labelAIGridEnabled] == "true"
 }
 
+// labelAIGridRole narrows what an AI Grid member runs, and the roles it takes.
+const (
+	labelAIGridRole = "ai-grid/role"
+	roleIngress     = "ingress"   // MaaS, the portal and the consumer gateway
+	roleInference   = "inference" // the models and the provider gateway
+	roleCombined    = "combined"  // both
+)
+
+// clusterRole returns the role a cluster's labels give it, read as the hub's
+// GitOps reads them (kahowell/ai-grid-tenant, apps/ai-grid-spokes/README.md
+// and its Placements in apps/ai-grid-spokes/manifests/02-placements.yaml):
+//   - a cluster that is not an AI Grid member has none, "";
+//   - a member without an ai-grid/role label runs everything, so it is
+//     combined (the Placements' DoesNotExist predicate);
+//   - a member's label value is returned as it is otherwise. An unknown value,
+//     an empty one included, is neither ingress nor inference: the Placements
+//     match the three roles with In, so it matches none of them.
+func clusterRole(labels map[string]string) string {
+	if !isAIGridMember(labels) {
+		return ""
+	}
+	role, ok := labels[labelAIGridRole]
+	if !ok {
+		return roleCombined
+	}
+	return role
+}
+
+// runsInference reports whether a cluster's labels make it serve models: a
+// member in role inference or combined, or with no role (clusterRole).
+func runsInference(labels map[string]string) bool {
+	role := clusterRole(labels)
+	return role == roleInference || role == roleCombined
+}
+
+// runsIngress reports whether a cluster's labels make it publish models in
+// MaaS: a member in role ingress or combined, or with no role (clusterRole).
+func runsIngress(labels map[string]string) bool {
+	role := clusterRole(labels)
+	return role == roleIngress || role == roleCombined
+}
+
 // managedClusterState derives a cluster's lifecycle state and the message of
 // the condition that decided it, in the order the ACM console uses
 // (stolostron/console frontend/src/resources/utils/get-cluster.ts

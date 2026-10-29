@@ -43,7 +43,7 @@ unwraps them via `response_body: "object"`.
 | `DELETE` | `/api/v1/tenants/{id}` | Delete tenant |
 | `GET` | `/api/v1/tenants/{id}:listMembers` | List users in the tenant Organization |
 | `GET` | `/api/v1/models` | List models (from the Git catalog) |
-| `GET` | `/api/v1/models:listPlacementClusters` | Unique sorted names of the provisioned, Available inference and combined clusters (`clusters`) |
+| `GET` | `/api/v1/models:listPlacementClusters` | Unique sorted names of the provisioned, Available inference and combined clusters, and members with no `ai-grid/role` (`clusters`) |
 | `GET` | `/api/v1/models:listLocations` | Deprecated: the same cluster names as `locations`; use `:listPlacementClusters` |
 | `GET` | `/api/v1/models/{id}` | Get one model |
 | `POST` | `/api/v1/models` | Create model (commits it to Git) |
@@ -175,6 +175,7 @@ Hub-side ACM/OCM `ManagedCluster` CRs. **Does not provision spoke clusters.**
 | `status.state_message` | The message of the condition that decided `state`, for example `"Managed cluster is available"`; may be empty |
 | `status.location` | Always set. `site_name` (`ai-grid/site-name`, trimmed); `latitude` and `longitude` in decimal degrees, both present or both absent (absent is not `0`: `0, 0` is a valid position); `source`: `MANAGED_CLUSTER_LOCATION_SOURCE_ANNOTATIONS` (the `ai-grid/latitude` / `ai-grid/longitude` annotations), `..._CLOUD_REGION` (approximate, from a known cloud region; say so in the UI) or `..._NONE` (no coordinates); `problem`: what is wrong with the annotations, to show a provider admin as is (empty when nothing is); `region`: the `region.open-cluster-management.io` claim, for example `"us-east-2"`, empty on most on-premises clusters. Wrong annotations give no coordinates, never the region's. README, "Cluster locations", has every case |
 | `metadata.labels["ai-grid/enabled"]` | Enroll-style flag (string `"true"` / `"false"`); read `status.ai_grid_member` instead of comparing it |
+| `metadata.labels["ai-grid/role"]` | What a member runs: `inference` (models), `ingress` (MaaS) or `combined` (both). No label means both, as `combined`; any other value, `""` included, runs nothing. The hub's GitOps reads it so (`kahowell/ai-grid-tenant`, `apps/ai-grid-spokes/README.md`), and so do `:listPlacementClusters` and model status. Update writes it as sent |
 
 ---
 
@@ -554,8 +555,9 @@ from the hub's status Policies, or reason
 `status.phase` is `MODEL_PHASE_READY`, `MODEL_PHASE_PARTIALLY_AVAILABLE`
 (ready on some placed clusters, not all, and published on every ingress
 cluster) or `MODEL_PHASE_PENDING`; READY and PARTIALLY_AVAILABLE need at least
-one ingress cluster's report, and a cluster labelled `ai-grid/role` `ingress` or
-`combined` must report even before the catalog Policy lists it; in that order of precedence (the comment on
+one ingress cluster's report, and a member labelled `ai-grid/role` `ingress` or
+`combined`, or with no `ai-grid/role` label, must report even before the
+catalog Policy lists it; in that order of precedence (the comment on
 `ModelPhase`), and `status.clusters` gives each placed cluster's own status
 (below). `spec.main.requests` and `limits` take Kubernetes quantities with
 Kubernetes' container rules: non-negative, whole numbers for extended
@@ -576,7 +578,7 @@ annotations take only unprefixed keys plus `openshift.io/display-name` and
 | Method | Path | Notes |
 | --- | --- | --- |
 | GET | `/api/v1/models` | List; CEL `filter`; `order` allowlist `id`, `-id`, `metadata.name`, `-metadata.name` |
-| GET | `/api/v1/models:listPlacementClusters` | `clusters`: unique sorted names of the provisioned (ai-grid-ready Compliant), Available inference and combined clusters, the values `spec.placement` takes (P7) |
+| GET | `/api/v1/models:listPlacementClusters` | `clusters`: unique sorted names of the provisioned (ai-grid-ready Compliant), Available inference and combined clusters, and members with no `ai-grid/role` label (read as combined), the values `spec.placement` takes (P7) |
 | GET | `/api/v1/models:listLocations` | Deprecated: the same cluster names, as `locations`. Use `:listPlacementClusters`; removed once clients have moved |
 | GET | `/api/v1/models/{id}` | Get one (unwraps to the Model object); `status.placement` when placed: `selected_clusters` (cluster names) and `locations` (their `location` labels, P8) |
 | POST | `/api/v1/models` | Create (= deploy); body is the Model object |

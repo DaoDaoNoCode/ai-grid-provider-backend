@@ -427,9 +427,10 @@ func TestModelsGitLocations(t *testing.T) {
 
 // ListPlacementClusters answers the names of the clusters a model can be
 // placed on, since git mode places by cluster name: AI Grid members
-// (ai-grid/enabled "true", role inference or combined, Compliant with the
-// ready Policy) that are Available, with or without a location label, unique
-// and sorted. The deprecated ListLocations answers the same list.
+// (ai-grid/enabled "true", role inference or combined or no role, Compliant
+// with the ready Policy) that are Available, with or without a location
+// label, unique and sorted. An empty or unknown role is neither. The
+// deprecated ListLocations answers the same list.
 func TestModelsListPlacementClustersAnswersClusterNames(t *testing.T) {
 	t.Parallel()
 	available := []map[string]interface{}{{"type": "ManagedClusterConditionAvailable", "status": "True"}}
@@ -448,6 +449,9 @@ func TestModelsListPlacementClustersAnswersClusterNames(t *testing.T) {
 			map[string]interface{}{"clustername": "site-d", "compliant": "NonCompliant"},
 			map[string]interface{}{"clustername": "site-e", "compliant": "Compliant"},
 			map[string]interface{}{"clustername": "site-f", "compliant": "Compliant"},
+			map[string]interface{}{"clustername": "site-h", "compliant": "Compliant"},
+			map[string]interface{}{"clustername": "site-i", "compliant": "Compliant"},
+			map[string]interface{}{"clustername": "site-j", "compliant": "Compliant"},
 		}},
 	}}
 	client := newManagedClusterClient(
@@ -459,13 +463,16 @@ func TestModelsListPlacementClustersAnswersClusterNames(t *testing.T) {
 		managedClusterUnstructured("site-e", member("inference"), nil, true, unavailable),
 		managedClusterUnstructured("site-f", map[string]string{"ai-grid/role": "inference"}, nil, true, available), // not enabled
 		managedClusterUnstructured("site-g", member("inference"), nil, true, available),                            // not placed by the Policy
+		managedClusterUnstructured("site-h", map[string]string{"ai-grid/enabled": "true"}, nil, true, available),   // no role: combined
+		managedClusterUnstructured("site-i", member(""), nil, true, available),                                     // empty role: neither
+		managedClusterUnstructured("site-j", member("edge"), nil, true, available),                                 // unknown role: neither
 		ready,
 	)
 	srv, err := NewModelsServer().SetWriter(gitops.NewMemoryWriter(nil)).SetDynamicClient(client).Build()
 	if err != nil {
 		t.Fatalf("Build() error = %v", err)
 	}
-	want := []string{"site-a", "site-b"}
+	want := []string{"site-a", "site-b", "site-h"}
 	clusters, err := srv.ListPlacementClusters(context.Background(), &aigridv1.ModelsListPlacementClustersRequest{})
 	if err != nil {
 		t.Fatalf("ListPlacementClusters() error = %v", err)

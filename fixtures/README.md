@@ -64,7 +64,7 @@ them through the real Kubernetes and Keycloak clients.
 
 | File | Read by | Shape | From the console's |
 |---|---|---|---|
-| `managedclusters.json` | fake hub | A `ManagedClusterList` (`cluster.open-cluster-management.io/v1`) of full CRs: `metadata` (name, uid, resourceVersion, generation, creationTimestamp, deletionTimestamp, labels, annotations, finalizers), `spec` (managedClusterClientConfigs, hubAcceptsClient, leaseDurationSeconds, taints), `status` (conditions, capacity, allocatable, version, clusterClaims). | `managedclusters.json` |
+| `managedclusters.json` | fake hub | A `ManagedClusterList` (`cluster.open-cluster-management.io/v1`) of full CRs: `metadata` (name, uid, resourceVersion, generation, creationTimestamp, deletionTimestamp, labels, annotations, finalizers), `spec` (managedClusterClientConfigs, hubAcceptsClient, leaseDurationSeconds, taints), `status` (conditions, capacity, allocatable, version, clusterClaims). Each AI Grid member a status Policy in `policies.json` reports on also gets the `ai-grid/role` that Policy covers (inference for `ai-grid-models-status`, ingress for `ai-grid-catalog-status`, combined for both), which the console's fixtures don't carry: the backend reads a member with no role as combined (README, "Cluster membership, state and location"). | `managedclusters.json` |
 | `organizations.json` | fake Keycloak | A JSON array of Keycloak 26.8 `OrganizationRepresentation`, as `GET /admin/realms/ai-grid/organizations?briefRepresentation=false` returns them: id, name, alias, enabled, description, attributes (Keycloak's map of string arrays), domains (`name`, `verified`, `autoRedirect`). | `tenants.json` |
 | `access.json` | fake hub | Which bearer tokens the hub rejects (401), denies (SelfSubjectAccessReview `allowed: false`, 403 on managedclusters) or allows, plus the backend's ServiceAccount token that `bin/fake-kubeconfig` carries. | `access.json` |
 | `scenarios.json` | fake hub | Timed events that the hub controllers apply to the CRs (joined, imported, add-ons available, lease lost or recovered, API server down or up, detaching, detached). | `scenarios.json` |
@@ -132,4 +132,6 @@ go test ./internal/fakeinfra/...
 ```
 
 The tests load both directories into the fakes, and check that every cluster
-is one the hub controllers have already settled.
+is one the hub controllers have already settled. The converter reads the
+`policies.json` already in `--out` for the members' `ai-grid/role` labels, so
+change that file first.

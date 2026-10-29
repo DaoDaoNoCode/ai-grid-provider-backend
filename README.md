@@ -79,6 +79,25 @@ derives, so no client has to:
   `proto/ai_grid/v1/managed_cluster_type.proto`.
 - `status.location`: where the cluster is, for a map, described below.
 
+A member's optional `ai-grid/role` label narrows what it runs, and the
+backend reads it as the hub's GitOps does (`kahowell/ai-grid-tenant`,
+`apps/ai-grid-spokes/README.md`):
+
+| `ai-grid/role` | Runs | Placement cluster (`Models/ListPlacementClusters`) | Ingress cluster (model status) |
+|---|---|---|---|
+| `inference` | the models | yes | no |
+| `ingress` | MaaS, the portal and the consumer gateway | no | yes |
+| `combined` | both | yes | yes |
+| no label | both, as `combined` | yes | yes |
+| any other value, `""` included | nothing: it matches none of the Placements | no | no |
+
+The Placements select a role with `In` and the missing label with
+`DoesNotExist`, so an empty value is not "no role". `Clusters/Update` writes
+the label as the client sends it; the console's Add always sets a role. The
+rule is `clusterRole` in `internal/servers/managed_cluster_state.go`. The
+fixtures label their enabled clusters with the role their status Policies
+cover (`fixtures/README.md`).
+
 #### Cluster locations
 
 ACM has no field for a cluster's position, so a hub admin sets it once as
@@ -309,7 +328,8 @@ For models:
   `LLMInferenceService ready; MaaSModelRef not ready`. `status.phase` is
   `READY` when every placed cluster is ready and every ingress cluster (the
   ones the catalog status Policy is placed on, and the ones labelled
-  `ai-grid/enabled: "true"` and `ai-grid/role` `ingress` or `combined`) has
+  `ai-grid/enabled: "true"` and `ai-grid/role` `ingress` or `combined`, or
+  with no role; see "Cluster membership, state and location") has
   its `MaaSModelRef` ready, and there is at least one;
   `PARTIALLY_AVAILABLE`, reason `PartiallyAvailable`, when every ingress
   cluster has the `MaaSModelRef` ready and some, not all, placed clusters are
@@ -337,8 +357,8 @@ deploys:
 
 | Policy | Spokes | ConfigurationPolicy | Checks |
 |---|---|---|---|
-| `ai-grid-models-status` | inference, combined | `models-ready` | each `LLMInferenceService` has `Ready=True` |
-| `ai-grid-catalog-status` | ingress, combined | `model-refs-ready` | each `MaaSModelRef` has phase `Ready` |
+| `ai-grid-models-status` | inference, combined, no role | `models-ready` | each `LLMInferenceService` has `Ready=True` |
+| `ai-grid-catalog-status` | ingress, combined, no role | `model-refs-ready` | each `MaaSModelRef` has phase `Ready` |
 | | | `subscriptions-active` | each `MaaSSubscription` has phase `Active` |
 | | | `auth-policies-active` | each `MaaSAuthPolicy` has phase `Active` |
 

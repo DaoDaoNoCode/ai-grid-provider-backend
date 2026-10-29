@@ -53,9 +53,10 @@ type ModelsClient interface {
 	ListLocations(ctx context.Context, in *ModelsListLocationsRequest, opts ...grpc.CallOption) (*ModelsListLocationsResponse, error)
 	// Clusters a model can be placed on: unique sorted names of the
 	// ManagedClusters labelled ai-grid/enabled "true" and ai-grid/role
-	// inference or combined that are Available and Compliant with the ready
-	// Policy (AI_GRID_READY_POLICY). These are the values a placement's
-	// `name In [...]` takes.
+	// inference or combined, or with no ai-grid/role label (which runs
+	// everything, as combined), that are Available and Compliant with the ready
+	// Policy (AI_GRID_READY_POLICY). An empty or other role runs no models.
+	// These are the values a placement's `name In [...]` takes.
 	ListPlacementClusters(ctx context.Context, in *ModelsListPlacementClustersRequest, opts ...grpc.CallOption) (*ModelsListPlacementClustersResponse, error)
 }
 
@@ -163,9 +164,10 @@ type ModelsServer interface {
 	ListLocations(context.Context, *ModelsListLocationsRequest) (*ModelsListLocationsResponse, error)
 	// Clusters a model can be placed on: unique sorted names of the
 	// ManagedClusters labelled ai-grid/enabled "true" and ai-grid/role
-	// inference or combined that are Available and Compliant with the ready
-	// Policy (AI_GRID_READY_POLICY). These are the values a placement's
-	// `name In [...]` takes.
+	// inference or combined, or with no ai-grid/role label (which runs
+	// everything, as combined), that are Available and Compliant with the ready
+	// Policy (AI_GRID_READY_POLICY). An empty or other role runs no models.
+	// These are the values a placement's `name In [...]` takes.
 	ListPlacementClusters(context.Context, *ModelsListPlacementClustersRequest) (*ModelsListPlacementClustersResponse, error)
 	mustEmbedUnimplementedModelsServer()
 }

@@ -289,8 +289,9 @@ func listModelItems(ctx context.Context, req *aigridv1.ModelsListRequest, items 
 // ListPlacementClusters returns the unique sorted names of the clusters a
 // model can be placed on: the values a placement's name In [...] takes, since
 // git mode places a model by cluster name. A cluster qualifies when it is
-// labelled ai-grid/enabled=true and ai-grid/role inference or combined, is
-// Available, and is Compliant with the ready Policy (provisioned).
+// labelled ai-grid/enabled=true and ai-grid/role inference or combined, or
+// has no ai-grid/role label (runsInference), is Available, and is Compliant
+// with the ready Policy (provisioned).
 func (s *ModelsServer) ListPlacementClusters(ctx context.Context, _ *aigridv1.ModelsListPlacementClustersRequest) (*aigridv1.ModelsListPlacementClustersResponse, error) {
 	names, err := s.placementClusters(ctx)
 	if err != nil {
@@ -409,11 +410,7 @@ var managedClusterResourceType = "type.googleapis.com/" + string((&aigridv1.Mana
 // isPlacementCluster reports whether a model can be placed on the cluster
 // item, by the rules ListPlacementClusters documents.
 func isPlacementCluster(item unstructured.Unstructured, provisioned map[string]string) bool {
-	labels := item.GetLabels()
-	if labels["ai-grid/enabled"] != "true" || provisioned[item.GetName()] != "Compliant" {
-		return false
-	}
-	if role := labels["ai-grid/role"]; role != "inference" && role != "combined" {
+	if !runsInference(item.GetLabels()) || provisioned[item.GetName()] != "Compliant" {
 		return false
 	}
 	status := managedClusterStatusFromUnstructured(item)

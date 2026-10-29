@@ -257,11 +257,11 @@ func (s *ModelsServer) gitCommitModel(ctx context.Context, head gitops.Snapshot,
 // cluster's MaaSModelRefs (model-refs-ready). Both are named by model id.
 //
 // ingressClusters are the clusters the hub labels as ingress: ai-grid/enabled
-// "true" and ai-grid/role ingress or combined, the same labels
-// ListPlacementClusters reads for inference and combined. Each should report
-// the MaaSModelRef whether or not the catalog Policy lists it, so an ingress
-// cluster the Policy hasn't reached yet, or a Policy that can't be read,
-// doesn't count as ready.
+// "true" and ai-grid/role ingress or combined, or no ai-grid/role label
+// (runsIngress), the same labels ListPlacementClusters reads for inference
+// and combined (runsInference). Each should report the MaaSModelRef whether
+// or not the catalog Policy lists it, so an ingress cluster the Policy hasn't
+// reached yet, or a Policy that can't be read, doesn't count as ready.
 type modelReports struct {
 	inference, ingress ObjectReports
 	ingressClusters    []string
@@ -279,9 +279,9 @@ func (s *ModelsServer) readModelReports(ctx context.Context) modelReports {
 }
 
 // ingressClusters lists the clusters labelled ai-grid/enabled "true" and
-// ai-grid/role ingress or combined. Without a dynamic client, or when the
-// list fails (logged), it knows none, and only the catalog Policy's clusters
-// count as ingress.
+// ai-grid/role ingress or combined, or with no ai-grid/role label
+// (runsIngress). Without a dynamic client, or when the list fails (logged),
+// it knows none, and only the catalog Policy's clusters count as ingress.
 func (s *ModelsServer) ingressClusters(ctx context.Context) []string {
 	if s.client == nil {
 		return nil
@@ -293,8 +293,7 @@ func (s *ModelsServer) ingressClusters(ctx context.Context) []string {
 	}
 	var names []string
 	for i := range items {
-		labels := items[i].GetLabels()
-		if role := labels["ai-grid/role"]; labels["ai-grid/enabled"] == "true" && (role == "ingress" || role == "combined") {
+		if runsIngress(items[i].GetLabels()) {
 			names = append(names, items[i].GetName())
 		}
 	}

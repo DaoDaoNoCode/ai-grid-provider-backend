@@ -108,3 +108,47 @@ func TestAIGridMember(t *testing.T) {
 		}
 	}
 }
+
+// clusterRole reads the role as the hub's GitOps Placements do
+// (kahowell/ai-grid-tenant, apps/ai-grid-spokes/README.md): a member with no
+// ai-grid/role label runs everything, as combined; a value the Placements
+// don't name, an empty one included, runs neither side; a cluster that is not
+// a member runs nothing whatever its role.
+func TestClusterRole(t *testing.T) {
+	t.Parallel()
+
+	enabled := func(role string) map[string]string {
+		return map[string]string{"ai-grid/enabled": "true", "ai-grid/role": role}
+	}
+	cases := []struct {
+		name                    string
+		labels                  map[string]string
+		wantRole                string
+		wantInference, wantIngr bool
+	}{
+		{"no role", map[string]string{"ai-grid/enabled": "true"}, "combined", true, true},
+		{"empty role", enabled(""), "", false, false},
+		{"combined", enabled("combined"), "combined", true, true},
+		{"inference", enabled("inference"), "inference", true, false},
+		{"ingress", enabled("ingress"), "ingress", false, true},
+		{"unknown role", enabled("edge"), "edge", false, false},
+		{"role case differs", enabled("Combined"), "Combined", false, false},
+		{"not a member, no role", nil, "", false, false},
+		{"not a member, combined", map[string]string{"ai-grid/enabled": "false", "ai-grid/role": "combined"}, "", false, false},
+		{"role without enabled", map[string]string{"ai-grid/role": "inference"}, "", false, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			if got := clusterRole(tc.labels); got != tc.wantRole {
+				t.Errorf("clusterRole(%v) = %q, want %q", tc.labels, got, tc.wantRole)
+			}
+			if got := runsInference(tc.labels); got != tc.wantInference {
+				t.Errorf("runsInference(%v) = %v, want %v", tc.labels, got, tc.wantInference)
+			}
+			if got := runsIngress(tc.labels); got != tc.wantIngr {
+				t.Errorf("runsIngress(%v) = %v, want %v", tc.labels, got, tc.wantIngr)
+			}
+		})
+	}
+}
