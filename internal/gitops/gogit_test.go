@@ -188,6 +188,23 @@ func TestRepoWriterPushRace(t *testing.T) {
 	if _, err := w.Commit(ctx, head.Revision(), Change{Put: map[string][]byte{"a": []byte("a2")}, Message: "m"}); !errors.Is(err, ErrConflict) {
 		t.Fatalf("Commit() racing a push error = %v, want ErrConflict", err)
 	}
+
+	// The writer still works: the commit that lost the race is gone, and the
+	// other replica's is the head.
+	w.beforePush = nil
+	head, err := w.Head(ctx)
+	if err != nil {
+		t.Fatalf("Head() after the lost push error = %v", err)
+	}
+	if data, _ := head.Read("a"); string(data) != "a" {
+		t.Fatalf("Read(a) after the lost push = %q, want the unchanged a", data)
+	}
+	if data, _ := head.Read("b"); string(data) != "b2" {
+		t.Fatalf("Read(b) after the lost push = %q, want the other replica's b2", data)
+	}
+	if _, err := w.Commit(ctx, head.Revision(), Change{Put: map[string][]byte{"a": []byte("a2")}, Message: "m"}); err != nil {
+		t.Fatalf("Commit() after the lost push error = %v", err)
+	}
 }
 
 func TestRepoWriterDeleteMissingFile(t *testing.T) {
