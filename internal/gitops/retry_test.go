@@ -1,9 +1,14 @@
 package gitops
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
+	"slices"
+	"strconv"
+	"strings"
 	"testing"
 )
 
@@ -91,5 +96,51 @@ func TestRetryOnConflictAfterLosingAPush(t *testing.T) {
 		if data, err := head.Read(p); err != nil || string(data) != want {
 			t.Fatalf("Read(%s) = %q, %v; want %q", p, data, err, want)
 		}
+	}
+}
+
+// Each rerun is logged at info, and giving up at warn, with the write's error.
+func TestRetryOnConflictLogs(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name    string
+		results []error
+		want    []string
+	}{
+		{"success logs nothing", []error{nil}, nil},
+		{"a rerun that succeeds", []error{ErrConflict, nil}, []string{"INFO attempt=1"}},
+		{"giving up", []error{ErrConflict}, []string{
+			"INFO attempt=1", "INFO attempt=2", "INFO attempt=3", "INFO attempt=4", "WARN attempts=5",
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			var logs bytes.Buffer
+			logger := slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{
+				ReplaceAttr: func(_ []string, a slog.Attr) slog.Attr {
+					if a.Key == slog.TimeKey || a.Key == slog.MessageKey {
+						return slog.Attr{}
+					}
+					return a
+				},
+			}))
+			attempts := 0
+			_ = retryOnConflict(context.Background(), logger, func() error {
+				result := tc.results[min(attempts, len(tc.results)-1)]
+				attempts++
+				return result
+			})
+			var got []string
+			for line := range strings.Lines(logs.String()) {
+				if !strings.Contains(line, "error="+strconv.Quote(ErrConflict.Error())) {
+					t.Fatalf("log line %q doesn't carry the write's error", line)
+				}
+				fields := strings.Fields(line)
+				got = append(got, strings.TrimPrefix(fields[0], "level=")+" "+fields[1])
+			}
+			if !slices.Equal(got, tc.want) {
+				t.Fatalf("logs = %q, want %q", got, tc.want)
+			}
+		})
 	}
 }
