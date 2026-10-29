@@ -563,6 +563,7 @@ make smoke            # live API smoke (needs make run)
 make lint             # gofmt check and go vet; uses golangci-lint when installed
 make verify           # build, unit, and lint
 make run              # run the API locally against your kubeconfig
+make run-hub          # the same against your oc login's hub, set up like its console
 make image            # build container image (Podman); alias: container
 make push             # push container image (ghcr.io)
 make build-and-push   # image + push
@@ -594,6 +595,37 @@ See [deploy/keycloak/README.md](deploy/keycloak/README.md). Swagger UI:
 make smoke
 # GRPC_ADDR=localhost:8080 HTTP_ADDR=http://localhost:8081 make smoke
 ```
+
+### Against a hub, set up like its console
+
+`make run-hub` runs this checkout against the hub of your `oc login`, set up
+like the console deployed there, for the console's `make dev`:
+
+```sh
+oc login https://api.<hub>:6443 ...
+make run-hub              # gRPC/Connect 127.0.0.1:9090, REST 127.0.0.1:9092
+make run-hub KEYCLOAK=hub # also the deployed console's Keycloak (Organizations)
+```
+
+It uses the current kubeconfig context as it is (`KUBECONFIG_PATH` picks
+another kubeconfig, for `oc` and the backend alike) and stops when `oc whoami`
+fails. While it runs, anything on this machine that reaches those ports acts
+with your login, a web page through DNS rebinding included (`make run` too):
+stop it when you're done. It listens on loopback only (`LISTEN_ADDRESS`, `HTTP_LISTEN_ADDRESS`
+move it; any other address is refused, as the API has no authentication),
+port-forwards ACM Search (`open-cluster-management/search-search-api`) for
+cluster GPUs, or runs with `--search-api-url=off` without it, and copies the
+plain Git and namespace settings (`AI_GRID_GIT_URL`, `AI_GRID_GIT_BRANCH`,
+`AI_GRID_GRID_NAMESPACE`, `AI_GRID_MODELS_NAMESPACE`,
+`AI_GRID_SUBSCRIPTION_NAMESPACE`) of the console's `ai-grid-backend` container,
+the Deployment labelled `app.kubernetes.io/name=ai-grid-provider-console`.
+Without exactly one such Deployment it keeps `make run`'s defaults. It never
+reads the Git token, so Models and Subscriptions read the console's catalog,
+and writes to it fail with the backend's error. `KEYCLOAK=hub` reads the console's Keycloak Secret into the
+backend's environment only; without it Tenants use `make run`'s
+`KEYCLOAK_URL`. The API acts as you: adding or removing clusters, and with
+`KEYCLOAK=hub` organization changes, are real. Ctrl-C stops the API and the
+port-forward. See [hack/run-hub.sh](hack/run-hub.sh).
 
 The unit test uses a Kubernetes dynamic fake client. The Kind integration test
 uses the real Kubernetes API server, real OCM CRD, real `ManagedCluster`

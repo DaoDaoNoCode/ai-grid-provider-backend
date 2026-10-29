@@ -50,7 +50,7 @@ GRPC_ADDR ?= localhost:8080
 HTTP_ADDR ?= http://localhost:8081
 
 .PHONY: help all binary build-bin build test unit smoke smoke-openshift vet fmt-check lint verify generate check-generated \
-	image container push build-and-push run \
+	image container push build-and-push run run-hub \
 	keycloak-up keycloak-down keycloak-seed \
 	build-fake-infra dev-fake dev-fake-poc dev-fake-locations dev-catalog-reset dev-catalog-log \
 	prereqs kind-test clean-kind openshift-up openshift-down acm-hub-up acm-hub-down
@@ -202,6 +202,18 @@ run: ## Run the API locally (gRPC :8080, REST/Swagger :8081)
 		--listen-address=$(LISTEN_ADDRESS) \
 		--http-listen-address=$(HTTP_LISTEN_ADDRESS) \
 		--kubeconfig=$(KUBECONFIG_PATH) $(RUN_ARGS)
+
+# The backend on 127.0.0.1:9090 (gRPC/Connect) and :9092 (REST), where the
+# console's make dev expects it, against the hub of your oc login, with the
+# deployed console's Git and namespace settings and ACM Search port-forwarded;
+# KEYCLOAK=hub also uses that console's Keycloak. LISTEN_ADDRESS and
+# HTTP_LISTEN_ADDRESS move it (loopback only). See hack/run-hub.sh.
+run-hub: build ## Run the API locally against the hub of your oc login, set up like the console deployed there
+	@LISTEN_ADDRESS="$(if $(filter file,$(origin LISTEN_ADDRESS)),127.0.0.1:9090,$(LISTEN_ADDRESS))" \
+		HTTP_LISTEN_ADDRESS="$(if $(filter file,$(origin HTTP_LISTEN_ADDRESS)),127.0.0.1:9092,$(HTTP_LISTEN_ADDRESS))" \
+		KUBECONFIG_PATH="$(KUBECONFIG_PATH)" KEYCLOAK_URL="$(KEYCLOAK_URL)" KEYCLOAK="$(KEYCLOAK)" \
+		BACKEND_BIN="$(BACKEND_BIN)" DEV_CATALOG="$(DEV_CATALOG)" RUN_ARGS="$(RUN_ARGS)" \
+		bash hack/run-hub.sh
 
 # Requires a running API (make run) plus hub kubeconfig + Keycloak for full coverage.
 # SKIP_CLUSTERS=1 / SKIP_TENANTS=1 / SKIP_SUBSCRIPTIONS=1 to exercise a subset.
