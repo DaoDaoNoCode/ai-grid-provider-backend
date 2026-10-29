@@ -141,7 +141,11 @@ func (s *SubscriptionsServer) Get(ctx context.Context, req *aigridv1.Subscriptio
 	return s.gitGet(ctx, id)
 }
 
-// Create commits a subscription and its managed AuthPolicy <id>-policy.
+// Create commits a subscription and its managed AuthPolicy <id>-policy. A
+// commit that conflicts reruns the whole create on the new head
+// (gitops.RetryOnConflict): a subscription created meanwhile under the same
+// id is AlreadyExists, and a model ref to a model deleted meanwhile is
+// FailedPrecondition.
 func (s *SubscriptionsServer) Create(ctx context.Context, req *aigridv1.SubscriptionsCreateRequest) (*aigridv1.SubscriptionsCreateResponse, error) {
 	object := req.GetObject()
 	if object == nil {
@@ -154,11 +158,19 @@ func (s *SubscriptionsServer) Create(ctx context.Context, req *aigridv1.Subscrip
 	if err := validateSubscriptionSpec(object.GetSpec()); err != nil {
 		return nil, err
 	}
-	return s.gitCreate(ctx, object)
+	var resp *aigridv1.SubscriptionsCreateResponse
+	err := gitops.RetryOnConflict(ctx, func() (err error) {
+		resp, err = s.gitCreate(ctx, proto.Clone(object).(*aigridv1.Subscription))
+		return err
+	})
+	return resp, err
 }
 
 // Update commits the fields the mask selects, to the subscription and its
-// managed AuthPolicy.
+// managed AuthPolicy. A commit that conflicts reruns the whole update on the
+// new head, from the request as sent: a version that no longer matches is
+// still Aborted, and an update without one merges onto the latest
+// subscription.
 func (s *SubscriptionsServer) Update(ctx context.Context, req *aigridv1.SubscriptionsUpdateRequest) (*aigridv1.SubscriptionsUpdateResponse, error) {
 	object := req.GetObject()
 	if object == nil {
@@ -167,18 +179,27 @@ func (s *SubscriptionsServer) Update(ctx context.Context, req *aigridv1.Subscrip
 	if err := validateSubscriptionID(subscriptionID(object)); err != nil {
 		return nil, err
 	}
-	return s.gitUpdate(ctx, req)
+	var resp *aigridv1.SubscriptionsUpdateResponse
+	err := gitops.RetryOnConflict(ctx, func() (err error) {
+		resp, err = s.gitUpdate(ctx, proto.Clone(req).(*aigridv1.SubscriptionsUpdateRequest))
+		return err
+	})
+	return resp, err
 }
 
 // Delete removes the subscription's file, and with it the managed AuthPolicy.
 // A nonzero resource_version must equal the stored metadata.version, or the
-// delete is Aborted; zero skips the check.
+// delete is Aborted; zero skips the check. A commit that conflicts reruns the
+// whole delete on the new head, so the version is checked again.
 func (s *SubscriptionsServer) Delete(ctx context.Context, req *aigridv1.SubscriptionsDeleteRequest) (*aigridv1.SubscriptionsDeleteResponse, error) {
 	id := req.GetId()
 	if err := validateSubscriptionID(id); err != nil {
 		return nil, err
 	}
-	if err := s.gitDelete(ctx, id, req.GetResourceVersion()); err != nil {
+	err := gitops.RetryOnConflict(ctx, func() error {
+		return s.gitDelete(ctx, id, req.GetResourceVersion())
+	})
+	if err != nil {
 		return nil, err
 	}
 	return &aigridv1.SubscriptionsDeleteResponse{}, nil

@@ -138,7 +138,11 @@ enough.
 ## Versions, validation and errors
 
 - **Optimistic locking.** Update and Delete carry the version the caller last read; a
-  mismatch answers `Aborted`. `Metadata.version` is `int32` today. The console's proposed ADR-0003
+  mismatch answers `Aborted`. Models and Subscriptions commit to Git, where writes to
+  different objects can conflict on a shared index file; the backend makes such a write
+  again on the new head ([README](../README.md), "Git catalog"), so `Aborted` still
+  means the object changed, or the repository kept moving for 5 tries.
+  `Metadata.version` is `int32` today. The console's proposed ADR-0003
   recommends a string, because a Kubernetes `resourceVersion` is opaque. If agreed, that
   change follows path 1 above; clients continue to use the shipped integer contract.
 - **Validation.** Field rules belong in `buf.validate` annotations. Cross-resource checks

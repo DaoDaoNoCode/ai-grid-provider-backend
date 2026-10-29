@@ -376,30 +376,68 @@ func TestSubscriptionsGitUpdateRejectsForeignGroup(t *testing.T) {
 }
 
 // TestSubscriptionsGitConcurrentWrite checks that a write whose base went
-// stale between its read and its commit answers Aborted instead of
-// overwriting the other write.
+// stale between its read and its commit never overwrites the other write:
+// the rerun on the new head answers Aborted to a caller that sent the version
+// it read, and merges onto the other write for a caller that sent none.
 func TestSubscriptionsGitConcurrentWrite(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	writer := &racingWriter{MemoryWriter: gitops.NewMemoryWriter(gitModelSeed("sim-model"))}
 	srv := mustGitSubscriptionsServer(t, writer)
+	other := mustGitSubscriptionsServer(t, writer.MemoryWriter)
 	if _, err := srv.Create(ctx, &aigridv1.SubscriptionsCreateRequest{Object: gitSampleSubscription("team-a")}); err != nil {
 		t.Fatalf("Create() error = %v", err)
 	}
-
-	writer.race = func() {
-		head, _ := writer.Head(ctx)
-		if _, err := writer.MemoryWriter.Commit(ctx, head.Revision(), gitops.Change{
-			Put:     map[string][]byte{subscriptionGitPath("team-a"): []byte("other write")},
-			Message: "other",
-		}); err != nil {
-			t.Errorf("racing Commit() error = %v", err)
+	otherWrite := func(mask string, set func(*aigridv1.Subscription)) func() {
+		return func() {
+			object := gitSampleSubscription("team-a")
+			set(object)
+			if _, err := other.Update(ctx, &aigridv1.SubscriptionsUpdateRequest{
+				Object:     object,
+				UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{mask}},
+			}); err != nil {
+				t.Errorf("racing Update() error = %v", err)
+			}
 		}
 	}
+
+	writer.race = otherWrite("spec.priority", func(s *aigridv1.Subscription) { s.Spec.Priority = 20 })
 	update := gitSampleSubscription("team-a")
+	update.Metadata.Version = 1
 	update.Spec.Priority = 30
-	_, err := srv.Update(ctx, &aigridv1.SubscriptionsUpdateRequest{Object: update})
+	_, err := srv.Update(ctx, &aigridv1.SubscriptionsUpdateRequest{
+		Object:     update,
+		UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.priority"}},
+		Lock:       true,
+	})
 	assertConnectCode(t, err, connect.CodeAborted)
+	if errors.Is(err, gitops.ErrConflict) {
+		t.Fatalf("Update() error = %v, want the rerun's version check, not the conflict", err)
+	}
+	got, err := srv.Get(ctx, &aigridv1.SubscriptionsGetRequest{Id: "team-a"})
+	if err != nil {
+		t.Fatalf("Get() error = %v", err)
+	}
+	if got.GetObject().GetSpec().GetPriority() != 20 || got.GetObject().GetMetadata().GetVersion() != 2 {
+		t.Fatalf("after the refused update priority = %d, version = %d, want the other write's 20 at version 2",
+			got.GetObject().GetSpec().GetPriority(), got.GetObject().GetMetadata().GetVersion())
+	}
+
+	writer.race = otherWrite("metadata.annotations", func(s *aigridv1.Subscription) {
+		s.Metadata.Annotations["openshift.io/display-name"] = "Team A"
+	})
+	update.Metadata.Version = 0
+	updated, err := srv.Update(ctx, &aigridv1.SubscriptionsUpdateRequest{
+		Object:     update,
+		UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.priority"}},
+	})
+	if err != nil {
+		t.Fatalf("Update() without a version error = %v", err)
+	}
+	if o := updated.GetObject(); o.GetSpec().GetPriority() != 30 || o.GetMetadata().GetAnnotations()["openshift.io/display-name"] != "Team A" || o.GetMetadata().GetVersion() != 4 {
+		t.Fatalf("Update() without a version = priority %d, annotations %v, version %d; want 30 merged onto the other write, at version 4",
+			o.GetSpec().GetPriority(), o.GetMetadata().GetAnnotations(), o.GetMetadata().GetVersion())
+	}
 }
 
 func TestSubscriptionsGitListFilter(t *testing.T) {
@@ -503,13 +541,16 @@ func gitModelSeed(ids ...string) map[string][]byte {
 	return files
 }
 
-// racingWriter runs race, once, between a Head and the Commit that follows it.
+// racingWriter runs race, once, between a Head and the Commit that follows it,
+// and counts the Commits made through it.
 type racingWriter struct {
 	*gitops.MemoryWriter
-	race func()
+	race    func()
+	commits int
 }
 
 func (w *racingWriter) Commit(ctx context.Context, base string, c gitops.Change) (string, error) {
+	w.commits++
 	if race := w.race; race != nil {
 		w.race = nil
 		race()
