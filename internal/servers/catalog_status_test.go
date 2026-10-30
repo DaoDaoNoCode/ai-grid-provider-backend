@@ -89,6 +89,20 @@ func pruning(res map[string]interface{}) map[string]interface{} {
 	return res
 }
 
+// combined keeps only the fields the model's phase reads (State, Message,
+// Retrying, NoSubscription), for the tests of those; TestCatalogStatusSplit
+// checks Sync and Live.
+func combined(reports ObjectReports) ObjectReports {
+	out := ObjectReports{}
+	for cluster, objects := range reports {
+		out[cluster] = map[string]ObjectReport{}
+		for name, r := range objects {
+			out[cluster][name] = ObjectReport{State: r.State, Message: r.Message, Retrying: r.Retrying, NoSubscription: r.NoSubscription}
+		}
+	}
+	return out
+}
+
 func newAppClient(objects ...runtime.Object) *fake.FakeDynamicClient {
 	return fake.NewSimpleDynamicClientWithCustomListKinds(
 		runtime.NewScheme(),
@@ -216,7 +230,7 @@ func TestCatalogStatusRead(t *testing.T) {
 			if err != nil {
 				t.Fatalf("Read() error = %v", err)
 			}
-			if want := (ObjectReports{"site-a": tc.want}); !reflect.DeepEqual(got, want) {
+			if want := (ObjectReports{"site-a": tc.want}); !reflect.DeepEqual(combined(got), want) {
 				t.Fatalf("Read() = %v, want %v", got, want)
 			}
 		})
@@ -244,14 +258,14 @@ func TestCatalogStatusReadApplications(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Read() error = %v", err)
 		}
-		if want := (ObjectReports{"site-b": {"m": {State: StateReady}}}); !reflect.DeepEqual(got, want) {
+		if want := (ObjectReports{"site-b": {"m": {State: StateReady}}}); !reflect.DeepEqual(combined(got), want) {
 			t.Fatalf("models Read() = %v, want %v", got, want)
 		}
 		got, err = reader.Read(ctx, IngressSet, kindMaaSModelRef)
 		if err != nil {
 			t.Fatalf("Read() error = %v", err)
 		}
-		if want := (ObjectReports{"site-a": {"m": {State: StateReady}}}); !reflect.DeepEqual(got, want) {
+		if want := (ObjectReports{"site-a": {"m": {State: StateReady}}}); !reflect.DeepEqual(combined(got), want) {
 			t.Fatalf("ingress Read() = %v, want %v", got, want)
 		}
 	})
@@ -264,7 +278,7 @@ func TestCatalogStatusReadApplications(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Read() error = %v", err)
 		}
-		if want := (ObjectReports{"edge": {"team-a": {State: StateReady}}}); !reflect.DeepEqual(got, want) {
+		if want := (ObjectReports{"edge": {"team-a": {State: StateReady}}}); !reflect.DeepEqual(combined(got), want) {
 			t.Fatalf("Read() = %v, want %v", got, want)
 		}
 	})
@@ -392,9 +406,10 @@ func TestCatalogStatusDegradedUnderWay(t *testing.T) {
 			kindLLMInferenceService, "config llm-template not found",
 			ObjectReport{State: StateFailed, Message: "config llm-template not found"},
 		},
+		// Stopped on purpose (serving.kserve.io/stop): not a failure.
 		"model stopped": {
 			kindLLMInferenceService, "Service is stopped",
-			ObjectReport{State: StateFailed, Message: "Service is stopped"},
+			ObjectReport{State: StatePending, Message: "Service is stopped"},
 		},
 		// maas-controller deriveModelPhase: runtime ready, no pairing.
 		"model ref awaiting a subscription": {
@@ -413,6 +428,11 @@ func TestCatalogStatusDegradedUnderWay(t *testing.T) {
 			kindMaaSModelRef, "Failed to update model status: boom",
 			ObjectReport{State: StateFailed, Message: "Failed to update model status: boom"},
 		},
+		// Only an LLMInferenceService is stopped by that message.
+		"another kind's stopped message": {
+			kindMaaSModelRef, "Service is stopped",
+			ObjectReport{State: StateFailed, Message: "Service is stopped"},
+		},
 		// Startup messages count only for the kind that writes them.
 		"another kind's startup message": {
 			kindMaaSModelRef, "Deployment does not have minimum availability.",
@@ -430,7 +450,7 @@ func TestCatalogStatusDegradedUnderWay(t *testing.T) {
 			if err != nil {
 				t.Fatalf("Read() error = %v", err)
 			}
-			if want := (ObjectReports{"site-a": {"m": tc.want}}); !reflect.DeepEqual(got, want) {
+			if want := (ObjectReports{"site-a": {"m": tc.want}}); !reflect.DeepEqual(combined(got), want) {
 				t.Fatalf("Read() = %v, want %v", got, want)
 			}
 		})
@@ -447,7 +467,98 @@ func TestCatalogStatusNoSubscriptionNeedsSync(t *testing.T) {
 		t.Fatalf("Read() error = %v", err)
 	}
 	want := ObjectReports{"site-a": {"m": {State: StatePending, Message: "Awaiting governance pairing"}}}
-	if !reflect.DeepEqual(got, want) {
+	if !reflect.DeepEqual(combined(got), want) {
 		t.Fatalf("Read() = %v, want %v", got, want)
+	}
+}
+
+// TestCatalogStatusSplit checks the sync and live state Read keeps apart
+// from State: an object can be out of sync and still running the previous
+// revision, or synced and stopped.
+func TestCatalogStatusSplit(t *testing.T) {
+	t.Parallel()
+	const models = DefaultCatalogModelsAppSet
+	type split struct {
+		sync        SyncState
+		syncMessage string
+		live        LiveState
+		liveMessage string
+	}
+	for name, tc := range map[string]struct {
+		app  *unstructured.Unstructured
+		want split
+	}{
+		"synced and healthy": {
+			application(models, "site-a", appResource(kindLLMInferenceService, "m", "Synced", "Healthy", "ok")),
+			split{SyncSynced, "", LiveReady, "ok"},
+		},
+		"out of sync, previous revision running": {
+			application(models, "site-a", appResource(kindLLMInferenceService, "m", "OutOfSync", "Healthy", "")),
+			split{SyncPending, "", LiveReady, ""},
+		},
+		"not on the cluster yet": {
+			application(models, "site-a", appResource(kindLLMInferenceService, "m", "OutOfSync", "Missing", "")),
+			split{SyncPending, "", LiveAbsent, ""},
+		},
+		"out of sync with no health": {
+			application(models, "site-a", appResource(kindLLMInferenceService, "m", "OutOfSync", "", "")),
+			split{SyncPending, "", LiveAbsent, ""},
+		},
+		"synced with no health yet": {
+			application(models, "site-a", appResource(kindLLMInferenceService, "m", "Synced", "", "")),
+			split{SyncSynced, "", LiveStarting, ""},
+		},
+		"progressing": {
+			application(models, "site-a", appResource(kindLLMInferenceService, "m", "Synced", "Progressing", "Waiting for LLMInferenceService status")),
+			split{SyncSynced, "", LiveStarting, "Waiting for LLMInferenceService status"},
+		},
+		"starting": {
+			application(models, "site-a", appResource(kindLLMInferenceService, "m", "Synced", "Degraded", "Deployment does not have minimum availability.")),
+			split{SyncSynced, "", LiveStarting, "Deployment does not have minimum availability."},
+		},
+		"failed": {
+			application(models, "site-a", appResource(kindLLMInferenceService, "m", "Synced", "Degraded", "config llm-template not found")),
+			split{SyncSynced, "", LiveFailed, "config llm-template not found"},
+		},
+		"stopped": {
+			application(models, "site-a", appResource(kindLLMInferenceService, "m", "Synced", "Degraded", "Service is stopped")),
+			split{SyncSynced, "", LiveStopped, "Service is stopped"},
+		},
+		"stopped with a warning": {
+			application(models, "site-a", appResource(kindLLMInferenceService, "m", "Synced", "Degraded", "Service is stopped with warning: x")),
+			split{SyncSynced, "", LiveStopped, "Service is stopped with warning: x"},
+		},
+		"sync failed, never created": {
+			withSyncFailure(application(models, "site-a", appResource(kindLLMInferenceService, "m", "OutOfSync", "Missing", "")), "apply failed"),
+			split{SyncFailed, "apply failed", LiveAbsent, ""},
+		},
+		"stopped, change not applied yet": {
+			application(models, "site-a", appResource(kindLLMInferenceService, "m", "OutOfSync", "Degraded", "Service is stopped")),
+			split{SyncPending, "", LiveStopped, "Service is stopped"},
+		},
+		"suspended": {
+			application(models, "site-a", appResource(kindLLMInferenceService, "m", "Synced", "Suspended", "")),
+			split{SyncSynced, "", LiveStarting, ""},
+		},
+		"sync failed, previous revision running": {
+			withSyncFailure(application(models, "site-a", appResource(kindLLMInferenceService, "m", "OutOfSync", "Healthy", "")), "apply failed"),
+			split{SyncFailed, "apply failed", LiveReady, ""},
+		},
+		"sync retrying": {
+			withRetry(application(models, "site-a", appResource(kindLLMInferenceService, "m", "OutOfSync", "Missing", "")), refusal, 2),
+			split{SyncPending, refusal, LiveAbsent, ""},
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			got, err := NewCatalogStatusReader(newAppClient(tc.app), CatalogApps{}).Read(context.Background(), ModelsSet, kindLLMInferenceService)
+			if err != nil {
+				t.Fatalf("Read() error = %v", err)
+			}
+			r := got["site-a"]["m"]
+			if g := (split{r.Sync, r.SyncMessage, r.Live, r.LiveMessage}); g != tc.want {
+				t.Fatalf("split = %+v, want %+v", g, tc.want)
+			}
+		})
 	}
 }

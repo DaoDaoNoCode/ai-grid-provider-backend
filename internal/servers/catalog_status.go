@@ -140,7 +140,51 @@ type ObjectReport struct {
 	// active MaaSSubscription and MaaSAuthPolicy pair covers yet. Its state
 	// is pending, because MaaS doesn't serve it to anyone yet.
 	NoSubscription bool
+	// Sync is whether Argo CD has applied the object as Git has it, apart
+	// from its health; SyncMessage is the sync operation's message while
+	// that sync failed or is being retried.
+	Sync        SyncState
+	SyncMessage string
+	// Live is what the object on the cluster says, apart from its sync: an
+	// object out of sync can still be the previous revision, running.
+	// LiveMessage is its health message.
+	Live        LiveState
+	LiveMessage string
 }
+
+// SyncState is whether Argo CD has applied an object as Git has it.
+type SyncState int
+
+const (
+	// SyncPending: not applied yet. The object is OutOfSync or Missing,
+	// or Argo CD is still retrying its sync.
+	SyncPending SyncState = iota
+	// SyncSynced: the live object matches Git.
+	SyncSynced
+	// SyncFailed: Argo CD's sync to the revision it wants failed and it has
+	// stopped retrying.
+	SyncFailed
+)
+
+// LiveState is what an object on the cluster says, from its Argo CD health
+// alone.
+type LiveState int
+
+const (
+	// LiveAbsent: the object isn't on the cluster (health Missing, or no
+	// health while it is out of sync).
+	LiveAbsent LiveState = iota
+	// LiveStarting: Progressing, Suspended, Unknown or no health, or
+	// Degraded with a message that names a step still under way.
+	LiveStarting
+	// LiveReady: Healthy.
+	LiveReady
+	// LiveFailed: Degraded for any other reason.
+	LiveFailed
+	// LiveStopped: an LLMInferenceService KServe reports stopped, because
+	// it carries the serving.kserve.io/stop annotation.
+	LiveStopped
+)
 
 // ObjectReports maps each cluster that has an Application in the set to the
 // objects of one kind it lists, by name. A cluster without an Application in
@@ -248,6 +292,7 @@ func applicationReports(app unstructured.Unstructured, kind string) map[string]O
 		health, _, _ := unstructured.NestedString(res, "health", "status")
 		message, _, _ := unstructured.NestedString(res, "health", "message")
 		report := ObjectReport{State: StatePending, Message: message}
+		split := splitReport(kind, synced, health, message, syncFailed, retrying, syncMessage)
 		switch {
 		case health == "Degraded":
 			report.State = StateFailed
@@ -264,12 +309,53 @@ func applicationReports(app unstructured.Unstructured, kind string) map[string]O
 		case synced == "Synced" && health == "Healthy":
 			report.State = StateReady
 		}
+		report.Sync, report.SyncMessage, report.Live, report.LiveMessage = split.Sync, split.SyncMessage, split.Live, split.LiveMessage
 		if previous, seen := out[name]; seen && worse(previous.State, report.State) {
 			continue
 		}
 		out[name] = report
 	}
 	return out
+}
+
+// splitReport reads a resource's sync and its live state apart, for the
+// fields ObjectReport keeps besides State. Sync: Synced is synced; failed
+// when the sync to the wanted revision failed; pending otherwise, with the
+// operation's message while Argo CD retries it. Live: Healthy is ready;
+// Degraded is stopped, starting or failed by its message (degradedUnderWay);
+// Missing, or no health while out of sync, is absent; anything else is
+// starting.
+func splitReport(kind, synced, health, message string, syncFailed, retrying bool, syncMessage string) ObjectReport {
+	out := ObjectReport{Sync: SyncPending, Live: LiveStarting, LiveMessage: message}
+	switch {
+	case synced == "Synced":
+		out.Sync = SyncSynced
+	case syncFailed:
+		out.Sync, out.SyncMessage = SyncFailed, syncMessage
+	case retrying:
+		out.SyncMessage = syncMessage
+	}
+	switch {
+	case health == "Healthy":
+		out.Live = LiveReady
+	case health == "Degraded" && kind == kindLLMInferenceService && llmisvcStopped(message):
+		out.Live = LiveStopped
+	case health == "Degraded":
+		if state, _ := degradedUnderWay(kind, message); state == StateFailed {
+			out.Live = LiveFailed
+		}
+	case health == "Missing" || (health == "" && synced != "Synced"):
+		out.Live, out.LiveMessage = LiveAbsent, ""
+	}
+	return out
+}
+
+// llmisvcStopped reports whether an LLMInferenceService's Ready message says
+// KServe stopped it: with serving.kserve.io/stop "true", every workload and
+// router condition is False with "Service is stopped" (opendatahub-io/kserve
+// 5aabec9, pkg/controller/v1alpha2/llmisvc), and Ready carries it up.
+func llmisvcStopped(message string) bool {
+	return strings.Contains(strings.ToLower(message), "service is stopped")
 }
 
 // The Ready=False messages, by kind, that are steps still under way rather
@@ -322,6 +408,10 @@ var (
 func degradedUnderWay(kind, message string) (state ObjectState, noSubscription bool) {
 	switch kind {
 	case kindLLMInferenceService:
+		// Stopped on purpose: not serving, and not a failure.
+		if llmisvcStopped(message) {
+			return StatePending, false
+		}
 		if strings.Contains(message, llmisvcRejected) {
 			return StateFailed, false
 		}

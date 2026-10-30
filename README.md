@@ -333,14 +333,26 @@ For models:
 - **Two statuses.** The phase answers "can tenants use it?"; two more fields
   keep the deployment and MaaS apart, so a running model with no
   subscription doesn't read as starting:
-  - `status.clusters[].deployment` is each placed cluster's
-    `LLMInferenceService`: `RUNNING`, `STARTING` (not synced yet,
-    progressing, or a step KServe reports still under way, such as
-    `Deployment does not have minimum availability.`), `FAILED` (any other
-    `Ready=False`, or a failed sync), or unspecified with no report;
-    `deployment_message` is KServe's or Argo CD's message.
-    `status.deployment` sums them: `RUNNING` when every placed cluster runs
-    it, `FAILED` when one fails, `STARTING` otherwise.
+  - `status.clusters[].deployment` is what each placed cluster's
+    `LLMInferenceService` says, from its Argo CD health alone: `RUNNING`
+    (`Healthy`), `STARTING` (progressing, or a step KServe reports still
+    under way, such as `Deployment does not have minimum availability.`),
+    `STOPPED` (KServe's `Service is stopped`: the object carries
+    `serving.kserve.io/stop: "true"`), `FAILED` (any other `Ready=False`),
+    or unspecified while it isn't on the cluster; `deployment_message` is
+    KServe's message.
+  - `status.clusters[].sync` is whether Argo CD has applied it as Git has
+    it: `SYNCED`, `OUT_OF_SYNC` (the cluster's Application doesn't list it
+    yet, it is `OutOfSync` or `Missing`, or Argo CD is retrying the sync),
+    `FAILED` (the sync to the wanted revision failed and the retries ran
+    out), or unspecified when the cluster has no Application;
+    `sync_message` is the sync operation's message. An edit not applied yet
+    is `OUT_OF_SYNC` with the previous revision still `RUNNING`.
+  - `status.deployment` sums the placed clusters: `FAILED` when one fails or
+    its sync failed, `STARTING` when one is starting or hasn't reported,
+    `STOPPED` when every one is stopped, `RUNNING` when every one runs it or
+    is stopped and at least one runs it. A model stopped everywhere is
+    `PENDING`, reason `Stopped`, once every cluster has synced.
   - `status.ingress[]` has one entry per ingress cluster with its MaaS
     `state`: `PUBLISHED` (`MaaSModelRef` ready), `NO_SUBSCRIPTION` (MaaS
     says `Awaiting governance pairing`: the backend is healthy but no

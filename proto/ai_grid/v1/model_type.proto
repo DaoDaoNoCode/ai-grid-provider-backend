@@ -257,8 +257,8 @@ message ModelStatus {
   ModelPhase phase = 3;
 
   // Reason of the condition that decided phase. In git mode: SavedToGit
-  // while no cluster has reported, else Ready, PartiallyAvailable, Failed or
-  // NotReady with the phase.
+  // while no cluster has reported, else Ready, PartiallyAvailable, Failed,
+  // Stopped or NotReady with the phase (see ModelPhase).
   string reason = 4;
 
   // Message of the condition that decided phase. In git mode, while a
@@ -287,9 +287,12 @@ message ModelStatus {
   repeated ModelClusterStatus clusters = 9;
 
   // The model's deployment, summed over its placed clusters
-  // (`clusters[].deployment`): RUNNING when every placed cluster runs it;
-  // FAILED when one reports it failed; STARTING otherwise, including while a
-  // placed cluster hasn't reported; UNSPECIFIED while none has. It says
+  // (`clusters[].deployment` and `sync`): FAILED when one reports it failed
+  // or its sync failed; STARTING when one is starting or hasn't reported;
+  // STOPPED when every one is stopped; RUNNING when every one runs it or is
+  // stopped, and at least one runs it; UNSPECIFIED while none has reported
+  // a deployment. A placed cluster stopped on purpose doesn't make the model
+  // STARTING. It says
   // nothing about MaaS: see `maas`. It can differ from `phase`: a model
   // failed on one cluster and running on another is FAILED here and
   // PARTIALLY_AVAILABLE there. Output only.
@@ -313,20 +316,41 @@ message ModelStatus {
 
 // What one placed cluster reports about the model's LLMInferenceService.
 enum ModelDeploymentState {
-  // No report: the cluster doesn't list the LLMInferenceService yet.
+  // No report: the LLMInferenceService isn't on the cluster yet, or the
+  // cluster doesn't list it. ModelClusterStatus.sync says whether Argo CD
+  // has applied it.
   MODEL_DEPLOYMENT_STATE_UNSPECIFIED = 0;
-  // Delivered but not serving yet: Argo CD hasn't synced it or is retrying
-  // its sync, it is progressing, or KServe reports a step that is still
-  // under way, such as a Deployment below its minimum availability. That
-  // step has no deadline: a pod that keeps crashing, can't pull its image or
-  // finds no GPU leaves the same message, so it also shows here, with
-  // KServe's message, until it is fixed.
+  // On the cluster but not serving yet: progressing, or KServe reports a
+  // step that is still under way, such as a Deployment below its minimum
+  // availability. That step has no deadline: a pod that keeps crashing,
+  // can't pull its image or finds no GPU leaves the same message, so it also
+  // shows here, with KServe's message, until it is fixed.
   MODEL_DEPLOYMENT_STATE_STARTING = 1;
-  // Ready=True: serving.
+  // Ready=True: serving. While ModelClusterStatus.sync isn't SYNCED, this
+  // is the previous revision.
   MODEL_DEPLOYMENT_STATE_RUNNING = 2;
-  // KServe reports it not ready for another reason, or Argo CD couldn't
-  // sync it.
+  // KServe reports it not ready for another reason.
   MODEL_DEPLOYMENT_STATE_FAILED = 3;
+  // KServe reports it stopped ("Service is stopped"): the
+  // LLMInferenceService carries the serving.kserve.io/stop annotation, so
+  // it runs no pods.
+  MODEL_DEPLOYMENT_STATE_STOPPED = 4;
+}
+
+// Whether Argo CD has applied what Git holds for the model on one cluster.
+enum ModelSyncState {
+  // No report: the cluster has no Application in the catalog's models
+  // ApplicationSet, or the backend can't read the Applications.
+  MODEL_SYNC_STATE_UNSPECIFIED = 0;
+  // The live LLMInferenceService matches Git.
+  MODEL_SYNC_STATE_SYNCED = 1;
+  // Not applied yet: the cluster's Application doesn't list it yet, it is
+  // OutOfSync or Missing, or Argo CD is retrying its sync (sync_message
+  // says why).
+  MODEL_SYNC_STATE_OUT_OF_SYNC = 2;
+  // Argo CD's sync to the revision it wants failed and it stopped retrying
+  // (sync_message says why).
+  MODEL_SYNC_STATE_FAILED = 3;
 }
 
 // What one ingress cluster reports about the model's MaaSModelRef and
@@ -377,7 +401,10 @@ message ModelIngressStatus {
 //     reports them ready, at least one placed cluster is READY and at least
 //     one is not.
 //   - FAILED (reason Failed): a cluster reports one of the model's objects
-//     failed: Argo CD health Degraded, or its sync failed.
+//     failed: Argo CD health Degraded, or its sync failed. An
+//     LLMInferenceService KServe reports stopped is Degraded but not failed.
+//   - PENDING (reason Stopped): every placed cluster reports it stopped
+//     (`deployment` STOPPED) and has applied Git's change (`sync` SYNCED).
 //   - PENDING (reason NotReady): otherwise, including while an ingress
 //     cluster reports the MaaSModelRef not ready or hasn't reported it.
 //
@@ -431,7 +458,8 @@ message ModelClusterStatus {
     ]
   }];
 
-  // Ready, Failed, NotReady (a report says not ready) or NoReport (the
+  // Ready, Failed, NotReady (a report says not ready), Stopped (the
+  // LLMInferenceService is stopped, `deployment` STOPPED) or NoReport (the
   // cluster hasn't reported the object yet).
   string reason = 3 [(buf.validate.field).string.min_len = 1];
 
@@ -443,10 +471,18 @@ message ModelClusterStatus {
   // What the cluster reports about the model's LLMInferenceService.
   ModelDeploymentState deployment = 5 [(buf.validate.field).enum.defined_only = true];
 
-  // KServe's or Argo CD's message about the deployment, for example
-  // "Deployment does not have minimum availability.". Empty when it is
-  // running or hasn't reported.
+  // KServe's message about the deployment, for example "Deployment does
+  // not have minimum availability.". Empty when it is running or hasn't
+  // reported.
   string deployment_message = 6;
+
+  // Whether Argo CD has applied the model's LLMInferenceService on the
+  // cluster as Git has it.
+  ModelSyncState sync = 7 [(buf.validate.field).enum.defined_only = true];
+
+  // Argo CD's sync operation message while the sync failed or is being
+  // retried, for example an AppProject refusing the kind.
+  string sync_message = 8;
 }
 
 // Placement observed state.

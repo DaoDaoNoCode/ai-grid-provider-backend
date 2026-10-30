@@ -855,3 +855,147 @@ func TestModelsGitTwoStatuses(t *testing.T) {
 		})
 	}
 }
+
+// TestModelsGitSyncAndStopped checks each placed cluster's Argo CD sync
+// apart from its deployment, and a model KServe reports stopped: an edit
+// not applied yet still shows the previous revision running, a stopped
+// cluster isn't a failure, and a failed sync fails the deployment summary.
+func TestModelsGitSyncAndStopped(t *testing.T) {
+	t.Parallel()
+	const (
+		running  = aigridv1.ModelDeploymentState_MODEL_DEPLOYMENT_STATE_RUNNING
+		stopped  = aigridv1.ModelDeploymentState_MODEL_DEPLOYMENT_STATE_STOPPED
+		depFail  = aigridv1.ModelDeploymentState_MODEL_DEPLOYMENT_STATE_FAILED
+		starting = aigridv1.ModelDeploymentState_MODEL_DEPLOYMENT_STATE_STARTING
+		depNone  = aigridv1.ModelDeploymentState_MODEL_DEPLOYMENT_STATE_UNSPECIFIED
+
+		synced    = aigridv1.ModelSyncState_MODEL_SYNC_STATE_SYNCED
+		outOfSync = aigridv1.ModelSyncState_MODEL_SYNC_STATE_OUT_OF_SYNC
+		syncFail  = aigridv1.ModelSyncState_MODEL_SYNC_STATE_FAILED
+		syncNone  = aigridv1.ModelSyncState_MODEL_SYNC_STATE_UNSPECIFIED
+
+		stoppedMsg = "Service is stopped"
+	)
+	type placed struct {
+		deployment  aigridv1.ModelDeploymentState
+		depMessage  string
+		sync        aigridv1.ModelSyncState
+		syncMessage string
+	}
+	healthy := llmisvc("Synced", "Healthy", "")
+	for name, tc := range map[string]struct {
+		objects        []runtime.Object
+		wantPhase      aigridv1.ModelPhase
+		wantReason     string
+		wantDeployment aigridv1.ModelDeploymentState
+		wantPlaced     map[string]placed
+	}{
+		"an edit not applied yet runs the previous revision": {
+			objects: []runtime.Object{
+				modelsApp("site-a", llmisvc("OutOfSync", "Healthy", "")),
+				modelsApp("site-b", healthy),
+				readyIngress("hub"),
+			},
+			wantPhase: phasePartial, wantReason: "PartiallyAvailable", wantDeployment: running,
+			wantPlaced: map[string]placed{"site-a": {running, "", outOfSync, ""}, "site-b": {running, "", synced, ""}},
+		},
+		"stopped on one cluster": {
+			objects: []runtime.Object{
+				modelsApp("site-a", llmisvc("Synced", "Degraded", stoppedMsg)),
+				modelsApp("site-b", healthy),
+				readyIngress("hub"),
+			},
+			wantPhase: phasePartial, wantReason: "PartiallyAvailable", wantDeployment: running,
+			wantPlaced: map[string]placed{"site-a": {stopped, stoppedMsg, synced, ""}, "site-b": {running, "", synced, ""}},
+		},
+		"stopped everywhere": {
+			objects: []runtime.Object{
+				modelsApp("site-a", llmisvc("Synced", "Degraded", stoppedMsg)),
+				modelsApp("site-b", llmisvc("Synced", "Degraded", stoppedMsg)),
+				readyIngress("hub"),
+			},
+			wantPhase: phasePending, wantReason: "Stopped", wantDeployment: stopped,
+			wantPlaced: map[string]placed{"site-a": {stopped, stoppedMsg, synced, ""}, "site-b": {stopped, stoppedMsg, synced, ""}},
+		},
+		// Git says stop (or start) but Argo CD hasn't applied it everywhere:
+		// not settled, so not reason Stopped.
+		"stopped, but a change not applied yet": {
+			objects: []runtime.Object{
+				modelsApp("site-a", llmisvc("OutOfSync", "Degraded", stoppedMsg)),
+				modelsApp("site-b", llmisvc("Synced", "Degraded", stoppedMsg)),
+				readyIngress("hub"),
+			},
+			wantPhase: phasePending, wantReason: "NotReady", wantDeployment: stopped,
+			wantPlaced: map[string]placed{"site-a": {stopped, stoppedMsg, outOfSync, ""}, "site-b": {stopped, stoppedMsg, synced, ""}},
+		},
+		"stopped on one cluster, starting on the other": {
+			objects: []runtime.Object{
+				modelsApp("site-a", llmisvc("Synced", "Degraded", stoppedMsg)),
+				modelsApp("site-b", llmisvc("Synced", "Progressing", "Waiting for LLMInferenceService status")),
+				readyIngress("hub"),
+			},
+			wantPhase: phasePending, wantReason: "NotReady", wantDeployment: starting,
+			wantPlaced: map[string]placed{
+				"site-a": {stopped, stoppedMsg, synced, ""},
+				"site-b": {starting, "Waiting for LLMInferenceService status", synced, ""},
+			},
+		},
+		"a failed sync fails the deployment": {
+			objects: []runtime.Object{
+				withSyncFailure(application(DefaultCatalogModelsAppSet, "site-a", llmisvc("OutOfSync", "Missing", "")), "apply failed"),
+				modelsApp("site-b", healthy),
+				readyIngress("hub"),
+			},
+			// The phase ranks PARTIALLY_AVAILABLE first while site-b serves.
+			wantPhase: phasePartial, wantReason: "PartiallyAvailable", wantDeployment: depFail,
+			wantPlaced: map[string]placed{"site-a": {depNone, "", syncFail, "apply failed"}, "site-b": {running, "", synced, ""}},
+		},
+		"an Application that doesn't list it yet, and none at all": {
+			objects: []runtime.Object{
+				modelsApp("site-a"),
+				ingressApp("hub", modelRef("Synced", "Healthy"), externalModel("Synced", "Healthy")),
+			},
+			wantPhase: phasePending, wantReason: "NotReady", wantDeployment: depNone,
+			wantPlaced: map[string]placed{"site-a": {depNone, "", outOfSync, ""}, "site-b": {depNone, "", syncNone, ""}},
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			ctx := context.Background()
+			objects := append(slices.Clone(tc.objects), managedCluster("site-a", nil, true), managedCluster("site-b", nil, true))
+			client := newAppClient(objects...)
+			srv, err := NewModelsServer().SetLogger(slog.New(slog.DiscardHandler)).SetWriter(gitops.NewMemoryWriter(nil)).
+				SetCatalogStatus(NewCatalogStatusReader(client, CatalogApps{})).SetDynamicClient(client).Build()
+			if err != nil {
+				t.Fatalf("Build() error = %v", err)
+			}
+			if _, err := srv.Create(ctx, &aigridv1.ModelsCreateRequest{Object: gitSampleModel("granite", "site-a", "site-b")}); err != nil {
+				t.Fatalf("Create() error = %v", err)
+			}
+			got, err := srv.Get(ctx, &aigridv1.ModelsGetRequest{Id: "granite"})
+			if err != nil {
+				t.Fatalf("Get() error = %v", err)
+			}
+			st := got.GetObject().GetStatus()
+			if st.GetPhase() != tc.wantPhase || st.GetReason() != tc.wantReason || st.GetDeployment() != tc.wantDeployment {
+				t.Errorf("phase, reason, deployment = %v, %q, %v; want %v, %q, %v (%q)",
+					st.GetPhase(), st.GetReason(), st.GetDeployment(), tc.wantPhase, tc.wantReason, tc.wantDeployment, st.GetMessage())
+			}
+			gotPlaced := map[string]placed{}
+			for _, c := range st.GetClusters() {
+				gotPlaced[c.GetCluster()] = placed{c.GetDeployment(), c.GetDeploymentMessage(), c.GetSync(), c.GetSyncMessage()}
+				if err := protovalidate.Validate(c); err != nil {
+					t.Errorf("clusters[%s] fails its rules: %v", c.GetCluster(), err)
+				}
+			}
+			if !maps.Equal(gotPlaced, tc.wantPlaced) {
+				t.Errorf("clusters = %v; want %v", gotPlaced, tc.wantPlaced)
+			}
+			for _, c := range st.GetClusters() {
+				if stoppedCluster := c.GetDeployment() == stopped; stoppedCluster != (c.GetReason() == "Stopped") {
+					t.Errorf("clusters[%s] deployment %v with reason %q; want reason Stopped exactly when stopped", c.GetCluster(), c.GetDeployment(), c.GetReason())
+				}
+			}
+		})
+	}
+}

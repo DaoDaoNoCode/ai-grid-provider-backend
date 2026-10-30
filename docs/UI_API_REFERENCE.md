@@ -644,9 +644,10 @@ Once a cluster reports, the status also has the model on each placed cluster
   "maas": "MODEL_MAAS_STATE_NO_SUBSCRIPTION",
   "clusters": [
     {"cluster": "site-a", "phase": "MODEL_PHASE_PENDING", "reason": "NotReady", "message": "LLMInferenceService not ready",
-     "deployment": "MODEL_DEPLOYMENT_STATE_STARTING", "deploymentMessage": "Deployment does not have minimum availability."},
+     "deployment": "MODEL_DEPLOYMENT_STATE_STARTING", "deploymentMessage": "Deployment does not have minimum availability.",
+     "sync": "MODEL_SYNC_STATE_SYNCED"},
     {"cluster": "site-b", "phase": "MODEL_PHASE_READY", "reason": "Ready", "message": "LLMInferenceService ready",
-     "deployment": "MODEL_DEPLOYMENT_STATE_RUNNING"}
+     "deployment": "MODEL_DEPLOYMENT_STATE_RUNNING", "sync": "MODEL_SYNC_STATE_SYNCED"}
   ],
   "ingress": [
     {"cluster": "hub", "state": "MODEL_MAAS_STATE_NO_SUBSCRIPTION", "message": "Awaiting governance pairing"}
@@ -665,11 +666,23 @@ Ingress clusters the model isn't placed on have no entry in `clusters`.
 The two statuses keep the model's deployment apart from MaaS, so a list can
 show both, such as "Running · No subscription":
 
-- `deployment` on each `clusters` entry: `RUNNING`, `STARTING` (with KServe's
-  message, such as `Deployment does not have minimum availability.`),
-  `FAILED` (with the message), or `UNSPECIFIED` with no report.
-  `status.deployment` is `RUNNING` when every placed cluster runs it, `FAILED`
-  when one fails, `STARTING` otherwise.
+- `deployment` on each `clusters` entry, from the `LLMInferenceService`'s
+  health alone: `RUNNING`, `STARTING` (with KServe's message, such as
+  `Deployment does not have minimum availability.`), `STOPPED` (KServe's
+  `Service is stopped`, from the `serving.kserve.io/stop` annotation),
+  `FAILED` (with the message), or `UNSPECIFIED` while it isn't on the
+  cluster.
+- `sync` on each `clusters` entry: `SYNCED`, `OUT_OF_SYNC` (not applied yet,
+  or Argo CD is retrying; `syncMessage` says why), `FAILED` (the sync failed
+  and the retries ran out; `syncMessage` says why), or `UNSPECIFIED` when the
+  cluster has no Application. An edit not applied yet is `OUT_OF_SYNC` while
+  the previous revision is still `RUNNING`.
+- `status.deployment` is `FAILED` when one placed cluster fails or its sync
+  failed, `STARTING` when one is starting or hasn't reported, `STOPPED` when
+  every one is stopped, and `RUNNING` when every one runs it or is stopped,
+  with at least one running. A model stopped everywhere is `PENDING`, reason
+  `Stopped`, once every cluster has synced; a cluster where it is stopped has
+  reason `Stopped`.
 - `ingress`: one entry per ingress cluster (combined ones included), with
   `state` `PUBLISHED`, `NO_SUBSCRIPTION` (running, but no subscription covers
   it, so no tenant can call it), `NOT_READY`, `FAILED`, or `UNSPECIFIED` with

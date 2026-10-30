@@ -345,7 +345,9 @@ func (r kindReport) state() (state ObjectState, found bool) {
 // The model is, in the console's order of precedence (ModelPhase in
 // model_type.proto): READY when every cluster is ready; PARTIALLY_AVAILABLE
 // when every ingress cluster is ready and some, not all, placed clusters are;
-// FAILED when any cluster is failed; otherwise PENDING (reason NotReady). All
+// FAILED when any cluster is failed; PENDING with reason Stopped when every
+// placed cluster reports it stopped and synced; otherwise PENDING (reason
+// NotReady). A placed cluster where it is stopped has reason Stopped. All
 // but FAILED need at least one ingress cluster: with none, nothing shows the
 // model published, so it is PENDING and the message says so.
 // status.deployment and status.maas sum up the two sides apart. With no
@@ -415,6 +417,11 @@ func (r modelReports) apply(current *gitModel) {
 			Message: clusterReports(reports),
 		}
 		entry.Deployment, entry.DeploymentMessage = deploymentState(inference)
+		_, hasApp := r.inference[cluster]
+		entry.Sync, entry.SyncMessage = syncState(inference, hasApp)
+		if entry.Deployment == aigridv1.ModelDeploymentState_MODEL_DEPLOYMENT_STATE_STOPPED && state == "NotReady" {
+			entry.Reason = "Stopped"
+		}
 		switch state {
 		case "Ready":
 			entry.Phase = aigridv1.ModelPhase_MODEL_PHASE_READY
@@ -449,6 +456,9 @@ func (r modelReports) apply(current *gitModel) {
 	case len(failed) > 0:
 		status.Phase = aigridv1.ModelPhase_MODEL_PHASE_FAILED
 		status.Reason = "Failed"
+	case status.Deployment == aigridv1.ModelDeploymentState_MODEL_DEPLOYMENT_STATE_STOPPED && allSynced(placedStatus):
+		status.Phase = aigridv1.ModelPhase_MODEL_PHASE_PENDING
+		status.Reason = "Stopped"
 	default:
 		status.Phase = aigridv1.ModelPhase_MODEL_PHASE_PENDING
 		status.Reason = "NotReady"
@@ -485,20 +495,43 @@ func ingressObjectsReady(reports ...kindReport) bool {
 	return true
 }
 
-// deploymentState is a placed cluster's deployment state from its
-// LLMInferenceService report, with KServe's or Argo CD's message unless it is
-// running.
+// deploymentState is a placed cluster's deployment state from what its
+// LLMInferenceService on the cluster says (ObjectReport.Live), apart from
+// Argo CD's sync, with KServe's message unless it is running.
 func deploymentState(r kindReport) (aigridv1.ModelDeploymentState, string) {
-	switch {
-	case !r.found:
+	if !r.found {
 		return aigridv1.ModelDeploymentState_MODEL_DEPLOYMENT_STATE_UNSPECIFIED, ""
-	case r.report.State == StateReady:
-		return aigridv1.ModelDeploymentState_MODEL_DEPLOYMENT_STATE_RUNNING, ""
-	case r.report.State == StateFailed:
-		return aigridv1.ModelDeploymentState_MODEL_DEPLOYMENT_STATE_FAILED, r.report.Message
-	default:
-		return aigridv1.ModelDeploymentState_MODEL_DEPLOYMENT_STATE_STARTING, r.report.Message
 	}
+	switch r.report.Live {
+	case LiveReady:
+		return aigridv1.ModelDeploymentState_MODEL_DEPLOYMENT_STATE_RUNNING, ""
+	case LiveFailed:
+		return aigridv1.ModelDeploymentState_MODEL_DEPLOYMENT_STATE_FAILED, r.report.LiveMessage
+	case LiveStopped:
+		return aigridv1.ModelDeploymentState_MODEL_DEPLOYMENT_STATE_STOPPED, r.report.LiveMessage
+	case LiveStarting:
+		return aigridv1.ModelDeploymentState_MODEL_DEPLOYMENT_STATE_STARTING, r.report.LiveMessage
+	}
+	return aigridv1.ModelDeploymentState_MODEL_DEPLOYMENT_STATE_UNSPECIFIED, ""
+}
+
+// syncState is whether Argo CD has applied a placed cluster's
+// LLMInferenceService as Git has it. A cluster whose Application doesn't
+// list it yet is out of sync; one with no Application has no report.
+func syncState(r kindReport, hasApp bool) (aigridv1.ModelSyncState, string) {
+	switch {
+	case !r.found && hasApp:
+		return aigridv1.ModelSyncState_MODEL_SYNC_STATE_OUT_OF_SYNC, ""
+	case !r.found:
+		return aigridv1.ModelSyncState_MODEL_SYNC_STATE_UNSPECIFIED, ""
+	}
+	switch r.report.Sync {
+	case SyncSynced:
+		return aigridv1.ModelSyncState_MODEL_SYNC_STATE_SYNCED, ""
+	case SyncFailed:
+		return aigridv1.ModelSyncState_MODEL_SYNC_STATE_FAILED, r.report.SyncMessage
+	}
+	return aigridv1.ModelSyncState_MODEL_SYNC_STATE_OUT_OF_SYNC, r.report.SyncMessage
 }
 
 // maasStatus is an ingress cluster's MaaS state from its MaaSModelRef and
@@ -531,29 +564,52 @@ func maasStatus(cluster string, ref, external kindReport) *aigridv1.ModelIngress
 	return out
 }
 
-// deploymentSummary sums the placed clusters' deployment states: RUNNING when
-// every one runs the model, FAILED when one reports it failed, STARTING
-// otherwise, and UNSPECIFIED while none has reported.
+// deploymentSummary sums the placed clusters' deployment states: FAILED when
+// one reports it failed or its sync failed; STARTING when one is starting or
+// hasn't reported; STOPPED when every one is stopped; RUNNING when every one
+// runs it or is stopped, and at least one runs it; and UNSPECIFIED while
+// none has reported a deployment.
 func deploymentSummary(placed []*aigridv1.ModelClusterStatus) aigridv1.ModelDeploymentState {
-	running, reported := 0, false
+	running, stopped, reported, starting := 0, 0, false, false
 	for _, c := range placed {
+		if c.GetSync() == aigridv1.ModelSyncState_MODEL_SYNC_STATE_FAILED {
+			return aigridv1.ModelDeploymentState_MODEL_DEPLOYMENT_STATE_FAILED
+		}
 		switch c.GetDeployment() {
 		case aigridv1.ModelDeploymentState_MODEL_DEPLOYMENT_STATE_FAILED:
 			return aigridv1.ModelDeploymentState_MODEL_DEPLOYMENT_STATE_FAILED
 		case aigridv1.ModelDeploymentState_MODEL_DEPLOYMENT_STATE_RUNNING:
 			running++
 			reported = true
-		case aigridv1.ModelDeploymentState_MODEL_DEPLOYMENT_STATE_STARTING:
+		case aigridv1.ModelDeploymentState_MODEL_DEPLOYMENT_STATE_STOPPED:
+			stopped++
 			reported = true
+		case aigridv1.ModelDeploymentState_MODEL_DEPLOYMENT_STATE_STARTING:
+			starting, reported = true, true
+		default:
+			starting = true
 		}
 	}
 	switch {
 	case !reported:
 		return aigridv1.ModelDeploymentState_MODEL_DEPLOYMENT_STATE_UNSPECIFIED
-	case running == len(placed):
-		return aigridv1.ModelDeploymentState_MODEL_DEPLOYMENT_STATE_RUNNING
+	case starting:
+		return aigridv1.ModelDeploymentState_MODEL_DEPLOYMENT_STATE_STARTING
+	case running == 0:
+		return aigridv1.ModelDeploymentState_MODEL_DEPLOYMENT_STATE_STOPPED
 	}
-	return aigridv1.ModelDeploymentState_MODEL_DEPLOYMENT_STATE_STARTING
+	return aigridv1.ModelDeploymentState_MODEL_DEPLOYMENT_STATE_RUNNING
+}
+
+// allSynced reports whether every placed cluster has applied Git's change,
+// so a stop or a start still on its way isn't read as settled.
+func allSynced(placed []*aigridv1.ModelClusterStatus) bool {
+	for _, c := range placed {
+		if c.GetSync() != aigridv1.ModelSyncState_MODEL_SYNC_STATE_SYNCED {
+			return false
+		}
+	}
+	return true
 }
 
 // maasSummary sums the ingress clusters' MaaS states: FAILED when one is
