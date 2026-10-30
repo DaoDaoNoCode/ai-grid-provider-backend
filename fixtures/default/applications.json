@@ -57,6 +57,86 @@
               "status": "Healthy",
               "message": "LLMInferenceService is ready"
             }
+          },
+          {
+            "group": "networking.k8s.io",
+            "version": "v1",
+            "kind": "NetworkPolicy",
+            "name": "granite-stopped-grid",
+            "namespace": "ai-grid-internal-models",
+            "status": "Synced"
+          },
+          {
+            "group": "serving.kserve.io",
+            "version": "v1alpha2",
+            "kind": "LLMInferenceService",
+            "name": "granite-stopped",
+            "namespace": "ai-grid-internal-models",
+            "status": "Synced",
+            "health": {
+              "status": "Degraded",
+              "message": "Service is stopped"
+            }
+          },
+          {
+            "group": "networking.k8s.io",
+            "version": "v1",
+            "kind": "NetworkPolicy",
+            "name": "granite-failed-grid",
+            "namespace": "ai-grid-internal-models",
+            "status": "Synced"
+          },
+          {
+            "group": "serving.kserve.io",
+            "version": "v1alpha2",
+            "kind": "LLMInferenceService",
+            "name": "granite-failed",
+            "namespace": "ai-grid-internal-models",
+            "status": "Synced",
+            "health": {
+              "status": "Degraded",
+              "message": "config llm-template not found"
+            }
+          },
+          {
+            "group": "networking.k8s.io",
+            "version": "v1",
+            "kind": "NetworkPolicy",
+            "name": "granite-syncing-grid",
+            "namespace": "ai-grid-internal-models",
+            "status": "Synced"
+          },
+          {
+            "group": "serving.kserve.io",
+            "version": "v1alpha2",
+            "kind": "LLMInferenceService",
+            "name": "granite-syncing",
+            "namespace": "ai-grid-internal-models",
+            "status": "OutOfSync",
+            "health": {
+              "status": "Healthy",
+              "message": "LLMInferenceService is ready"
+            }
+          },
+          {
+            "group": "networking.k8s.io",
+            "version": "v1",
+            "kind": "NetworkPolicy",
+            "name": "granite-unsubscribed-grid",
+            "namespace": "ai-grid-internal-models",
+            "status": "Synced"
+          },
+          {
+            "group": "serving.kserve.io",
+            "version": "v1alpha2",
+            "kind": "LLMInferenceService",
+            "name": "granite-unsubscribed",
+            "namespace": "ai-grid-internal-models",
+            "status": "Synced",
+            "health": {
+              "status": "Healthy",
+              "message": "LLMInferenceService is ready"
+            }
           }
         ]
       }
@@ -194,6 +274,102 @@
             "health": {
               "status": "Healthy",
               "message": "Governed and runtime-healthy"
+            }
+          },
+          {
+            "group": "inference.opendatahub.io",
+            "version": "v1alpha1",
+            "kind": "ExternalModel",
+            "name": "granite-stopped",
+            "namespace": "models-as-a-service",
+            "status": "Synced",
+            "health": {
+              "status": "Healthy",
+              "message": "ExternalModel is ready"
+            }
+          },
+          {
+            "group": "maas.opendatahub.io",
+            "version": "v1alpha1",
+            "kind": "MaaSModelRef",
+            "name": "granite-stopped",
+            "namespace": "models-as-a-service",
+            "status": "Synced",
+            "health": {
+              "status": "Degraded",
+              "message": "Governed but backend is not ready"
+            }
+          },
+          {
+            "group": "inference.opendatahub.io",
+            "version": "v1alpha1",
+            "kind": "ExternalModel",
+            "name": "granite-failed",
+            "namespace": "models-as-a-service",
+            "status": "Synced",
+            "health": {
+              "status": "Healthy",
+              "message": "ExternalModel is ready"
+            }
+          },
+          {
+            "group": "maas.opendatahub.io",
+            "version": "v1alpha1",
+            "kind": "MaaSModelRef",
+            "name": "granite-failed",
+            "namespace": "models-as-a-service",
+            "status": "Synced",
+            "health": {
+              "status": "Degraded",
+              "message": "Governed but backend is not ready"
+            }
+          },
+          {
+            "group": "inference.opendatahub.io",
+            "version": "v1alpha1",
+            "kind": "ExternalModel",
+            "name": "granite-syncing",
+            "namespace": "models-as-a-service",
+            "status": "Synced",
+            "health": {
+              "status": "Healthy",
+              "message": "ExternalModel is ready"
+            }
+          },
+          {
+            "group": "maas.opendatahub.io",
+            "version": "v1alpha1",
+            "kind": "MaaSModelRef",
+            "name": "granite-syncing",
+            "namespace": "models-as-a-service",
+            "status": "Synced",
+            "health": {
+              "status": "Healthy",
+              "message": "Governed and runtime-healthy"
+            }
+          },
+          {
+            "group": "inference.opendatahub.io",
+            "version": "v1alpha1",
+            "kind": "ExternalModel",
+            "name": "granite-unsubscribed",
+            "namespace": "models-as-a-service",
+            "status": "Synced",
+            "health": {
+              "status": "Healthy",
+              "message": "ExternalModel is ready"
+            }
+          },
+          {
+            "group": "maas.opendatahub.io",
+            "version": "v1alpha1",
+            "kind": "MaaSModelRef",
+            "name": "granite-unsubscribed",
+            "namespace": "models-as-a-service",
+            "status": "Synced",
+            "health": {
+              "status": "Degraded",
+              "message": "Awaiting governance pairing"
             }
           }
         ]

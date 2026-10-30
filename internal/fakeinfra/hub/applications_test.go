@@ -54,8 +54,11 @@ func TestShippedApplications(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Get() error = %v", err)
 	}
-	if resources, _, _ := unstructured.NestedSlice(got.Object, "status", "resources"); len(resources) != 2 {
-		t.Fatalf("Get() status.resources = %v, want the NetworkPolicy and the LLMInferenceService", resources)
+	// granite-3b, and one model per deployment state the console words:
+	// stopped, failed, an edit not applied yet, and running with no
+	// subscription.
+	if resources, _, _ := unstructured.NestedSlice(got.Object, "status", "resources"); len(resources) != 10 {
+		t.Fatalf("Get() status.resources = %v, want a NetworkPolicy and an LLMInferenceService for each of 5 models", resources)
 	}
 	if empty, err := apps.Namespace("argocd").List(context.Background(), metav1.ListOptions{}); err != nil || len(empty.Items) != 0 {
 		t.Fatalf("List(another namespace) = %v, %v; want empty", empty, err)

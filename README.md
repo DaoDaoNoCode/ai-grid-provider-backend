@@ -841,7 +841,11 @@ repository that it creates on first run with one seed commit holding
 `catalog/subscriptions/README`. `bin/` is git-ignored, and the repository
 survives restarts. The fake hub serves the catalog's Applications from
 `fixtures/default/applications.json`, so models and subscriptions named there
-show status.
+show status. Besides `granite-3b`, four more names show one state each once
+you create a model with that id placed on `site-paris-1` (as the following
+`curl` does for `granite-3b`): `granite-stopped` (Stopped), `granite-failed` (Failed),
+`granite-syncing` (an edit Argo CD hasn't applied yet, the previous revision
+running) and `granite-unsubscribed` (running, no subscription in MaaS).
 
 ```sh
 make dev-fake                         # terminal 1
@@ -862,7 +866,7 @@ make dev-catalog-reset                # delete the repository and start from the
 `granite-3b` shows `PARTIALLY_AVAILABLE`: the fixtures report it ready on
 `site-paris-1`, not ready on `site-madrid-1`, and its `MaaSModelRef` ready on
 the ingress `site-ashburn-1`, and `status.clusters` has an entry for each of
-the two placed clusters. Any other name shows `SavedToGit`. On
+the two placed clusters. Any name not in the fixtures shows `SavedToGit`. On
 `make dev-fake-poc`, place `granite-3b` on `site1` and `site2` instead:
 `fixtures/poc/policies.json` reports it the same way. `team-a`'s model ref
 reads back joined to the model: `namespace` `models-as-a-service`,
