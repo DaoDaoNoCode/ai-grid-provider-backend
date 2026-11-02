@@ -327,7 +327,10 @@ For models:
   are, with at least one ingress cluster too; `FAILED`, reason `Failed`,
   when any cluster reports one of them failed; otherwise `PENDING`, reason
   `NotReady`. The message covers every cluster, such as `Failed on site-a;
-  ready on site-b`, followed by Argo CD's message for each failed object.
+  ready on site-b; published on hub`, followed by Argo CD's message for each
+  failed object. It names an ingress-only cluster apart, by whether MaaS
+  publishes the model there (`published`, `not published`, `failed to
+  publish`), because the model doesn't run there.
   With no report at all, it has no phase, reason `SavedToGit` and no
   `clusters`.
 - **Two statuses.** The phase answers "can tenants use it?"; two more fields

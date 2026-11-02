@@ -1470,8 +1470,11 @@ type ModelStatus struct {
 	Reason string `protobuf:"bytes,4,opt,name=reason,proto3" json:"reason,omitempty"`
 	// Message of the condition that decided phase. In git mode, while a
 	// cluster has reported: where the model is ready, for example "Failed on
-	// site-a; not ready on site-b; ready on site-c; no report from site-d",
-	// then Argo CD's message for each failed object.
+	// site-a; not ready on site-b; ready on site-c; no report from site-d;
+	// published on hub", then Argo CD's message for each failed object. An
+	// ingress-only cluster, where the model doesn't run, is named apart by
+	// whether MaaS publishes the model there: "published on", "not published
+	// on" or "failed to publish on".
 	Message string `protobuf:"bytes,5,opt,name=message,proto3" json:"message,omitempty"`
 	// Placement status when placement is set.
 	Placement *ModelPlacementStatus `protobuf:"bytes,6,opt,name=placement,proto3" json:"placement,omitempty"`

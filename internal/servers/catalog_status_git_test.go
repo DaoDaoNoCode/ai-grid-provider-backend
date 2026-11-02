@@ -97,7 +97,7 @@ func TestModelsGitStatus(t *testing.T) {
 				modelsApp("site-b", llmisvc("Synced", "Healthy", "")),
 				readyIngress("hub"),
 			},
-			wantPhase: phaseReady, wantReason: "Ready", wantMessage: "Ready on hub, site-a, site-b",
+			wantPhase: phaseReady, wantReason: "Ready", wantMessage: "Ready on site-a, site-b; published on hub",
 			wantClusters: []*aigridv1.ModelClusterStatus{
 				clusterStatus("site-a", phaseReady, "Ready", llmReady),
 				clusterStatus("site-b", phaseReady, "Ready", llmReady),
@@ -135,7 +135,7 @@ func TestModelsGitStatus(t *testing.T) {
 				modelsApp("site-b", llmisvc("Synced", "Healthy", "")),
 				readyIngress("hub"),
 			},
-			wantPhase: phasePartial, wantReason: "PartiallyAvailable", wantMessage: "Not ready on site-a; ready on hub, site-b",
+			wantPhase: phasePartial, wantReason: "PartiallyAvailable", wantMessage: "Not ready on site-a; ready on site-b; published on hub",
 			wantClusters: []*aigridv1.ModelClusterStatus{
 				clusterStatus("site-a", phasePending, "NotReady", llmNotReady),
 				clusterStatus("site-b", phaseReady, "Ready", llmReady),
@@ -147,7 +147,7 @@ func TestModelsGitStatus(t *testing.T) {
 				modelsApp("site-b", llmisvc("Synced", "Healthy", "")),
 				ingressApp("hub", modelRef("Synced", "Progressing"), externalModel("Synced", "Healthy")),
 			},
-			wantPhase: phasePending, wantReason: "NotReady", wantMessage: "Not ready on hub, site-a; ready on site-b",
+			wantPhase: phasePending, wantReason: "NotReady", wantMessage: "Not ready on site-a; ready on site-b; not published on hub",
 			wantClusters: []*aigridv1.ModelClusterStatus{
 				clusterStatus("site-a", phasePending, "NotReady", llmNotReady),
 				clusterStatus("site-b", phaseReady, "Ready", llmReady),
@@ -159,7 +159,7 @@ func TestModelsGitStatus(t *testing.T) {
 				modelsApp("site-b", llmisvc("Synced", "Healthy", "")),
 				readyIngress("hub"),
 			},
-			wantPhase: phasePartial, wantReason: "PartiallyAvailable", wantMessage: "Not ready on site-a; ready on hub, site-b",
+			wantPhase: phasePartial, wantReason: "PartiallyAvailable", wantMessage: "Not ready on site-a; ready on site-b; published on hub",
 			wantClusters: []*aigridv1.ModelClusterStatus{
 				clusterStatus("site-a", phasePending, "NotReady", "LLMInferenceService ready on its previous revision, not synced yet"),
 				clusterStatus("site-b", phaseReady, "Ready", llmReady),
@@ -172,7 +172,7 @@ func TestModelsGitStatus(t *testing.T) {
 				readyIngress("hub"),
 			},
 			wantPhase: phaseFailed, wantReason: "Failed",
-			wantMessage: "Failed on site-a, site-b; ready on hub. LLMInferenceService on site-a: image pull failed; LLMInferenceService on site-b: image pull failed",
+			wantMessage: "Failed on site-a, site-b; published on hub. LLMInferenceService on site-a: image pull failed; LLMInferenceService on site-b: image pull failed",
 			wantClusters: []*aigridv1.ModelClusterStatus{
 				clusterStatus("site-a", phaseFailed, "Failed", "LLMInferenceService failed"),
 				clusterStatus("site-b", phaseFailed, "Failed", "LLMInferenceService failed"),
@@ -186,7 +186,7 @@ func TestModelsGitStatus(t *testing.T) {
 				readyIngress("hub"),
 			},
 			wantPhase: phasePartial, wantReason: "PartiallyAvailable",
-			wantMessage: "Failed on site-b; ready on hub, site-a. LLMInferenceService on site-b: image pull failed",
+			wantMessage: "Failed on site-b; ready on site-a; published on hub. LLMInferenceService on site-b: image pull failed",
 			wantClusters: []*aigridv1.ModelClusterStatus{
 				clusterStatus("site-a", phaseReady, "Ready", llmReady),
 				clusterStatus("site-b", phaseFailed, "Failed", "LLMInferenceService failed"),
@@ -248,7 +248,7 @@ func TestModelsGitStatus(t *testing.T) {
 				modelsApp("site-b"),
 				readyIngress("hub"),
 			},
-			wantPhase: phasePartial, wantReason: "PartiallyAvailable", wantMessage: "Ready on hub, site-a; no report from site-b",
+			wantPhase: phasePartial, wantReason: "PartiallyAvailable", wantMessage: "Ready on site-a; no report from site-b; published on hub",
 			wantClusters: []*aigridv1.ModelClusterStatus{
 				clusterStatus("site-a", phaseReady, "Ready", llmReady),
 				clusterStatus("site-b", phasePending, "NoReport", "No LLMInferenceService report"),
@@ -272,7 +272,7 @@ func TestModelsGitStatus(t *testing.T) {
 				modelsApp("site-b", llmisvc("Synced", "Healthy", "")),
 				ingressApp("hub", modelRef("Synced", "Healthy")),
 			},
-			wantPhase: phasePending, wantReason: "NotReady", wantMessage: "Ready on site-a, site-b; no report from hub",
+			wantPhase: phasePending, wantReason: "NotReady", wantMessage: "Ready on site-a, site-b; not published on hub",
 			wantClusters: []*aigridv1.ModelClusterStatus{
 				clusterStatus("site-a", phaseReady, "Ready", llmReady),
 				clusterStatus("site-b", phaseReady, "Ready", llmReady),
@@ -287,7 +287,7 @@ func TestModelsGitStatus(t *testing.T) {
 				modelsApp("site-c", llmisvc("OutOfSync", "Degraded", "being deleted")),
 				readyIngress("hub"),
 			},
-			wantPhase: phaseReady, wantReason: "Ready", wantMessage: "Ready on hub, site-a, site-b",
+			wantPhase: phaseReady, wantReason: "Ready", wantMessage: "Ready on site-a, site-b; published on hub",
 			wantClusters: []*aigridv1.ModelClusterStatus{
 				clusterStatus("site-a", phaseReady, "Ready", llmReady),
 				clusterStatus("site-b", phaseReady, "Ready", llmReady),
@@ -596,27 +596,27 @@ func TestModelsGitStatusIngressClusters(t *testing.T) {
 		},
 		"labelled ingress, not reported": {
 			objects:   append(slices.Clone(modelsReady), managedCluster("hub", ingress, true)),
-			wantPhase: phasePending, wantMessage: "Ready on site-a, site-b; no report from hub",
+			wantPhase: phasePending, wantMessage: "Ready on site-a, site-b; not published on hub",
 		},
 		"labelled ingress, reported ready": {
 			objects:   append(slices.Clone(modelsReady), readyIngress("hub"), managedCluster("hub", ingress, true)),
-			wantPhase: phaseReady, wantMessage: "Ready on hub, site-a, site-b",
+			wantPhase: phaseReady, wantMessage: "Ready on site-a, site-b; published on hub",
 		},
 		"partial, labelled ingress reported ready": {
 			objects:   append(slices.Clone(partial), readyIngress("hub"), managedCluster("hub", ingress, true)),
-			wantPhase: phasePartial, wantMessage: "Not ready on site-a; ready on hub, site-b",
+			wantPhase: phasePartial, wantMessage: "Not ready on site-a; ready on site-b; published on hub",
 			wantSiteA: llmNotReady,
 		},
 		"partial, labelled ingress not reported": {
 			objects:   append(slices.Clone(partial), managedCluster("hub", ingress, true)),
-			wantPhase: phasePending, wantMessage: "Not ready on site-a; ready on site-b; no report from hub",
+			wantPhase: phasePending, wantMessage: "Not ready on site-a; ready on site-b; not published on hub",
 			wantSiteA: llmNotReady,
 		},
 		"labelled combined cluster, not reported": {
 			objects: append(slices.Clone(modelsReady), readyIngress("hub"),
 				managedCluster("hub", ingress, true),
 				managedCluster("site-a", map[string]string{"ai-grid/enabled": "true", "ai-grid/role": "combined"}, true)),
-			wantPhase: phasePending, wantMessage: "Ready on hub, site-b; no report from site-a",
+			wantPhase: phasePending, wantMessage: "Ready on site-b; no report from site-a; published on hub",
 			wantSiteA: llmReady + "; no MaaSModelRef report; no ExternalModel report",
 		},
 		"ingress label on a cluster not in the grid": {
@@ -627,7 +627,7 @@ func TestModelsGitStatusIngressClusters(t *testing.T) {
 		"cluster list fails": {
 			objects:   append(slices.Clone(modelsReady), readyIngress("hub"), managedCluster("edge", ingress, true)),
 			listFails: true,
-			wantPhase: phaseReady, wantMessage: "Ready on hub, site-a, site-b",
+			wantPhase: phaseReady, wantMessage: "Ready on site-a, site-b; published on hub",
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -1258,6 +1258,29 @@ func TestModelsGitRunningRevisionWithFailedSyncRemainsAvailable(t *testing.T) {
 		}
 		if st.GetMaas() != aigridv1.ModelMaasState_MODEL_MAAS_STATE_AVAILABLE {
 			t.Errorf("%s MaaS = %v, want AVAILABLE while the previous revision serves", op, st.GetMaas())
+		}
+	}
+}
+
+// TestWithPublished checks that an ingress-only cluster is named apart from
+// the placed clusters (demo1: a model placed only on site-b read "Not ready
+// on site-a, site-b", as if it were placed on the ingress site-a too).
+func TestWithPublished(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		message                         string
+		failed, notPublished, published []string
+		want                            string
+	}{
+		{"Not ready on site-b", nil, []string{"site-a"}, nil, "Not ready on site-b; not published on site-a"},
+		{"Ready on site-b", nil, nil, []string{"site-a"}, "Ready on site-b; published on site-a"},
+		{"Ready on site-b", []string{"hub"}, []string{"edge"}, []string{"site-a"}, "Ready on site-b; failed to publish on hub; not published on edge; published on site-a"},
+		{"", nil, []string{"site-a"}, nil, "Not published on site-a"},
+		{"Ready on site-b", nil, nil, nil, "Ready on site-b"},
+		{"", nil, nil, nil, ""},
+	} {
+		if got := withPublished(tc.message, tc.failed, tc.notPublished, tc.published); got != tc.want {
+			t.Errorf("withPublished(%q, %v, %v, %v) = %q, want %q", tc.message, tc.failed, tc.notPublished, tc.published, got, tc.want)
 		}
 	}
 }

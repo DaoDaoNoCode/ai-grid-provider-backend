@@ -2147,7 +2147,7 @@
         },
         "message": {
           "type": "string",
-          "description": "Message of the condition that decided phase. In git mode, while a\ncluster has reported: where the model is ready, for example \"Failed on\nsite-a; not ready on site-b; ready on site-c; no report from site-d\",\nthen Argo CD's message for each failed object."
+          "description": "Message of the condition that decided phase. In git mode, while a\ncluster has reported: where the model is ready, for example \"Failed on\nsite-a; not ready on site-b; ready on site-c; no report from site-d;\npublished on hub\", then Argo CD's message for each failed object. An\ningress-only cluster, where the model doesn't run, is named apart by\nwhether MaaS publishes the model there: \"published on\", \"not published\non\" or \"failed to publish on\"."
         },
         "placement": {
           "$ref": "#/definitions/v1ModelPlacementStatus",

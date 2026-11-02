@@ -655,7 +655,7 @@ func TestRealCatalogStatusOnFakeHub(t *testing.T) {
 	// ready on the ingress site-ashburn-1: partially available (P13).
 	st := created.GetObject().GetStatus()
 	if st.GetPhase() != aigridv1.ModelPhase_MODEL_PHASE_PARTIALLY_AVAILABLE || st.GetReason() != "PartiallyAvailable" ||
-		st.GetMessage() != "Not ready on site-madrid-1; ready on site-ashburn-1, site-paris-1" {
+		st.GetMessage() != "Not ready on site-madrid-1; ready on site-paris-1; published on site-ashburn-1" {
 		t.Fatalf("model status = %v, %q, %q", st.GetPhase(), st.GetReason(), st.GetMessage())
 	}
 	wantClusters := []*aigridv1.ModelClusterStatus{
@@ -719,7 +719,7 @@ func TestRealModelsPartiallyAvailableOnPocFakeHub(t *testing.T) {
 		t.Fatalf("Models Create() error = %v", err)
 	}
 	st := created.GetObject().GetStatus()
-	if st.GetPhase() != aigridv1.ModelPhase_MODEL_PHASE_PARTIALLY_AVAILABLE || st.GetMessage() != "Not ready on site2; ready on site1, site3" {
+	if st.GetPhase() != aigridv1.ModelPhase_MODEL_PHASE_PARTIALLY_AVAILABLE || st.GetMessage() != "Not ready on site2; ready on site1; published on site3" {
 		t.Fatalf("model status = %v, %q", st.GetPhase(), st.GetMessage())
 	}
 	wantClusters := []*aigridv1.ModelClusterStatus{

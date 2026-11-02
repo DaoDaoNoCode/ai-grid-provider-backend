@@ -639,7 +639,7 @@ Once a cluster reports, the status also has the model on each placed cluster
 "status": {
   "phase": "MODEL_PHASE_PARTIALLY_AVAILABLE",
   "reason": "PartiallyAvailable",
-  "message": "Not ready on site-a; ready on hub, site-b",
+  "message": "Not ready on site-a; ready on site-b; published on hub",
   "deployment": "MODEL_DEPLOYMENT_STATE_STARTING",
   "maas": "MODEL_MAAS_STATE_AWAITING_SUBSCRIPTION",
   "state": "MODEL_STATE_PARTIALLY_READY",

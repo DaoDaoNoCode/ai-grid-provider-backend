@@ -455,6 +455,9 @@ func (r modelReports) apply(current *gitModel) {
 	clusters = slices.Compact(clusters)
 
 	var ready, notReady, stopped, failed, noReport, failures []string
+	// An ingress-only cluster publishes the model through MaaS and doesn't
+	// serve it, so the message names it apart from the placed clusters.
+	var published, notPublished, publishFailed []string
 	var placedStatus []*aigridv1.ModelClusterStatus
 	var ingressStatus []*aigridv1.ModelIngressStatus
 	placedReady, ingressReady, anyIngress := 0, true, false
@@ -488,6 +491,16 @@ func (r modelReports) apply(current *gitModel) {
 			}
 		}
 		state := clusterState(reports)
+		if !isPlaced {
+			switch state {
+			case "Failed":
+				publishFailed = append(publishFailed, cluster)
+			case "Ready":
+				published = append(published, cluster)
+			default:
+				notPublished = append(notPublished, cluster)
+			}
+		}
 		switch {
 		case state == "Failed":
 			failed = append(failed, cluster)
@@ -530,7 +543,12 @@ func (r modelReports) apply(current *gitModel) {
 		return
 	}
 	status := current.model.Status
-	status.Message = withStopped(clusterSummary(failed, notReady, ready, noReport), stopped)
+	onPlaced := func(clusters []string) []string {
+		return slices.DeleteFunc(slices.Clone(clusters), func(c string) bool { return !slices.Contains(placed, c) })
+	}
+	status.Message = withPublished(
+		withStopped(clusterSummary(onPlaced(failed), onPlaced(notReady), onPlaced(ready), onPlaced(noReport)), stopped),
+		publishFailed, notPublished, published)
 	if !anyIngress {
 		status.Message += "; no ingress cluster has reported the MaaSModelRef"
 	}
@@ -789,6 +807,30 @@ func withStopped(message string, stopped []string) string {
 		return out
 	}
 	return out + "; " + strings.ToLower(message[:1]) + message[1:]
+}
+
+// withPublished adds where the ingress-only clusters publish the model
+// through MaaS to a clusterSummary message, for example "Not ready on site-b;
+// not published on site-a". They don't serve the model, so they aren't listed
+// with the placed clusters.
+func withPublished(message string, failed, notPublished, published []string) string {
+	parts := []string{}
+	if message != "" {
+		parts = append(parts, message)
+	}
+	for _, part := range []struct {
+		prefix   string
+		clusters []string
+	}{{"failed to publish on ", failed}, {"not published on ", notPublished}, {"published on ", published}} {
+		if len(part.clusters) > 0 {
+			parts = append(parts, part.prefix+strings.Join(part.clusters, ", "))
+		}
+	}
+	out := strings.Join(parts, "; ")
+	if out == "" {
+		return ""
+	}
+	return strings.ToUpper(out[:1]) + out[1:]
 }
 
 // allSynced reports whether every placed cluster has applied Git's change,
