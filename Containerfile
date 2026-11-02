@@ -8,7 +8,7 @@
 ARG TARGETOS=linux
 ARG TARGETARCH=amd64
 
-FROM --platform=$BUILDPLATFORM registry.access.redhat.com/ubi9/go-toolset:1.26.10-1792592174@sha256:d4d25f236c2b3cd27eb407e3b3478bef0b75d644ee6d11772217f537be926b11 AS build
+FROM --platform=$BUILDPLATFORM registry.access.redhat.com/ubi9/go-toolset:1793232585@sha256:a3b89f072fe0704b9388f3c9ad5681a6cf16293324e3f25ca0107bc09217cf62 AS build
 ARG TARGETOS
 ARG TARGETARCH
 # go-toolset runs as 1001 with its home as the working directory.
@@ -23,7 +23,7 @@ RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} \
 	&& echo "built GOOS=${TARGETOS} GOARCH=${TARGETARCH}"
 
 # Final image platform comes from `podman build --platform=...`.
-FROM registry.access.redhat.com/ubi9/ubi-minimal:9.8-1791898448@sha256:c4c285d42941ebb2bd4da878479008e1e4536bb599aad1dbe568f89de9053661
+FROM registry.access.redhat.com/ubi9/ubi-minimal:1793050429@sha256:6f3a78179e0b30b930a186e7f68a4af52e51bb82406c9653be10bddd624e40f5
 # Owned by root and world-readable, so OpenShift's arbitrary UID (group 0) can run it.
 COPY --from=build --chown=0:0 /tmp/out/ai-grid-provider-backend /ai-grid-provider-backend
 USER 1001
