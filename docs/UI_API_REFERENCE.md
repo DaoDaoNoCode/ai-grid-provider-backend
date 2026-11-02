@@ -704,7 +704,10 @@ show both, such as "Ready" and "Awaiting subscription":
   deployments on an ingress or combined cluster, else the
   `LLMInferenceService` in the OpenShift console; empty without an https
   console URL claim (or, on an ingress or combined cluster, the
-  `ai-grid/openshift-ai-url` annotation).
+  `ai-grid/openshift-ai-url` annotation). The contract validates a non-empty
+  link as an HTTPS URI with a host and no user info, paired with a specified
+  target; an empty link requires the `UNSPECIFIED` target. The summary
+  `deployment`, `maas`, and `state` fields accept only defined enum values.
 
 A model waiting only for a subscription is `MODEL_PHASE_READY` (or
 `PARTIALLY_AVAILABLE`) with `status.maas` `MODEL_MAAS_STATE_AWAITING_SUBSCRIPTION`,

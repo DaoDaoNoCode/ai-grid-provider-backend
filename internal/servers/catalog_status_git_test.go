@@ -1218,3 +1218,46 @@ func TestModelsGitStateAndView(t *testing.T) {
 		}
 	}
 }
+
+func TestModelsGitRunningRevisionWithFailedSyncRemainsAvailable(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	client := newAppClient(
+		withSyncFailure(application(DefaultCatalogModelsAppSet, "site-a", llmisvc("OutOfSync", "Healthy", "")), "apply failed"),
+		readyIngress("hub"), managedCluster("site-a", nil, true),
+	)
+	srv, err := NewModelsServer().SetLogger(slog.New(slog.DiscardHandler)).SetWriter(gitops.NewMemoryWriter(nil)).
+		SetCatalogStatus(NewCatalogStatusReader(client, CatalogApps{})).SetDynamicClient(client).Build()
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+	created, err := srv.Create(ctx, &aigridv1.ModelsCreateRequest{Object: gitSampleModel("granite", "site-a")})
+	if err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	got, err := srv.Get(ctx, &aigridv1.ModelsGetRequest{Id: "granite"})
+	if err != nil {
+		t.Fatalf("Get() error = %v", err)
+	}
+	list, err := srv.List(ctx, &aigridv1.ModelsListRequest{})
+	if err != nil {
+		t.Fatalf("List() error = %v", err)
+	}
+	for op, model := range map[string]*aigridv1.Model{"Create": created.GetObject(), "Get": got.GetObject(), "List": list.GetItems()[0]} {
+		st := model.GetStatus()
+		if st.GetState() != aigridv1.ModelState_MODEL_STATE_FAILED {
+			t.Errorf("%s rollout = %v, want FAILED", op, st.GetState())
+		}
+		if len(st.GetClusters()) != 1 {
+			t.Fatalf("%s clusters = %v, want site-a", op, st.GetClusters())
+		}
+		cluster := st.GetClusters()[0]
+		if cluster.GetDeployment() != aigridv1.ModelDeploymentState_MODEL_DEPLOYMENT_STATE_RUNNING ||
+			cluster.GetSync() != aigridv1.ModelSyncState_MODEL_SYNC_STATE_FAILED {
+			t.Errorf("%s deployment, sync = %v, %v; want RUNNING, FAILED", op, cluster.GetDeployment(), cluster.GetSync())
+		}
+		if st.GetMaas() != aigridv1.ModelMaasState_MODEL_MAAS_STATE_AVAILABLE {
+			t.Errorf("%s MaaS = %v, want AVAILABLE while the previous revision serves", op, st.GetMaas())
+		}
+	}
+}

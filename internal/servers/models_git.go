@@ -541,8 +541,9 @@ func (r modelReports) apply(current *gitModel) {
 	status.Ingress = ingressStatus
 	status.Deployment = deploymentSummary(placedStatus)
 	status.State = modelRollout(placedStatus)
-	status.Maas = maasSummary(ingressStatus, status.State == aigridv1.ModelState_MODEL_STATE_READY ||
-		status.State == aigridv1.ModelState_MODEL_STATE_PARTIALLY_READY)
+	status.Maas = maasSummary(ingressStatus, slices.ContainsFunc(placedStatus, func(cluster *aigridv1.ModelClusterStatus) bool {
+		return cluster.GetDeployment() == aigridv1.ModelDeploymentState_MODEL_DEPLOYMENT_STATE_RUNNING
+	}))
 	switch {
 	case anyIngress && len(failed) == 0 && len(notReady) == 0 && len(stopped) == 0 && len(noReport) == 0:
 		status.Phase = aigridv1.ModelPhase_MODEL_PHASE_READY

@@ -296,16 +296,17 @@ message ModelStatus {
   // nothing about MaaS: see `maas`. It can differ from `phase`: a model
   // failed on one cluster and running on another is FAILED here and
   // PARTIALLY_AVAILABLE there. Output only.
-  ModelDeploymentState deployment = 10;
+  ModelDeploymentState deployment = 10 [(buf.validate.field).enum.defined_only = true];
 
   // The model in MaaS, for a list's Availability column, summed over the
   // ingress clusters (`ingress`), worst first: FAILED;
   // AWAITING_SUBSCRIPTION_AND_BACKEND; CONFIGURING_ROUTING (also while one
   // hasn't reported); AWAITING_SUBSCRIPTION; AVAILABLE. AVAILABLE and
   // CONFIGURING_ROUTING become UNAVAILABLE when no placed cluster serves the
-  // model (`state` neither READY nor PARTIALLY_READY). UNSPECIFIED while none has reported. Each
+  // model (no `clusters[].deployment` is RUNNING). A failed sync doesn't
+  // stop a previous revision that is still running. UNSPECIFIED while none has reported. Each
   // `ingress` entry keeps MaaS's own message. Output only.
-  ModelMaasState maas = 11;
+  ModelMaasState maas = 11 [(buf.validate.field).enum.defined_only = true];
 
   // The model on each ingress cluster, one entry per cluster in cluster-name
   // order: the ones with a catalog ingress Application and the ones labelled
@@ -322,7 +323,7 @@ message ModelStatus {
   // STARTING when one is starting; SYNCING when one hasn't applied Git's
   // change yet; SYNCED when every one has but none reports a deployment yet.
   // `phase` stays the MaaS-inclusive answer. Output only.
-  ModelState state = 13;
+  ModelState state = 13 [(buf.validate.field).enum.defined_only = true];
 }
 
 // What one placed cluster reports about the model's LLMInferenceService.
@@ -506,6 +507,12 @@ enum ModelPhase {
 // LLMInferenceService and, on a combined cluster, which is also an ingress
 // cluster, for its MaaSModelRef and ExternalModel. Output only.
 message ModelClusterStatus {
+  option (buf.validate.message).cel = {
+    id: "model_cluster_status.view_link_paired"
+    message: "view_url must be set exactly when view_target is specified"
+    expression: "(this.view_url == '') == (this.view_target == 0)"
+  };
+
   // ManagedCluster name, one of placement.selected_clusters.
   string cluster = 1 [(buf.validate.field).string = {
     min_len: 1
@@ -566,7 +573,13 @@ message ModelClusterStatus {
   // Only an https URL with a host and no user info is used from the claim
   // or the annotation. Empty when there is neither (view_target
   // UNSPECIFIED).
-  string view_url = 10;
+  string view_url = 10 [(buf.validate.field) = {
+    ignore: IGNORE_IF_ZERO_VALUE
+    string: {
+      uri: true
+      pattern: "^https://[^/?#@]+([/?#].*)?$"
+    }
+  }];
 
   // Whether view_url opens OpenShift AI or the OpenShift console.
   ModelViewTarget view_target = 11 [(buf.validate.field).enum.defined_only = true];
