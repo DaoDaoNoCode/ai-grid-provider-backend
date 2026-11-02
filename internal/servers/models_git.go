@@ -30,6 +30,14 @@ import (
 //
 // Index files are never deleted, so a cluster or the ingress keeps its path
 // when its last model goes, and Argo CD prunes instead of failing.
+//
+// The indexes are shared: writes to two different models at once both
+// rewrite the ingress index, so the second commit conflicts. Create, Update
+// and Delete rerun the whole write on the new head (gitops.RetryOnConflict),
+// which succeeds unless the model itself changed in a way the caller's
+// version or checks refuse. Nothing before the commit writes anything:
+// checkPlacementClusters only lists the hub's ManagedClusters, so a rerun may
+// list them again.
 const (
 	modelsGitDir    = "catalog/models"
 	clustersGitDir  = "catalog/clusters"
@@ -183,7 +191,7 @@ func (s *ModelsServer) gitUpdate(ctx context.Context, req *aigridv1.ModelsUpdate
 // version must equal the model's, or the delete is Aborted. It is refused while
 // a subscription in the repository names the model, and the subscriptions
 // directory is in the commit's read set, so a subscription written since the
-// check makes the delete Aborted.
+// check makes the commit conflict, and Delete's rerun checks again.
 func (s *ModelsServer) gitDelete(ctx context.Context, id string, version int32) error {
 	head, err := s.writer.Head(ctx)
 	if err != nil {

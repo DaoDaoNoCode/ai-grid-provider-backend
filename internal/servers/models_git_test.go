@@ -300,8 +300,9 @@ func TestModelsGitDeleteReferenced(t *testing.T) {
 
 // The reference guard holds against a concurrent write: a subscription to
 // the model committed between the delete's read and its commit makes the
-// delete Aborted, and a model deleted between a subscribe's read and its
-// commit makes the subscribe Aborted.
+// commit conflict, and the delete's rerun refuses it as referenced; a model
+// deleted between a subscribe's read and its commit makes the subscribe's
+// rerun refuse the missing model. Neither commits.
 func TestModelsGitDeleteRacesSubscribe(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -318,7 +319,10 @@ func TestModelsGitDeleteRacesSubscribe(t *testing.T) {
 		}
 	}
 	_, err := models.Delete(ctx, &aigridv1.ModelsDeleteRequest{Id: "sim-model"})
-	assertConnectCode(t, err, connect.CodeAborted)
+	assertConnectCode(t, err, connect.CodeFailedPrecondition)
+	if _, err := models.Get(ctx, &aigridv1.ModelsGetRequest{Id: "sim-model"}); err != nil {
+		t.Fatalf("Get model after the refused delete error = %v", err)
+	}
 
 	if _, err := subscriptions.Delete(ctx, &aigridv1.SubscriptionsDeleteRequest{Id: "team-a"}); err != nil {
 		t.Fatalf("Delete subscription error = %v", err)
@@ -330,7 +334,9 @@ func TestModelsGitDeleteRacesSubscribe(t *testing.T) {
 		}
 	}
 	_, err = racingSubs.Create(ctx, &aigridv1.SubscriptionsCreateRequest{Object: gitSampleSubscription("team-b")})
-	assertConnectCode(t, err, connect.CodeAborted)
+	assertConnectCode(t, err, connect.CodeFailedPrecondition)
+	_, err = racingSubs.Get(ctx, &aigridv1.SubscriptionsGetRequest{Id: "team-b"})
+	assertConnectCode(t, err, connect.CodeNotFound)
 }
 
 func mustGitModelsServer(t *testing.T, writer gitops.Writer) *ModelsServer {

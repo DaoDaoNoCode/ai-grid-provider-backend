@@ -190,7 +190,10 @@ func (s *ModelsServer) Get(ctx context.Context, req *aigridv1.ModelsGetRequest) 
 }
 
 // Create commits a model's deployment and catalog entry, and adds it to the
-// indexes of the clusters its placement names.
+// indexes of the clusters its placement names. A commit that conflicts, such
+// as with another model's write to a shared index, reruns the whole create on
+// the new head (gitops.RetryOnConflict): a model created meanwhile under the
+// same id is AlreadyExists.
 func (s *ModelsServer) Create(ctx context.Context, req *aigridv1.ModelsCreateRequest) (*aigridv1.ModelsCreateResponse, error) {
 	object := req.GetObject()
 	if object == nil {
@@ -213,7 +216,11 @@ func (s *ModelsServer) Create(ctx context.Context, req *aigridv1.ModelsCreateReq
 	if err := normalizeServedName(id, object.GetSpec()); err != nil {
 		return nil, err
 	}
-	m, err := s.gitCreate(ctx, object)
+	var m *aigridv1.Model
+	err := gitops.RetryOnConflict(ctx, func() (err error) {
+		m, err = s.gitCreate(ctx, proto.Clone(object).(*aigridv1.Model))
+		return err
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -222,7 +229,10 @@ func (s *ModelsServer) Create(ctx context.Context, req *aigridv1.ModelsCreateReq
 }
 
 // Update commits the fields the mask selects, and moves the model between
-// cluster indexes when its placement changes.
+// cluster indexes when its placement changes. A commit that conflicts reruns
+// the whole update on the new head, from the request as sent: a version that
+// no longer matches is still Aborted, and an update without one merges onto
+// the latest model.
 func (s *ModelsServer) Update(ctx context.Context, req *aigridv1.ModelsUpdateRequest) (*aigridv1.ModelsUpdateResponse, error) {
 	object := req.GetObject()
 	if object == nil {
@@ -231,7 +241,11 @@ func (s *ModelsServer) Update(ctx context.Context, req *aigridv1.ModelsUpdateReq
 	if err := validateModelID(modelID(object)); err != nil {
 		return nil, err
 	}
-	m, err := s.gitUpdate(ctx, req)
+	var m *aigridv1.Model
+	err := gitops.RetryOnConflict(ctx, func() (err error) {
+		m, err = s.gitUpdate(ctx, proto.Clone(req).(*aigridv1.ModelsUpdateRequest))
+		return err
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -242,13 +256,17 @@ func (s *ModelsServer) Update(ctx context.Context, req *aigridv1.ModelsUpdateReq
 // Delete removes the model's files and index entries. A nonzero
 // resource_version must equal the stored metadata.version, or the delete is
 // Aborted; zero skips the check. It is FailedPrecondition while a
-// subscription names the model.
+// subscription names the model. A commit that conflicts reruns the whole
+// delete on the new head, so both checks are made again.
 func (s *ModelsServer) Delete(ctx context.Context, req *aigridv1.ModelsDeleteRequest) (*aigridv1.ModelsDeleteResponse, error) {
 	id := req.GetId()
 	if err := validateModelID(id); err != nil {
 		return nil, err
 	}
-	if err := s.gitDelete(ctx, id, req.GetResourceVersion()); err != nil {
+	err := gitops.RetryOnConflict(ctx, func() error {
+		return s.gitDelete(ctx, id, req.GetResourceVersion())
+	})
+	if err != nil {
 		return nil, err
 	}
 	return &aigridv1.ModelsDeleteResponse{}, nil

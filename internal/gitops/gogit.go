@@ -193,6 +193,13 @@ func (w *RepoWriter) Commit(ctx context.Context, base string, c Change) (string,
 		Auth:       w.auth,
 	})
 	if err != nil {
+		// The commit never reached the remote: point the branch back at the
+		// head it was made on. Otherwise every later fetch offers the server
+		// that commit as one the clone has, and go-git's own server, which
+		// serves file:// here, fails the fetch on a commit it doesn't know.
+		if rerr := w.repo.Storer.SetReference(plumbing.NewHashReference(w.local, head)); rerr != nil {
+			err = errors.Join(err, fmt.Errorf("reset branch: %w", rerr))
+		}
 		if pushRaced(err) {
 			return "", fmt.Errorf("%w: push: %w", ErrConflict, err)
 		}

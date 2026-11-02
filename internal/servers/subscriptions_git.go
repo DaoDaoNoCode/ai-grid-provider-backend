@@ -375,8 +375,8 @@ func (s *SubscriptionsServer) gitUpdate(ctx context.Context, req *aigridv1.Subsc
 
 // gitDelete removes the subscription's file, and with it the managed policy.
 // A nonzero version must equal the file's, or the delete is Aborted. The
-// commit is made on the revision read, so a concurrent write to the file is
-// Aborted too.
+// commit is made on the revision read, so a concurrent write to the file
+// makes it conflict, and Delete's rerun checks the version again.
 func (s *SubscriptionsServer) gitDelete(ctx context.Context, id string, version int32) error {
 	head, err := s.writer.Head(ctx)
 	if err != nil {
@@ -404,7 +404,8 @@ func (s *SubscriptionsServer) gitDelete(ctx context.Context, id string, version 
 // would apply a MaaSSubscription naming a MaaSModelRef that doesn't exist. A
 // ref to another namespace isn't checked, because the Models API doesn't
 // write there. It returns the files it read, for the commit's read set, so a
-// model deleted before the commit makes it conflict.
+// model deleted before the commit makes it conflict, and the rerun answers
+// FailedPrecondition.
 func (s *SubscriptionsServer) gitEnsureModelsExist(head gitops.Snapshot, op string, object *aigridv1.Subscription) ([]string, error) {
 	var read []string
 	for _, ref := range object.GetSpec().GetModelRefs() {

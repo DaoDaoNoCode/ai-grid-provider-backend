@@ -190,11 +190,18 @@ spokes.
 For both models and subscriptions:
 
 - `metadata.version` is the file's `ai-grid/version` annotation, which each
-  write increments. A stale version, or a write to the same file by another
-  backend since the read, answers `Aborted`. Delete's `resource_version` is
-  checked the same way; zero skips the check. A deleted and re-created id
-  starts again at version 1, so a client still holding version 1 of the old
-  object can update or delete the new one.
+  write increments. A stale version answers `Aborted`. Delete's
+  `resource_version` is checked the same way; zero skips the check. A deleted
+  and re-created id starts again at version 1, so a client still holding
+  version 1 of the old object can update or delete the new one.
+- A write whose commit conflicts, because another write reached the branch
+  first, is made again from the start on the new head, up to 5 times in all,
+  like client-go's `retry.RetryOnConflict`. Two writes to different objects
+  at once both succeed, though both change a shared index file. A write that
+  depends on what changed is decided again: a version that no longer matches
+  is `Aborted`, an id created meanwhile is `AlreadyExists`, and a write
+  without a version applies to the latest object. Only a write that still
+  conflicts on the 5th try answers `Aborted`.
 - The files belong to the backend. An update rewrites them from the stored
   object and the request, so a hand edit to a catalog file is lost on the
   next write to that object.
@@ -326,8 +333,9 @@ For models:
   with the request as its limit.
 - Delete answers `FailedPrecondition` while a subscription in the repository
   names the model. A subscription written between the check and the commit
-  makes the delete `Aborted`, and a model deleted before a subscription that
-  names it commits makes that write `Aborted`.
+  makes the commit conflict, and the delete, made again, answers
+  `FailedPrecondition`; so does a subscription write whose model is deleted
+  before it commits.
 
 #### Status from the spokes
 
