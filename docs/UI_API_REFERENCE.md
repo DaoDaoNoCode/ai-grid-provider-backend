@@ -641,16 +641,21 @@ Once a cluster reports, the status also has the model on each placed cluster
   "reason": "PartiallyAvailable",
   "message": "Not ready on site-a; ready on hub, site-b",
   "deployment": "MODEL_DEPLOYMENT_STATE_STARTING",
-  "maas": "MODEL_MAAS_STATE_NO_SUBSCRIPTION",
+  "maas": "MODEL_MAAS_STATE_AWAITING_SUBSCRIPTION",
+  "state": "MODEL_STATE_PARTIALLY_READY",
   "clusters": [
     {"cluster": "site-a", "phase": "MODEL_PHASE_PENDING", "reason": "NotReady", "message": "LLMInferenceService not ready",
      "deployment": "MODEL_DEPLOYMENT_STATE_STARTING", "deploymentMessage": "Deployment does not have minimum availability.",
-     "sync": "MODEL_SYNC_STATE_SYNCED"},
+     "sync": "MODEL_SYNC_STATE_SYNCED", "state": "MODEL_STATE_STARTING",
+     "viewUrl": "https://console-openshift-console.apps.site-a.example.com/k8s/ns/ai-grid-internal-models/serving.kserve.io~v1alpha2~LLMInferenceService/granite",
+     "viewTarget": "MODEL_VIEW_TARGET_OPENSHIFT_CONSOLE"},
     {"cluster": "site-b", "phase": "MODEL_PHASE_READY", "reason": "Ready", "message": "LLMInferenceService ready",
-     "deployment": "MODEL_DEPLOYMENT_STATE_RUNNING", "sync": "MODEL_SYNC_STATE_SYNCED"}
+     "deployment": "MODEL_DEPLOYMENT_STATE_RUNNING", "sync": "MODEL_SYNC_STATE_SYNCED", "state": "MODEL_STATE_READY",
+     "viewUrl": "https://rh-ai.apps.site-b.example.com/ai-hub/models/deployments/internal/ai-grid-internal-models",
+     "viewTarget": "MODEL_VIEW_TARGET_OPENSHIFT_AI"}
   ],
   "ingress": [
-    {"cluster": "hub", "state": "MODEL_MAAS_STATE_NO_SUBSCRIPTION", "message": "Awaiting governance pairing"}
+    {"cluster": "hub", "state": "MODEL_MAAS_STATE_AWAITING_SUBSCRIPTION", "message": "Awaiting governance pairing"}
   ]
 }
 ```
@@ -664,7 +669,7 @@ Ingress clusters the model isn't placed on have no entry in `clusters`.
 `status.rollout` is never set.
 
 The two statuses keep the model's deployment apart from MaaS, so a list can
-show both, such as "Running · No subscription":
+show both, such as "Ready" and "Awaiting subscription":
 
 - `deployment` on each `clusters` entry, from the `LLMInferenceService`'s
   health alone: `RUNNING`, `STARTING` (with KServe's message, such as
@@ -684,14 +689,25 @@ show both, such as "Running · No subscription":
   `Stopped`, once every cluster has synced; a cluster where it is stopped has
   reason `Stopped`.
 - `ingress`: one entry per ingress cluster (combined ones included), with
-  `state` `PUBLISHED`, `NO_SUBSCRIPTION` (running, but no subscription covers
-  it, so no tenant can call it), `NOT_READY`, `FAILED`, or `UNSPECIFIED` with
-  no report, and MaaS's message. `status.maas` is the worst of them, in the
-  order `FAILED`, `NOT_READY` (also while one hasn't reported),
-  `NO_SUBSCRIPTION`, `PUBLISHED`.
+  `state` `AVAILABLE`, `AWAITING_SUBSCRIPTION` (routed, but no subscription
+  covers it, so no tenant can call it), `AWAITING_SUBSCRIPTION_AND_BACKEND`,
+  `CONFIGURING_ROUTING`, `FAILED`, or `UNSPECIFIED` with no report, and
+  MaaS's message. `status.maas` is the worst of them, in the order `FAILED`,
+  `AWAITING_SUBSCRIPTION_AND_BACKEND`, `CONFIGURING_ROUTING` (also while one
+  hasn't reported), `AWAITING_SUBSCRIPTION`, `AVAILABLE`; `AVAILABLE` and
+  `CONFIGURING_ROUTING` read `UNAVAILABLE` while no placed cluster serves the
+  model.
+- `state` (model and each `clusters` entry): Git sync and deployment in one
+  word, for a Status column: `SAVED_TO_GIT`, `SYNCING`, `SYNCED`,
+  `STARTING`, `READY`, `PARTIALLY_READY` (model only), `FAILED`, `STOPPED`.
+- `view_url` and `view_target` on each `clusters` entry: OpenShift AI's model
+  deployments on an ingress or combined cluster, else the
+  `LLMInferenceService` in the OpenShift console; empty without an https
+  console URL claim (or, on an ingress or combined cluster, the
+  `ai-grid/openshift-ai-url` annotation).
 
 A model waiting only for a subscription is `MODEL_PHASE_READY` (or
-`PARTIALLY_AVAILABLE`) with `status.maas` `MODEL_MAAS_STATE_NO_SUBSCRIPTION`,
+`PARTIALLY_AVAILABLE`) with `status.maas` `MODEL_MAAS_STATE_AWAITING_SUBSCRIPTION`,
 not `PENDING`. `STARTING` has no deadline: a pod that keeps crashing, can't
 pull its image or finds no GPU also shows as `STARTING`, because Argo CD keeps
 only KServe's `Ready` message, which then still says the Deployment is below

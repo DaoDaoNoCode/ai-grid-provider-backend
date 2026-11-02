@@ -392,14 +392,28 @@ var (
 	// condition, such as "ns/x: Accepted=False (reason ...)".
 	llmisvcRejected = " (reason "
 	// maas-controller's MaaSModelRef Ready messages for phase Pending and
-	// Unhealthy (deriveModelPhase, opendatahub-io/models-as-a-service
-	// e7bd7fc0). The first means the backend is healthy and only a
-	// subscription is missing.
+	// Unhealthy (deriveModelPhase and its HTTPRoute and tenant steps,
+	// opendatahub-io/models-as-a-service 05a5ff90). The first means the route
+	// is healthy and only a subscription is missing. For an ExternalModel,
+	// MaaS's "backend" is its HTTPRoute accepted by the gateway.
 	maasAwaitingSubscription = "Awaiting governance pairing"
 	maasPendingMessages      = []string{
-		"Awaiting governance pairing and backend readiness",
+		maasAwaitingSubscriptionAndBackend,
 		"Governed but backend is not ready",
+		"Waiting for HTTPRoute to be created",
 	}
+	// maas-controller's "Waiting for tenant resolution: <error>", also
+	// pending: the route waits for the tenant.
+	maasWaitingPrefix = "Waiting for tenant resolution:"
+	// maas-controller's "Failed to reconcile HTTPRoute: ExternalModel <name>
+	// not found in namespace <ns> ..." (providers_external.go): the
+	// MaaSModelRef and its ExternalModel come in one Argo CD sync, and the
+	// ref can be reconciled first. Pending, not failed: the next reconcile
+	// finds it.
+	maasExternalModelPrefix = "Failed to reconcile HTTPRoute: ExternalModel "
+	maasNotFoundInNamespace = " not found in namespace "
+	// The one pending message that also lacks a subscription.
+	maasAwaitingSubscriptionAndBackend = "Awaiting governance pairing and backend readiness"
 )
 
 // degradedUnderWay reads the message of a Degraded resource of kind: pending
@@ -425,7 +439,8 @@ func degradedUnderWay(kind, message string) (state ObjectState, noSubscription b
 		if message == maasAwaitingSubscription {
 			return StatePending, true
 		}
-		if slices.Contains(maasPendingMessages, message) {
+		if slices.Contains(maasPendingMessages, message) || strings.HasPrefix(message, maasWaitingPrefix) ||
+			(strings.HasPrefix(message, maasExternalModelPrefix) && strings.Contains(message, maasNotFoundInNamespace)) {
 			return StatePending, false
 		}
 	}

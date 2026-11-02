@@ -661,10 +661,12 @@ func TestRealCatalogStatusOnFakeHub(t *testing.T) {
 	wantClusters := []*aigridv1.ModelClusterStatus{
 		{Cluster: "site-madrid-1", Phase: aigridv1.ModelPhase_MODEL_PHASE_PENDING, Reason: "NotReady", Message: "LLMInferenceService not ready",
 			Deployment: aigridv1.ModelDeploymentState_MODEL_DEPLOYMENT_STATE_STARTING, DeploymentMessage: "Waiting for the main workload",
-			Sync: aigridv1.ModelSyncState_MODEL_SYNC_STATE_SYNCED},
+			Sync: aigridv1.ModelSyncState_MODEL_SYNC_STATE_SYNCED, State: aigridv1.ModelState_MODEL_STATE_STARTING,
+			ViewUrl: "https://console-openshift-console.apps.site-madrid-1.example.com/k8s/ns/ai-grid-internal-models/serving.kserve.io~v1alpha2~LLMInferenceService/granite-3b", ViewTarget: aigridv1.ModelViewTarget_MODEL_VIEW_TARGET_OPENSHIFT_CONSOLE},
 		{Cluster: "site-paris-1", Phase: aigridv1.ModelPhase_MODEL_PHASE_READY, Reason: "Ready", Message: "LLMInferenceService ready",
 			Deployment: aigridv1.ModelDeploymentState_MODEL_DEPLOYMENT_STATE_RUNNING,
-			Sync:       aigridv1.ModelSyncState_MODEL_SYNC_STATE_SYNCED},
+			Sync:       aigridv1.ModelSyncState_MODEL_SYNC_STATE_SYNCED, State: aigridv1.ModelState_MODEL_STATE_READY,
+			ViewUrl: "https://console-openshift-console.apps.site-paris-1.example.com/k8s/ns/ai-grid-internal-models/serving.kserve.io~v1alpha2~LLMInferenceService/granite-3b", ViewTarget: aigridv1.ModelViewTarget_MODEL_VIEW_TARGET_OPENSHIFT_CONSOLE},
 	}
 	if !slices.EqualFunc(st.GetClusters(), wantClusters, func(a, b *aigridv1.ModelClusterStatus) bool { return proto.Equal(a, b) }) {
 		t.Fatalf("model status.clusters = %v, want %v", st.GetClusters(), wantClusters)
@@ -723,10 +725,12 @@ func TestRealModelsPartiallyAvailableOnPocFakeHub(t *testing.T) {
 	wantClusters := []*aigridv1.ModelClusterStatus{
 		{Cluster: "site1", Phase: aigridv1.ModelPhase_MODEL_PHASE_READY, Reason: "Ready", Message: "LLMInferenceService ready",
 			Deployment: aigridv1.ModelDeploymentState_MODEL_DEPLOYMENT_STATE_RUNNING,
-			Sync:       aigridv1.ModelSyncState_MODEL_SYNC_STATE_SYNCED},
+			Sync:       aigridv1.ModelSyncState_MODEL_SYNC_STATE_SYNCED, State: aigridv1.ModelState_MODEL_STATE_READY,
+			ViewUrl: "https://console-openshift-console.apps.site1.example.com/k8s/ns/ai-grid-internal-models/serving.kserve.io~v1alpha2~LLMInferenceService/granite-3b", ViewTarget: aigridv1.ModelViewTarget_MODEL_VIEW_TARGET_OPENSHIFT_CONSOLE},
 		{Cluster: "site2", Phase: aigridv1.ModelPhase_MODEL_PHASE_PENDING, Reason: "NotReady", Message: "LLMInferenceService not ready",
 			Deployment: aigridv1.ModelDeploymentState_MODEL_DEPLOYMENT_STATE_STARTING, DeploymentMessage: "Waiting for the main workload",
-			Sync: aigridv1.ModelSyncState_MODEL_SYNC_STATE_SYNCED},
+			Sync: aigridv1.ModelSyncState_MODEL_SYNC_STATE_SYNCED, State: aigridv1.ModelState_MODEL_STATE_STARTING,
+			ViewUrl: "https://console-openshift-console.apps.site2.example.com/k8s/ns/ai-grid-internal-models/serving.kserve.io~v1alpha2~LLMInferenceService/granite-3b", ViewTarget: aigridv1.ModelViewTarget_MODEL_VIEW_TARGET_OPENSHIFT_CONSOLE},
 	}
 	if !slices.EqualFunc(st.GetClusters(), wantClusters, func(a, b *aigridv1.ModelClusterStatus) bool { return proto.Equal(a, b) }) {
 		t.Fatalf("model status.clusters = %v, want %v", st.GetClusters(), wantClusters)

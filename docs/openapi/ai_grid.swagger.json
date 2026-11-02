@@ -1657,6 +1657,18 @@
         "sync_message": {
           "type": "string",
           "description": "Argo CD's sync operation message while the sync failed or is being\nretried, for example an AppProject refusing the kind."
+        },
+        "state": {
+          "$ref": "#/definitions/v1ModelState",
+          "description": "Git sync and deployment on this cluster in one word: the deployment's\nstate (READY, STARTING, FAILED, STOPPED) once the\nLLMInferenceService is on the cluster; FAILED when its sync failed;\nSYNCING while Argo CD hasn't applied it; SYNCED when it has but KServe\nhasn't reported yet; UNSPECIFIED with no report."
+        },
+        "view_url": {
+          "type": "string",
+          "description": "Where to see the model on this cluster: OpenShift AI's model\ndeployments page, or the LLMInferenceService in the OpenShift console\n(view_target). Built from the ManagedCluster's\nconsoleurl.cluster.open-cluster-management.io claim, the apps domain\nafter \"console-openshift-console.\", or from the cluster's\nai-grid/openshift-ai-url annotation when the dashboard's host differs.\nOnly an https URL with a host and no user info is used from the claim\nor the annotation. Empty when there is neither (view_target\nUNSPECIFIED)."
+        },
+        "view_target": {
+          "$ref": "#/definitions/v1ModelViewTarget",
+          "description": "Whether view_url opens OpenShift AI or the OpenShift console."
         }
       },
       "description": "The model on one placed cluster. In git mode it comes from the health the\nhub's catalog Argo CD Applications record for the cluster's\nLLMInferenceService and, on a combined cluster, which is also an ingress\ncluster, for its MaaSModelRef and ExternalModel. Output only.",
@@ -1809,13 +1821,15 @@
       "type": "string",
       "enum": [
         "MODEL_MAAS_STATE_UNSPECIFIED",
-        "MODEL_MAAS_STATE_NOT_READY",
-        "MODEL_MAAS_STATE_PUBLISHED",
-        "MODEL_MAAS_STATE_NO_SUBSCRIPTION",
-        "MODEL_MAAS_STATE_FAILED"
+        "MODEL_MAAS_STATE_CONFIGURING_ROUTING",
+        "MODEL_MAAS_STATE_AVAILABLE",
+        "MODEL_MAAS_STATE_AWAITING_SUBSCRIPTION",
+        "MODEL_MAAS_STATE_FAILED",
+        "MODEL_MAAS_STATE_AWAITING_SUBSCRIPTION_AND_BACKEND",
+        "MODEL_MAAS_STATE_UNAVAILABLE"
       ],
       "default": "MODEL_MAAS_STATE_UNSPECIFIED",
-      "description": "What one ingress cluster reports about the model's MaaSModelRef and\nExternalModel.\n\n - MODEL_MAAS_STATE_UNSPECIFIED: No report: the cluster doesn't list both of them yet.\n - MODEL_MAAS_STATE_NOT_READY: Not published yet: Argo CD hasn't synced them, or MaaS waits for the\nmodel's backend to be ready.\n - MODEL_MAAS_STATE_PUBLISHED: Published and governed: MaaSModelRef Ready, so tenants with a\nsubscription can call it.\n - MODEL_MAAS_STATE_NO_SUBSCRIPTION: Published with a healthy backend, but no active MaaSSubscription and\nMaaSAuthPolicy pair covers it, so no tenant can call it yet (MaaS:\nGovernanceAttached False, RuntimeReady True).\n - MODEL_MAAS_STATE_FAILED: MaaS or the AI gateway reports it failed, or Argo CD couldn't sync it."
+      "description": "What one ingress cluster reports about the model's MaaSModelRef and\nExternalModel.\n\n - MODEL_MAAS_STATE_UNSPECIFIED: No report: the cluster doesn't list both of them yet.\n - MODEL_MAAS_STATE_CONFIGURING_ROUTING: MaaS is still setting up the route: Argo CD hasn't synced them or they\nare progressing, or the MaaSModelRef says \"Governed but backend is not\nready\", \"Waiting for tenant resolution: ...\" or \"Waiting for HTTPRoute\nto be created\". For an ExternalModel, MaaS's \"backend\" is its HTTPRoute\naccepted by the gateway, not the model's pods.\n - MODEL_MAAS_STATE_AVAILABLE: Published and governed: MaaSModelRef Ready (\"Governed and\nruntime-healthy\"), so tenants with a subscription can call it.\n - MODEL_MAAS_STATE_AWAITING_SUBSCRIPTION: Routed, but no active MaaSSubscription and MaaSAuthPolicy pair covers\nit, so no tenant can call it yet (\"Awaiting governance pairing\").\n - MODEL_MAAS_STATE_FAILED: MaaS or the AI gateway reports it failed, or Argo CD couldn't sync it.\n - MODEL_MAAS_STATE_AWAITING_SUBSCRIPTION_AND_BACKEND: No subscription covers it and its route isn't ready either (\"Awaiting\ngovernance pairing and backend readiness\").\n - MODEL_MAAS_STATE_UNAVAILABLE: No placed cluster serves it, while MaaS publishes it or is still\nrouting it: MaaS checks only the route, so it can't see the model's pods\nare down. Summary only (ModelStatus.maas), from `state`."
     },
     "v1ModelPhase": {
       "type": "string",
@@ -1827,7 +1841,7 @@
         "MODEL_PHASE_PARTIALLY_AVAILABLE"
       ],
       "default": "MODEL_PHASE_UNSPECIFIED",
-      "description": "Derived model phase.\n\nIn git mode, while no cluster has reported the model, the phase is\nUNSPECIFIED with reason SavedToGit. Once one has, the phase is, in this\norder of precedence:\n\n  - READY (reason Ready): every ingress cluster reports the model's\n    MaaSModelRef and ExternalModel ready, and every placed cluster is\n    READY in `clusters`.\n  - PARTIALLY_AVAILABLE (reason PartiallyAvailable): every ingress cluster\n    reports them ready, at least one placed cluster is READY and at least\n    one is not.\n  - FAILED (reason Failed): a cluster reports one of the model's objects\n    failed: Argo CD health Degraded, or its sync failed. An\n    LLMInferenceService KServe reports stopped is Degraded but not failed.\n  - PENDING (reason Stopped): every placed cluster reports it stopped\n    (`deployment` STOPPED) and has applied Git's change (`sync` SYNCED).\n  - PENDING (reason NotReady): otherwise, including while an ingress\n    cluster reports the MaaSModelRef not ready or hasn't reported it.\n\nA MaaSModelRef that waits only for a subscription (MaaS\nGovernanceAttached False, RuntimeReady True) counts as ready here: the\nmodel runs and is published, so it isn't PENDING. `maas` says\nNO_SUBSCRIPTION, and `deployment` and `maas` keep the two sides apart for\na list that shows both, such as \"Running · No subscription\". KServe's and\nMaaS's Ready=False messages for steps still under way, such as a\nDeployment below its minimum availability, are pending, not failed.\n\nThe ingress clusters are those with a catalog ingress Application and those\nlabelled ai-grid/enabled \"true\" and ai-grid/role ingress or combined; each\nmust report. READY and PARTIALLY_AVAILABLE need at least one: with none,\nnothing shows the model published, so it is PENDING, and the message ends\n\"no ingress cluster has reported the MaaSModelRef\".\n\nThe order is the one the console's Models page uses (READY, PARTIALLY_AVAILABLE, FAILED, then the\nPENDING cases; proposal P13).\n\n - MODEL_PHASE_PARTIALLY_AVAILABLE: Serving on some of the clusters its placement names but not all (see\nabove). Only a whole model has it; a cluster in ModelStatus.clusters is\nREADY, FAILED or PENDING."
+      "description": "Derived model phase.\n\nIn git mode, while no cluster has reported the model, the phase is\nUNSPECIFIED with reason SavedToGit. Once one has, the phase is, in this\norder of precedence:\n\n  - READY (reason Ready): every ingress cluster reports the model's\n    MaaSModelRef and ExternalModel ready, and every placed cluster is\n    READY in `clusters`.\n  - PARTIALLY_AVAILABLE (reason PartiallyAvailable): every ingress cluster\n    reports them ready, at least one placed cluster is READY and at least\n    one is not.\n  - FAILED (reason Failed): a cluster reports one of the model's objects\n    failed: Argo CD health Degraded, or its sync failed. An\n    LLMInferenceService KServe reports stopped is Degraded but not failed.\n  - PENDING (reason Stopped): every placed cluster reports it stopped\n    (`deployment` STOPPED) and has applied Git's change (`sync` SYNCED).\n  - PENDING (reason NotReady): otherwise, including while an ingress\n    cluster reports the MaaSModelRef not ready or hasn't reported it.\n\nA MaaSModelRef that waits only for a subscription (MaaS\nGovernanceAttached False, RuntimeReady True) counts as ready here: the\nmodel runs and is published, so it isn't PENDING. `maas` says\nAWAITING_SUBSCRIPTION, and `state` and `maas` keep the two sides apart for\na list that shows both, such as \"Ready\" and \"Awaiting subscription\". KServe's and\nMaaS's Ready=False messages for steps still under way, such as a\nDeployment below its minimum availability, are pending, not failed.\n\nThe ingress clusters are those with a catalog ingress Application and those\nlabelled ai-grid/enabled \"true\" and ai-grid/role ingress or combined; each\nmust report. READY and PARTIALLY_AVAILABLE need at least one: with none,\nnothing shows the model published, so it is PENDING, and the message ends\n\"no ingress cluster has reported the MaaSModelRef\".\n\nThe order is the one the console's Models page uses (READY, PARTIALLY_AVAILABLE, FAILED, then the\nPENDING cases; proposal P13).\n\n - MODEL_PHASE_PARTIALLY_AVAILABLE: Serving on some of the clusters its placement names but not all (see\nabove). Only a whole model has it; a cluster in ModelStatus.clusters is\nREADY, FAILED or PENDING."
     },
     "v1ModelPlacement": {
       "type": "object",
@@ -2092,6 +2106,22 @@
       },
       "description": "Desired state of a Model (trimmed LLMInferenceService.spec + ACM placement)."
     },
+    "v1ModelState": {
+      "type": "string",
+      "enum": [
+        "MODEL_STATE_UNSPECIFIED",
+        "MODEL_STATE_SAVED_TO_GIT",
+        "MODEL_STATE_SYNCING",
+        "MODEL_STATE_SYNCED",
+        "MODEL_STATE_STARTING",
+        "MODEL_STATE_READY",
+        "MODEL_STATE_PARTIALLY_READY",
+        "MODEL_STATE_FAILED",
+        "MODEL_STATE_STOPPED"
+      ],
+      "default": "MODEL_STATE_UNSPECIFIED",
+      "description": "A model's rollout, Git sync and deployment together (ModelStatus.state,\nModelClusterStatus.state).\n\n - MODEL_STATE_UNSPECIFIED: No report.\n - MODEL_STATE_SAVED_TO_GIT: Committed to Git; no cluster has reported it yet.\n - MODEL_STATE_SYNCING: Argo CD hasn't applied Git's change yet, or is retrying it: the model\nisn't on the cluster yet, or it is stopped there and out of sync (a\nstart on its way). A running cluster out of sync stays READY: its\nprevious revision serves, and an edit in flight can't be told from\nlasting drift, so a stop shows READY until Argo CD applies it.\n - MODEL_STATE_SYNCED: Applied; KServe hasn't reported the deployment yet.\n - MODEL_STATE_STARTING: On the cluster, not serving yet (ModelDeploymentState STARTING).\n - MODEL_STATE_READY: Serving.\n - MODEL_STATE_PARTIALLY_READY: Serving on some placed clusters, not all. Model only.\n - MODEL_STATE_FAILED: KServe reports it failed, or Argo CD couldn't sync it.\n - MODEL_STATE_STOPPED: Stopped (serving.kserve.io/stop). KServe reports no stopping step: one\nreconcile marks the service stopped and deletes its workloads, so there\nis no STOPPING."
+    },
     "v1ModelStatus": {
       "type": "object",
       "properties": {
@@ -2148,7 +2178,7 @@
         },
         "maas": {
           "$ref": "#/definitions/v1ModelMaasState",
-          "description": "The model in MaaS, summed over the ingress clusters (`ingress`): FAILED\nwhen one reports it failed; NOT_READY when one reports it not ready or\nhasn't reported; NO_SUBSCRIPTION when one publishes it but no\nsubscription covers it there; PUBLISHED when every ingress cluster\npublishes it with a subscription; UNSPECIFIED while none has reported.\nOutput only.",
+          "description": "The model in MaaS, for a list's Availability column, summed over the\ningress clusters (`ingress`), worst first: FAILED;\nAWAITING_SUBSCRIPTION_AND_BACKEND; CONFIGURING_ROUTING (also while one\nhasn't reported); AWAITING_SUBSCRIPTION; AVAILABLE. AVAILABLE and\nCONFIGURING_ROUTING become UNAVAILABLE when no placed cluster serves the\nmodel (`state` neither READY nor PARTIALLY_READY). UNSPECIFIED while none has reported. Each\n`ingress` entry keeps MaaS's own message. Output only.",
           "readOnly": true
         },
         "ingress": {
@@ -2158,6 +2188,11 @@
             "$ref": "#/definitions/v1ModelIngressStatus"
           },
           "description": "The model on each ingress cluster, one entry per cluster in cluster-name\norder: the ones with a catalog ingress Application and the ones labelled\nai-grid/enabled \"true\" and ai-grid/role ingress or combined. A combined\ncluster has an entry here and in `clusters`. Empty while no cluster has\nreported (reason SavedToGit). Output only.",
+          "readOnly": true
+        },
+        "state": {
+          "$ref": "#/definitions/v1ModelState",
+          "description": "The model's rollout in one word, Git sync and deployment together, for\na list's Status column (`clusters[].state` summed): SAVED_TO_GIT while no\ncluster has reported; READY when every placed cluster is READY;\nPARTIALLY_READY when some are and some aren't; else FAILED when one is\nfailed; STOPPED when all are stopped (or every reporting one is);\nSTARTING when one is starting; SYNCING when one hasn't applied Git's\nchange yet; SYNCED when every one has but none reports a deployment yet.\n`phase` stays the MaaS-inclusive answer. Output only.",
           "readOnly": true
         }
       },
@@ -2173,6 +2208,16 @@
       ],
       "default": "MODEL_SYNC_STATE_UNSPECIFIED",
       "description": "Whether Argo CD has applied what Git holds for the model on one cluster.\n\n - MODEL_SYNC_STATE_UNSPECIFIED: No report: the cluster has no Application in the catalog's models\nApplicationSet, or the backend can't read the Applications.\n - MODEL_SYNC_STATE_SYNCED: The live LLMInferenceService matches Git.\n - MODEL_SYNC_STATE_OUT_OF_SYNC: Not applied yet: the cluster's Application doesn't list it yet, it is\nOutOfSync or Missing, or Argo CD is retrying its sync (sync_message\nsays why).\n - MODEL_SYNC_STATE_FAILED: Argo CD's sync to the revision it wants failed and it stopped retrying\n(sync_message says why)."
+    },
+    "v1ModelViewTarget": {
+      "type": "string",
+      "enum": [
+        "MODEL_VIEW_TARGET_UNSPECIFIED",
+        "MODEL_VIEW_TARGET_OPENSHIFT_AI",
+        "MODEL_VIEW_TARGET_OPENSHIFT_CONSOLE"
+      ],
+      "default": "MODEL_VIEW_TARGET_UNSPECIFIED",
+      "description": "Where a cluster's View link goes (ModelClusterStatus.view_url).\n\n - MODEL_VIEW_TARGET_UNSPECIFIED: No link: no https console URL claim, and no annotation on an ingress or\ncombined cluster.\n - MODEL_VIEW_TARGET_OPENSHIFT_AI: OpenShift AI's model deployments for the models namespace, at\nhttps://rh-ai.\u003capps domain\u003e/ai-hub/models/deployments/internal/\u003cnamespace\u003e,\non clusters with role ingress or combined (the reference removes the\ndashboard on inference clusters).\n - MODEL_VIEW_TARGET_OPENSHIFT_CONSOLE: The LLMInferenceService in the OpenShift console: on clusters without\nthe OpenShift AI dashboard, and on an ingress or combined cluster whose\nconsole host isn't console-openshift-console.\u003capps domain\u003e and that has\nno ai-grid/openshift-ai-url annotation."
     },
     "v1ModelWorkStatus": {
       "type": "object",

@@ -424,6 +424,19 @@ func TestCatalogStatusDegradedUnderWay(t *testing.T) {
 			kindMaaSModelRef, "Governed but backend is not ready",
 			ObjectReport{State: StatePending, Message: "Governed but backend is not ready"},
 		},
+		"model ref waiting for its HTTPRoute": {
+			kindMaaSModelRef, "Waiting for HTTPRoute to be created",
+			ObjectReport{State: StatePending, Message: "Waiting for HTTPRoute to be created"},
+		},
+		"model ref waiting for its tenant": {
+			kindMaaSModelRef, "Waiting for tenant resolution: tenant t not found",
+			ObjectReport{State: StatePending, Message: "Waiting for tenant resolution: tenant t not found"},
+		},
+		// The ref reconciled before its ExternalModel arrived in the same sync.
+		"model ref before its ExternalModel": {
+			kindMaaSModelRef, "Failed to reconcile HTTPRoute: ExternalModel granite not found in namespace models: not found",
+			ObjectReport{State: StatePending, Message: "Failed to reconcile HTTPRoute: ExternalModel granite not found in namespace models: not found"},
+		},
 		"model ref failed": {
 			kindMaaSModelRef, "Failed to update model status: boom",
 			ObjectReport{State: StateFailed, Message: "Failed to update model status: boom"},

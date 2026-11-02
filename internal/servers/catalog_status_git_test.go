@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"maps"
 	"slices"
+	"strings"
 	"testing"
 
 	"buf.build/go/protovalidate"
@@ -160,7 +161,7 @@ func TestModelsGitStatus(t *testing.T) {
 			},
 			wantPhase: phasePartial, wantReason: "PartiallyAvailable", wantMessage: "Not ready on site-a; ready on hub, site-b",
 			wantClusters: []*aigridv1.ModelClusterStatus{
-				clusterStatus("site-a", phasePending, "NotReady", llmNotReady),
+				clusterStatus("site-a", phasePending, "NotReady", "LLMInferenceService ready on its previous revision, not synced yet"),
 				clusterStatus("site-b", phaseReady, "Ready", llmReady),
 			},
 		},
@@ -678,7 +679,7 @@ func TestModelsGitStatusIngressClusters(t *testing.T) {
 
 // TestModelsGitTwoStatuses checks a model's deployment status on each placed
 // cluster and its MaaS status on each ingress cluster, kept apart: a model
-// that runs but has no subscription is READY with MaaS NO_SUBSCRIPTION, not
+// that runs but has no subscription is READY with MaaS AWAITING_SUBSCRIPTION, not
 // PENDING (ai-grid-1 dry run, 2026-10-29).
 func TestModelsGitTwoStatuses(t *testing.T) {
 	t.Parallel()
@@ -688,11 +689,13 @@ func TestModelsGitTwoStatuses(t *testing.T) {
 		depFail  = aigridv1.ModelDeploymentState_MODEL_DEPLOYMENT_STATE_FAILED
 		depNone  = aigridv1.ModelDeploymentState_MODEL_DEPLOYMENT_STATE_UNSPECIFIED
 
-		published = aigridv1.ModelMaasState_MODEL_MAAS_STATE_PUBLISHED
-		noSub     = aigridv1.ModelMaasState_MODEL_MAAS_STATE_NO_SUBSCRIPTION
-		notReady  = aigridv1.ModelMaasState_MODEL_MAAS_STATE_NOT_READY
+		published = aigridv1.ModelMaasState_MODEL_MAAS_STATE_AVAILABLE
+		noSub     = aigridv1.ModelMaasState_MODEL_MAAS_STATE_AWAITING_SUBSCRIPTION
+		notReady  = aigridv1.ModelMaasState_MODEL_MAAS_STATE_CONFIGURING_ROUTING
 		maasFail  = aigridv1.ModelMaasState_MODEL_MAAS_STATE_FAILED
 		maasNone  = aigridv1.ModelMaasState_MODEL_MAAS_STATE_UNSPECIFIED
+
+		noSubNoRoute = aigridv1.ModelMaasState_MODEL_MAAS_STATE_AWAITING_SUBSCRIPTION_AND_BACKEND
 
 		awaiting = "Awaiting governance pairing"
 		minAvail = "Deployment does not have minimum availability."
@@ -742,9 +745,9 @@ func TestModelsGitTwoStatuses(t *testing.T) {
 				modelsApp("site-b", llmisvc("Synced", "Healthy", "")),
 				ingressApp("hub", ref("Degraded", "Awaiting governance pairing and backend readiness"), externalModel("Synced", "Healthy")),
 			},
-			wantPhase: phasePending, wantDeployment: starting, wantMaaS: notReady,
+			wantPhase: phasePending, wantDeployment: starting, wantMaaS: noSubNoRoute,
 			wantPlaced:  map[string]dep{"site-a": {starting, minAvail}, "site-b": {running, ""}},
-			wantIngress: []*aigridv1.ModelIngressStatus{ingress("hub", notReady, "Awaiting governance pairing and backend readiness")},
+			wantIngress: []*aigridv1.ModelIngressStatus{ingress("hub", noSubNoRoute, "Awaiting governance pairing and backend readiness")},
 		},
 		"failed on one cluster, no subscription": {
 			objects: []runtime.Object{
@@ -981,6 +984,9 @@ func TestModelsGitSyncAndStopped(t *testing.T) {
 				t.Errorf("phase, reason, deployment = %v, %q, %v; want %v, %q, %v (%q)",
 					st.GetPhase(), st.GetReason(), st.GetDeployment(), tc.wantPhase, tc.wantReason, tc.wantDeployment, st.GetMessage())
 			}
+			if tc.wantDeployment == stopped && !strings.HasPrefix(st.GetMessage(), "Stopped on ") {
+				t.Errorf("message = %q, want it to start with the clusters where the model is stopped", st.GetMessage())
+			}
 			gotPlaced := map[string]placed{}
 			for _, c := range st.GetClusters() {
 				gotPlaced[c.GetCluster()] = placed{c.GetDeployment(), c.GetDeploymentMessage(), c.GetSync(), c.GetSyncMessage()}
@@ -992,10 +998,223 @@ func TestModelsGitSyncAndStopped(t *testing.T) {
 				t.Errorf("clusters = %v; want %v", gotPlaced, tc.wantPlaced)
 			}
 			for _, c := range st.GetClusters() {
+				if c.GetDeployment() == stopped && !strings.Contains(c.GetMessage(), "LLMInferenceService stopped") {
+					t.Errorf("clusters[%s] message = %q, want it to say the LLMInferenceService is stopped", c.GetCluster(), c.GetMessage())
+				}
 				if stoppedCluster := c.GetDeployment() == stopped; stoppedCluster != (c.GetReason() == "Stopped") {
 					t.Errorf("clusters[%s] deployment %v with reason %q; want reason Stopped exactly when stopped", c.GetCluster(), c.GetDeployment(), c.GetReason())
 				}
 			}
 		})
+	}
+}
+
+// TestModelRollout checks the one-word rollout state a list's Status column
+// shows: each cluster's from its sync and deployment, and the model's summed
+// over its placed clusters, with Partially ready when they disagree.
+func TestModelRollout(t *testing.T) {
+	t.Parallel()
+	type (
+		dep  = aigridv1.ModelDeploymentState
+		sync = aigridv1.ModelSyncState
+		st   = aigridv1.ModelState
+	)
+	const (
+		running  = aigridv1.ModelDeploymentState_MODEL_DEPLOYMENT_STATE_RUNNING
+		starting = aigridv1.ModelDeploymentState_MODEL_DEPLOYMENT_STATE_STARTING
+		failed   = aigridv1.ModelDeploymentState_MODEL_DEPLOYMENT_STATE_FAILED
+		stopped  = aigridv1.ModelDeploymentState_MODEL_DEPLOYMENT_STATE_STOPPED
+		none     = aigridv1.ModelDeploymentState_MODEL_DEPLOYMENT_STATE_UNSPECIFIED
+
+		synced    = aigridv1.ModelSyncState_MODEL_SYNC_STATE_SYNCED
+		outOfSync = aigridv1.ModelSyncState_MODEL_SYNC_STATE_OUT_OF_SYNC
+		syncFail  = aigridv1.ModelSyncState_MODEL_SYNC_STATE_FAILED
+		noSync    = aigridv1.ModelSyncState_MODEL_SYNC_STATE_UNSPECIFIED
+	)
+	cluster := func(d dep, s sync) *aigridv1.ModelClusterStatus {
+		c := &aigridv1.ModelClusterStatus{Deployment: d, Sync: s}
+		c.State = clusterRollout(c)
+		return c
+	}
+	for name, tc := range map[string]struct {
+		clusters []*aigridv1.ModelClusterStatus
+		want     st
+	}{
+		"all ready":                                {[]*aigridv1.ModelClusterStatus{cluster(running, synced), cluster(running, outOfSync)}, aigridv1.ModelState_MODEL_STATE_READY},
+		"ready and starting":                       {[]*aigridv1.ModelClusterStatus{cluster(running, synced), cluster(starting, synced)}, aigridv1.ModelState_MODEL_STATE_PARTIALLY_READY},
+		"ready and failed":                         {[]*aigridv1.ModelClusterStatus{cluster(running, synced), cluster(failed, synced)}, aigridv1.ModelState_MODEL_STATE_PARTIALLY_READY},
+		"ready and stopped":                        {[]*aigridv1.ModelClusterStatus{cluster(running, synced), cluster(stopped, synced)}, aigridv1.ModelState_MODEL_STATE_PARTIALLY_READY},
+		"failed beats starting":                    {[]*aigridv1.ModelClusterStatus{cluster(starting, synced), cluster(failed, synced)}, aigridv1.ModelState_MODEL_STATE_FAILED},
+		"a failed sync is failed":                  {[]*aigridv1.ModelClusterStatus{cluster(none, syncFail), cluster(starting, synced)}, aigridv1.ModelState_MODEL_STATE_FAILED},
+		"all stopped":                              {[]*aigridv1.ModelClusterStatus{cluster(stopped, synced), cluster(stopped, synced)}, aigridv1.ModelState_MODEL_STATE_STOPPED},
+		"stopped and starting":                     {[]*aigridv1.ModelClusterStatus{cluster(stopped, synced), cluster(starting, synced)}, aigridv1.ModelState_MODEL_STATE_STARTING},
+		"stopped and not applied yet":              {[]*aigridv1.ModelClusterStatus{cluster(stopped, synced), cluster(none, outOfSync)}, aigridv1.ModelState_MODEL_STATE_SYNCING},
+		"syncing":                                  {[]*aigridv1.ModelClusterStatus{cluster(none, outOfSync), cluster(none, synced)}, aigridv1.ModelState_MODEL_STATE_SYNCING},
+		"synced, KServe not reporting yet":         {[]*aigridv1.ModelClusterStatus{cluster(none, synced)}, aigridv1.ModelState_MODEL_STATE_SYNCED},
+		"stopped, a start on its way":              {[]*aigridv1.ModelClusterStatus{cluster(stopped, outOfSync)}, aigridv1.ModelState_MODEL_STATE_SYNCING},
+		"stopped where it reports, none elsewhere": {[]*aigridv1.ModelClusterStatus{cluster(stopped, synced), cluster(none, noSync)}, aigridv1.ModelState_MODEL_STATE_STOPPED},
+		"no cluster reports anything":              {[]*aigridv1.ModelClusterStatus{cluster(none, noSync)}, aigridv1.ModelState_MODEL_STATE_SAVED_TO_GIT},
+		"out of sync, previous revision runs":      {[]*aigridv1.ModelClusterStatus{cluster(running, outOfSync)}, aigridv1.ModelState_MODEL_STATE_READY},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			if got := modelRollout(tc.clusters); got != tc.want {
+				t.Errorf("modelRollout() = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+// TestViewLink checks where a cluster's View link goes: OpenShift AI's model
+// deployments on a cluster with the dashboard (ingress, combined), the
+// OpenShift console's LLMInferenceService page elsewhere, and nothing without
+// a console URL.
+func TestViewLink(t *testing.T) {
+	t.Parallel()
+	const (
+		console = "https://console-openshift-console.apps.c1.example.com"
+		ai      = aigridv1.ModelViewTarget_MODEL_VIEW_TARGET_OPENSHIFT_AI
+		oc      = aigridv1.ModelViewTarget_MODEL_VIEW_TARGET_OPENSHIFT_CONSOLE
+		none    = aigridv1.ModelViewTarget_MODEL_VIEW_TARGET_UNSPECIFIED
+		ocPage  = console + "/k8s/ns/models/serving.kserve.io~v1alpha2~LLMInferenceService/granite"
+	)
+	for name, tc := range map[string]struct {
+		facts      clusterFacts
+		wantURL    string
+		wantTarget aigridv1.ModelViewTarget
+	}{
+		"ingress":  {clusterFacts{role: "ingress", consoleURL: console}, "https://rh-ai.apps.c1.example.com/ai-hub/models/deployments/internal/models", ai},
+		"combined": {clusterFacts{role: "combined", consoleURL: console + "/"}, "https://rh-ai.apps.c1.example.com/ai-hub/models/deployments/internal/models", ai},
+		"an annotation overrides the dashboard host": {
+			clusterFacts{role: "combined", consoleURL: console, openShiftAIURL: "https://ai.example.org/"},
+			"https://ai.example.org/ai-hub/models/deployments/internal/models", ai,
+		},
+		"inference has no dashboard":             {clusterFacts{role: "inference", consoleURL: console}, ocPage, oc},
+		"no role":                                {clusterFacts{consoleURL: console}, ocPage, oc},
+		"a custom console host, no annotation":   {clusterFacts{role: "ingress", consoleURL: "https://console.example.org"}, "https://console.example.org/k8s/ns/models/serving.kserve.io~v1alpha2~LLMInferenceService/granite", oc},
+		"no console URL":                         {clusterFacts{role: "ingress"}, "", none},
+		"no console URL, annotation still works": {clusterFacts{role: "ingress", openShiftAIURL: "https://ai.example.org"}, "https://ai.example.org/ai-hub/models/deployments/internal/models", ai},
+		// The claim and the annotation come from the cluster: no script or
+		// plain-http links.
+		"a javascript: annotation is ignored":       {clusterFacts{role: "ingress", consoleURL: console, openShiftAIURL: "javascript:alert(1)"}, "https://rh-ai.apps.c1.example.com/ai-hub/models/deployments/internal/models", ai},
+		"a javascript: console claim gives no link": {clusterFacts{role: "inference", consoleURL: "javascript:alert(1)//console-openshift-console.x"}, "", none},
+		"an http console claim gives no link":       {clusterFacts{role: "ingress", consoleURL: "http://console-openshift-console.apps.c1.example.com"}, "", none},
+		"user info is refused":                      {clusterFacts{role: "inference", consoleURL: "https://u:p@console-openshift-console.apps.c1.example.com"}, "", none},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			gotURL, gotTarget := viewLink(tc.facts, "models", "granite")
+			if gotURL != tc.wantURL || gotTarget != tc.wantTarget {
+				t.Errorf("viewLink() = %q, %v; want %q, %v", gotURL, gotTarget, tc.wantURL, tc.wantTarget)
+			}
+		})
+	}
+}
+
+// TestMaaSSummary checks the Availability summary: worst first, and
+// AVAILABLE read as UNAVAILABLE while no placed cluster serves the model,
+// because MaaS checks only the route.
+func TestMaaSSummary(t *testing.T) {
+	t.Parallel()
+	in := func(states ...aigridv1.ModelMaasState) []*aigridv1.ModelIngressStatus {
+		var out []*aigridv1.ModelIngressStatus
+		for _, s := range states {
+			out = append(out, &aigridv1.ModelIngressStatus{State: s})
+		}
+		return out
+	}
+	const (
+		available = aigridv1.ModelMaasState_MODEL_MAAS_STATE_AVAILABLE
+		noSub     = aigridv1.ModelMaasState_MODEL_MAAS_STATE_AWAITING_SUBSCRIPTION
+		routing   = aigridv1.ModelMaasState_MODEL_MAAS_STATE_CONFIGURING_ROUTING
+		both      = aigridv1.ModelMaasState_MODEL_MAAS_STATE_AWAITING_SUBSCRIPTION_AND_BACKEND
+		failed    = aigridv1.ModelMaasState_MODEL_MAAS_STATE_FAILED
+		unavail   = aigridv1.ModelMaasState_MODEL_MAAS_STATE_UNAVAILABLE
+		none      = aigridv1.ModelMaasState_MODEL_MAAS_STATE_UNSPECIFIED
+	)
+	for name, tc := range map[string]struct {
+		ingress []*aigridv1.ModelIngressStatus
+		serving bool
+		want    aigridv1.ModelMaasState
+	}{
+		"available and serving":             {in(available, available), true, available},
+		"available, nothing serving":        {in(available), false, unavail},
+		"awaiting subscription stays":       {in(noSub), false, noSub},
+		"routing beats subscription":        {in(noSub, routing), true, routing},
+		"an unreported cluster is routing":  {in(available, none), true, routing},
+		"subscription and backend":          {in(routing, both), true, both},
+		"failed beats all":                  {in(both, failed, available), true, failed},
+		"routing while nothing serves":      {in(routing), false, unavail},
+		"both missing while nothing serves": {in(both), false, both},
+		"none reported":                     {in(none), true, none},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			if got := maasSummary(tc.ingress, tc.serving); got != tc.want {
+				t.Errorf("maasSummary() = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+// TestModelsGitStateAndView drives the rollout state and the View link
+// through a model's status: a combined cluster with the default console host
+// links to OpenShift AI, an ingress cluster's annotation overrides the
+// dashboard's host, and an inference cluster links to the OpenShift console.
+func TestModelsGitStateAndView(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	cluster := func(name, role, annotation string) *unstructured.Unstructured {
+		c := managedCluster(name, map[string]string{"ai-grid/enabled": "true", "ai-grid/role": role}, true)
+		if annotation != "" {
+			c.SetAnnotations(map[string]string{openShiftAIURLAnnotation: annotation})
+		}
+		_ = unstructured.SetNestedSlice(c.Object, []interface{}{map[string]interface{}{
+			"name": consoleURLClaim, "value": "https://console-openshift-console.apps." + name + ".example.com",
+		}}, "status", "clusterClaims")
+		return c
+	}
+	client := newAppClient(
+		modelsApp("site-a", llmisvc("Synced", "Healthy", "")),
+		modelsApp("site-b", llmisvc("Synced", "Degraded", "Deployment does not have minimum availability.")),
+		modelsApp("site-c", llmisvc("OutOfSync", "Missing", "")),
+		readyIngress("site-a"),
+		cluster("site-a", "combined", ""),
+		cluster("site-b", "ingress", "https://ai.example.org"),
+		cluster("site-c", "inference", ""),
+	)
+	srv, err := NewModelsServer().SetLogger(slog.New(slog.DiscardHandler)).SetWriter(gitops.NewMemoryWriter(nil)).
+		SetCatalogStatus(NewCatalogStatusReader(client, CatalogApps{})).SetDynamicClient(client).Build()
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+	if _, err := srv.Create(ctx, &aigridv1.ModelsCreateRequest{Object: gitSampleModel("granite", "site-a", "site-b", "site-c")}); err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	got, err := srv.Get(ctx, &aigridv1.ModelsGetRequest{Id: "granite"})
+	if err != nil {
+		t.Fatalf("Get() error = %v", err)
+	}
+	st := got.GetObject().GetStatus()
+	if st.GetState() != aigridv1.ModelState_MODEL_STATE_PARTIALLY_READY {
+		t.Errorf("state = %v, want PARTIALLY_READY", st.GetState())
+	}
+	type want struct {
+		state  aigridv1.ModelState
+		url    string
+		target aigridv1.ModelViewTarget
+	}
+	wants := map[string]want{
+		"site-a": {aigridv1.ModelState_MODEL_STATE_READY, "https://rh-ai.apps.site-a.example.com/ai-hub/models/deployments/internal/ai-grid-internal-models", aigridv1.ModelViewTarget_MODEL_VIEW_TARGET_OPENSHIFT_AI},
+		"site-b": {aigridv1.ModelState_MODEL_STATE_STARTING, "https://ai.example.org/ai-hub/models/deployments/internal/ai-grid-internal-models", aigridv1.ModelViewTarget_MODEL_VIEW_TARGET_OPENSHIFT_AI},
+		"site-c": {aigridv1.ModelState_MODEL_STATE_SYNCING, "https://console-openshift-console.apps.site-c.example.com/k8s/ns/ai-grid-internal-models/serving.kserve.io~v1alpha2~LLMInferenceService/granite", aigridv1.ModelViewTarget_MODEL_VIEW_TARGET_OPENSHIFT_CONSOLE},
+	}
+	if len(st.GetClusters()) != len(wants) {
+		t.Fatalf("clusters = %v", st.GetClusters())
+	}
+	for _, c := range st.GetClusters() {
+		if g := (want{c.GetState(), c.GetViewUrl(), c.GetViewTarget()}); g != wants[c.GetCluster()] {
+			t.Errorf("clusters[%s] = %+v, want %+v", c.GetCluster(), g, wants[c.GetCluster()])
+		}
 	}
 }

@@ -354,14 +354,43 @@ For models:
     is stopped and at least one runs it. A model stopped everywhere is
     `PENDING`, reason `Stopped`, once every cluster has synced.
   - `status.ingress[]` has one entry per ingress cluster with its MaaS
-    `state`: `PUBLISHED` (`MaaSModelRef` ready), `NO_SUBSCRIPTION` (MaaS
-    says `Awaiting governance pairing`: the backend is healthy but no
+    `state`: `AVAILABLE` (`MaaSModelRef` ready), `AWAITING_SUBSCRIPTION` (MaaS
+    says `Awaiting governance pairing`: the route is healthy but no
     `MaaSSubscription` and `MaaSAuthPolicy` pair covers the model),
-    `NOT_READY`, `FAILED`, or unspecified with no report. `status.maas` sums
-    them, worst first: `FAILED`, `NOT_READY` (also while one hasn't
-    reported), `NO_SUBSCRIPTION`, `PUBLISHED`.
+    `AWAITING_SUBSCRIPTION_AND_BACKEND` (`Awaiting governance pairing and
+    backend readiness`), `CONFIGURING_ROUTING` (any other pending step, such
+    as `Governed but backend is not ready`: for an `ExternalModel`, MaaS's
+    "backend" is its HTTPRoute, not the model's pods), `FAILED`, or
+    unspecified with no report, each with MaaS's message. `status.maas` sums
+    them, worst first: `FAILED`, `AWAITING_SUBSCRIPTION_AND_BACKEND`,
+    `CONFIGURING_ROUTING` (also while one hasn't reported),
+    `AWAITING_SUBSCRIPTION`, `AVAILABLE`; and `AVAILABLE` or
+    `CONFIGURING_ROUTING` is `UNAVAILABLE` while no placed cluster serves the
+    model, because MaaS checks only the route.
+  - `status.state` and `status.clusters[].state` give Git sync and
+    deployment in one word, for a list's Status column: per cluster the
+    deployment once it's on the cluster (`READY`, `STARTING`, `FAILED`,
+    `STOPPED`), `FAILED` after a failed sync, else `SYNCING` or `SYNCED`;
+    for the model `SAVED_TO_GIT` with no report, `READY` when every placed
+    cluster is, `PARTIALLY_READY` when some are, else the first of `FAILED`,
+    `STOPPED` (all stopped), `STARTING`, `SYNCING`, `SYNCED`. KServe reports
+    no stopping step, so there is no `STOPPING`. A stopped cluster out of
+    sync is `SYNCING` (a start on its way); a running one out of sync stays
+    `READY`, because an edit in flight can't be told from lasting drift, so
+    a stop shows `READY` until Argo CD applies it. `status.message` names the
+    clusters where the model is stopped first ("Stopped on site-a; ready on
+    site-b"), and a running cluster out of sync reports "ready on its
+    previous revision, not synced yet".
+  - `status.clusters[].view_url` and `view_target` link each placed cluster
+    to OpenShift AI's model deployments
+    (`https://rh-ai.<apps domain>/ai-hub/models/deployments/internal/<namespace>`)
+    on an `ingress` or `combined` cluster, else to the `LLMInferenceService`
+    in the OpenShift console. The apps domain comes from the
+    `consoleurl.cluster.open-cluster-management.io` claim after
+    `console-openshift-console.`; a ManagedCluster annotation
+    `ai-grid/openshift-ai-url` overrides the dashboard's base URL.
   A `MaaSModelRef` waiting only for a subscription counts as ready for the
-  phase, so such a model is `READY` with `status.maas` `NO_SUBSCRIPTION`.
+  phase, so such a model is `READY` with `status.maas` `AWAITING_SUBSCRIPTION`.
   `STARTING` has no deadline: a pod that keeps crashing, can't pull its
   image or finds no GPU also leaves its Deployment below minimum
   availability, so it shows as `STARTING` with that message until it's
@@ -419,8 +448,9 @@ of these:
 | Kind | Message | Means |
 |---|---|---|
 | `LLMInferenceService` | names a step under way, in KServe's wording (any case): `does not have minimum availability`, `rollout in progress`, `is progressing`, `has not been observed yet`, `accepted them yet`, `accepted it yet`, `is not yet accepted by gateway`, a ScaledObject `not yet` visible, available or ready, `The following Gateways are not ready`, `is not ready` (an inference pool) or `waiting for`; and doesn't dump a rejected condition (` (reason `) | starting: KServe copies the first unready step, such as its Deployment's `Available=False` |
-| `MaaSModelRef` | `Awaiting governance pairing` | published, no subscription yet (`NO_SUBSCRIPTION`) |
-| `MaaSModelRef` | `Awaiting governance pairing and backend readiness`, `Governed but backend is not ready` | not ready yet |
+| `MaaSModelRef` | `Awaiting governance pairing` | routed, no subscription yet (`AWAITING_SUBSCRIPTION`) |
+| `MaaSModelRef` | `Awaiting governance pairing and backend readiness` | no subscription and the route not ready yet (`AWAITING_SUBSCRIPTION_AND_BACKEND`) |
+| `MaaSModelRef` | `Governed but backend is not ready`, `Waiting for HTTPRoute to be created`, `Waiting for tenant resolution: ...` | route not ready yet (`CONFIGURING_ROUTING`) |
 
 Any other `Degraded` message is failed. The messages are KServe's
 (`pkg/controller/v1alpha2/llmisvc`) and maas-controller's

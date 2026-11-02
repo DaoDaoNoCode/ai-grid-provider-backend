@@ -298,12 +298,13 @@ message ModelStatus {
   // PARTIALLY_AVAILABLE there. Output only.
   ModelDeploymentState deployment = 10;
 
-  // The model in MaaS, summed over the ingress clusters (`ingress`): FAILED
-  // when one reports it failed; NOT_READY when one reports it not ready or
-  // hasn't reported; NO_SUBSCRIPTION when one publishes it but no
-  // subscription covers it there; PUBLISHED when every ingress cluster
-  // publishes it with a subscription; UNSPECIFIED while none has reported.
-  // Output only.
+  // The model in MaaS, for a list's Availability column, summed over the
+  // ingress clusters (`ingress`), worst first: FAILED;
+  // AWAITING_SUBSCRIPTION_AND_BACKEND; CONFIGURING_ROUTING (also while one
+  // hasn't reported); AWAITING_SUBSCRIPTION; AVAILABLE. AVAILABLE and
+  // CONFIGURING_ROUTING become UNAVAILABLE when no placed cluster serves the
+  // model (`state` neither READY nor PARTIALLY_READY). UNSPECIFIED while none has reported. Each
+  // `ingress` entry keeps MaaS's own message. Output only.
   ModelMaasState maas = 11;
 
   // The model on each ingress cluster, one entry per cluster in cluster-name
@@ -312,6 +313,16 @@ message ModelStatus {
   // cluster has an entry here and in `clusters`. Empty while no cluster has
   // reported (reason SavedToGit). Output only.
   repeated ModelIngressStatus ingress = 12;
+
+  // The model's rollout in one word, Git sync and deployment together, for
+  // a list's Status column (`clusters[].state` summed): SAVED_TO_GIT while no
+  // cluster has reported; READY when every placed cluster is READY;
+  // PARTIALLY_READY when some are and some aren't; else FAILED when one is
+  // failed; STOPPED when all are stopped (or every reporting one is);
+  // STARTING when one is starting; SYNCING when one hasn't applied Git's
+  // change yet; SYNCED when every one has but none reports a deployment yet.
+  // `phase` stays the MaaS-inclusive answer. Output only.
+  ModelState state = 13;
 }
 
 // What one placed cluster reports about the model's LLMInferenceService.
@@ -337,6 +348,35 @@ enum ModelDeploymentState {
   MODEL_DEPLOYMENT_STATE_STOPPED = 4;
 }
 
+// A model's rollout, Git sync and deployment together (ModelStatus.state,
+// ModelClusterStatus.state).
+enum ModelState {
+  // No report.
+  MODEL_STATE_UNSPECIFIED = 0;
+  // Committed to Git; no cluster has reported it yet.
+  MODEL_STATE_SAVED_TO_GIT = 1;
+  // Argo CD hasn't applied Git's change yet, or is retrying it: the model
+  // isn't on the cluster yet, or it is stopped there and out of sync (a
+  // start on its way). A running cluster out of sync stays READY: its
+  // previous revision serves, and an edit in flight can't be told from
+  // lasting drift, so a stop shows READY until Argo CD applies it.
+  MODEL_STATE_SYNCING = 2;
+  // Applied; KServe hasn't reported the deployment yet.
+  MODEL_STATE_SYNCED = 3;
+  // On the cluster, not serving yet (ModelDeploymentState STARTING).
+  MODEL_STATE_STARTING = 4;
+  // Serving.
+  MODEL_STATE_READY = 5;
+  // Serving on some placed clusters, not all. Model only.
+  MODEL_STATE_PARTIALLY_READY = 6;
+  // KServe reports it failed, or Argo CD couldn't sync it.
+  MODEL_STATE_FAILED = 7;
+  // Stopped (serving.kserve.io/stop). KServe reports no stopping step: one
+  // reconcile marks the service stopped and deletes its workloads, so there
+  // is no STOPPING.
+  MODEL_STATE_STOPPED = 8;
+}
+
 // Whether Argo CD has applied what Git holds for the model on one cluster.
 enum ModelSyncState {
   // No report: the cluster has no Application in the catalog's models
@@ -358,18 +398,44 @@ enum ModelSyncState {
 enum ModelMaasState {
   // No report: the cluster doesn't list both of them yet.
   MODEL_MAAS_STATE_UNSPECIFIED = 0;
-  // Not published yet: Argo CD hasn't synced them, or MaaS waits for the
-  // model's backend to be ready.
-  MODEL_MAAS_STATE_NOT_READY = 1;
-  // Published and governed: MaaSModelRef Ready, so tenants with a
-  // subscription can call it.
-  MODEL_MAAS_STATE_PUBLISHED = 2;
-  // Published with a healthy backend, but no active MaaSSubscription and
-  // MaaSAuthPolicy pair covers it, so no tenant can call it yet (MaaS:
-  // GovernanceAttached False, RuntimeReady True).
-  MODEL_MAAS_STATE_NO_SUBSCRIPTION = 3;
+  // MaaS is still setting up the route: Argo CD hasn't synced them or they
+  // are progressing, or the MaaSModelRef says "Governed but backend is not
+  // ready", "Waiting for tenant resolution: ..." or "Waiting for HTTPRoute
+  // to be created". For an ExternalModel, MaaS's "backend" is its HTTPRoute
+  // accepted by the gateway, not the model's pods.
+  MODEL_MAAS_STATE_CONFIGURING_ROUTING = 1;
+  // Published and governed: MaaSModelRef Ready ("Governed and
+  // runtime-healthy"), so tenants with a subscription can call it.
+  MODEL_MAAS_STATE_AVAILABLE = 2;
+  // Routed, but no active MaaSSubscription and MaaSAuthPolicy pair covers
+  // it, so no tenant can call it yet ("Awaiting governance pairing").
+  MODEL_MAAS_STATE_AWAITING_SUBSCRIPTION = 3;
   // MaaS or the AI gateway reports it failed, or Argo CD couldn't sync it.
   MODEL_MAAS_STATE_FAILED = 4;
+  // No subscription covers it and its route isn't ready either ("Awaiting
+  // governance pairing and backend readiness").
+  MODEL_MAAS_STATE_AWAITING_SUBSCRIPTION_AND_BACKEND = 5;
+  // No placed cluster serves it, while MaaS publishes it or is still
+  // routing it: MaaS checks only the route, so it can't see the model's pods
+  // are down. Summary only (ModelStatus.maas), from `state`.
+  MODEL_MAAS_STATE_UNAVAILABLE = 6;
+}
+
+// Where a cluster's View link goes (ModelClusterStatus.view_url).
+enum ModelViewTarget {
+  // No link: no https console URL claim, and no annotation on an ingress or
+  // combined cluster.
+  MODEL_VIEW_TARGET_UNSPECIFIED = 0;
+  // OpenShift AI's model deployments for the models namespace, at
+  // https://rh-ai.<apps domain>/ai-hub/models/deployments/internal/<namespace>,
+  // on clusters with role ingress or combined (the reference removes the
+  // dashboard on inference clusters).
+  MODEL_VIEW_TARGET_OPENSHIFT_AI = 1;
+  // The LLMInferenceService in the OpenShift console: on clusters without
+  // the OpenShift AI dashboard, and on an ingress or combined cluster whose
+  // console host isn't console-openshift-console.<apps domain> and that has
+  // no ai-grid/openshift-ai-url annotation.
+  MODEL_VIEW_TARGET_OPENSHIFT_CONSOLE = 2;
 }
 
 // The model in MaaS on one ingress cluster. Output only.
@@ -411,8 +477,8 @@ message ModelIngressStatus {
 // A MaaSModelRef that waits only for a subscription (MaaS
 // GovernanceAttached False, RuntimeReady True) counts as ready here: the
 // model runs and is published, so it isn't PENDING. `maas` says
-// NO_SUBSCRIPTION, and `deployment` and `maas` keep the two sides apart for
-// a list that shows both, such as "Running · No subscription". KServe's and
+// AWAITING_SUBSCRIPTION, and `state` and `maas` keep the two sides apart for
+// a list that shows both, such as "Ready" and "Awaiting subscription". KServe's and
 // MaaS's Ready=False messages for steps still under way, such as a
 // Deployment below its minimum availability, are pending, not failed.
 //
@@ -483,6 +549,27 @@ message ModelClusterStatus {
   // Argo CD's sync operation message while the sync failed or is being
   // retried, for example an AppProject refusing the kind.
   string sync_message = 8;
+
+  // Git sync and deployment on this cluster in one word: the deployment's
+  // state (READY, STARTING, FAILED, STOPPED) once the
+  // LLMInferenceService is on the cluster; FAILED when its sync failed;
+  // SYNCING while Argo CD hasn't applied it; SYNCED when it has but KServe
+  // hasn't reported yet; UNSPECIFIED with no report.
+  ModelState state = 9 [(buf.validate.field).enum.defined_only = true];
+
+  // Where to see the model on this cluster: OpenShift AI's model
+  // deployments page, or the LLMInferenceService in the OpenShift console
+  // (view_target). Built from the ManagedCluster's
+  // consoleurl.cluster.open-cluster-management.io claim, the apps domain
+  // after "console-openshift-console.", or from the cluster's
+  // ai-grid/openshift-ai-url annotation when the dashboard's host differs.
+  // Only an https URL with a host and no user info is used from the claim
+  // or the annotation. Empty when there is neither (view_target
+  // UNSPECIFIED).
+  string view_url = 10;
+
+  // Whether view_url opens OpenShift AI or the OpenShift console.
+  ModelViewTarget view_target = 11 [(buf.validate.field).enum.defined_only = true];
 }
 
 // Placement observed state.
