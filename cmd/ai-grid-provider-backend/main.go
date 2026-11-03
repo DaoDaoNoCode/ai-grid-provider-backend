@@ -284,15 +284,16 @@ func newGitWriter() (gitops.Writer, error) {
 }
 
 // defaultGitReadMaxAge is how old a fetch of the Git repository may be for a
-// Models or Subscriptions read to use it. Fetching costs seconds against
-// GitHub even when nothing changed, and the console gives a call ten.
+// Models or Subscriptions read, or a write's commit, to use its head.
+// Fetching can cost seconds against GitHub even when nothing changed, and the
+// console gives a call ten.
 const defaultGitReadMaxAge = 10 * time.Second
 
 // gitReadMaxAge reads AI_GRID_GIT_READ_MAX_AGE, a Go duration such as "10s",
-// default defaultGitReadMaxAge. Reads fetch the repository only when the
-// last fetch is that old, so a commit pushed by anyone else shows within
-// about that long; the backend's own writes show at once. "0" fetches on
-// every read.
+// default defaultGitReadMaxAge. Reads and writes fetch the repository only
+// when the last fetch or push is that old, so a commit pushed by anyone else
+// shows within about that long; the backend's own writes show at once. "0"
+// fetches before every read and every write.
 func gitReadMaxAge() (time.Duration, error) {
 	value := os.Getenv("AI_GRID_GIT_READ_MAX_AGE")
 	if value == "" {

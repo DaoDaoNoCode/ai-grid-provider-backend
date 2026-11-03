@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -176,25 +177,55 @@ func TestRepoWriterConcurrentReadsShareOneFetch(t *testing.T) {
 	}
 }
 
-// The backend's own commit is the head the next read sees, without a fetch.
+// A commit within the window builds on the head the last fetch saw, without
+// a fetch of its own, and lands on the remote; it is the head the next read
+// sees, again without a fetch.
 func TestRepoWriterCommitIsReadWithoutFetch(t *testing.T) {
 	t.Parallel()
-	w, _, fetches := newCachingRepoWriter(t, newBareRepo(t, map[string]string{"a": "a"}), 10*time.Second)
+	url := newBareRepo(t, map[string]string{"a": "a"})
+	w, _, fetches := newCachingRepoWriter(t, url, 10*time.Second)
 	rev, err := w.Commit(context.Background(), mustHead(t, w).Revision(), Change{Put: map[string][]byte{"b": []byte("b")}, Message: "m"})
 	if err != nil {
 		t.Fatalf("Commit() error = %v", err)
 	}
-	if n := fetches.Load(); n != 1 {
-		t.Fatalf("%d fetches for a commit, want 1: a write still fetches first", n)
+	if n := fetches.Load(); n != 0 {
+		t.Fatalf("%d fetches for a commit within the window, want 0: it pushes only", n)
 	}
 	head := mustHead(t, w)
 	if head.Revision() != rev {
 		t.Fatalf("Head() after Commit() = %s, want the commit %s", head.Revision(), rev)
 	}
 	mustRead(t, head, "b", "b")
-	if n := fetches.Load(); n != 1 {
-		t.Fatalf("%d fetches after reading the commit, want still 1", n)
+	if n := fetches.Load(); n != 0 {
+		t.Fatalf("%d fetches after reading the commit, want still 0", n)
 	}
+	if remote := mustHead(t, newTestRepoWriter(t, url)); remote.Revision() != rev {
+		t.Fatalf("remote head = %s, want the commit %s", remote.Revision(), rev)
+	}
+}
+
+// A commit made after the window has passed fetches first, and lands on top
+// of what another writer pushed meanwhile, in one attempt.
+func TestRepoWriterCommitAfterMaxAgeFetches(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	url := newBareRepo(t, map[string]string{"a": "a", "b": "b"})
+	w, clock, fetches := newCachingRepoWriter(t, url, 10*time.Second)
+	other := newTestRepoWriter(t, url)
+	base := mustHead(t, w)
+	if _, err := other.Commit(ctx, mustHead(t, other).Revision(), Change{Put: map[string][]byte{"b": []byte("b2")}, Message: "other"}); err != nil {
+		t.Fatalf("other Commit() error = %v", err)
+	}
+	clock.Advance(10 * time.Second)
+	if _, err := w.Commit(ctx, base.Revision(), Change{Put: map[string][]byte{"a": []byte("a2")}, Message: "m"}); err != nil {
+		t.Fatalf("Commit() after the window error = %v", err)
+	}
+	if n := fetches.Load(); n != 1 {
+		t.Fatalf("%d fetches for a commit after the window, want 1", n)
+	}
+	head := mustHead(t, newTestRepoWriter(t, url))
+	mustRead(t, head, "a", "a2")
+	mustRead(t, head, "b", "b2")
 }
 
 // Reads that need a fetch while a Commit runs wait for it and take the head
@@ -256,40 +287,89 @@ func TestRepoWriterReadsWaitingOnCommitTakeItsHead(t *testing.T) {
 	}
 }
 
-// A commit refused because its base is stale fetched the branch, so the
-// rerun's read (RetryOnConflict) sees the new head without waiting out the
-// window, and the rerun commits.
-func TestRepoWriterConflictRefreshesReads(t *testing.T) {
+// writeAppending appends '+' to each of files in one commit on w, rerunning
+// on conflict, and returns the error of each attempt.
+func writeAppending(ctx context.Context, w Writer, files ...string) ([]error, error) {
+	var attempts []error
+	err := RetryOnConflict(ctx, func() error {
+		err := func() error {
+			head, err := w.Head(ctx)
+			if err != nil {
+				return err
+			}
+			put := map[string][]byte{}
+			for _, p := range files {
+				data, err := head.Read(p)
+				if err != nil {
+					return err
+				}
+				put[p] = append(data, '+')
+			}
+			_, err = w.Commit(ctx, head.Revision(), Change{Put: put, Message: "m"})
+			return err
+		}()
+		attempts = append(attempts, err)
+		return err
+	})
+	return attempts, err
+}
+
+// A commit within the window builds on the head it last saw. When another
+// writer has pushed since, even to files the commit doesn't touch, the
+// remote refuses the push as not a fast-forward, and Commit answers
+// ErrConflict and forgets the head: the rerun (RetryOnConflict) reads a
+// fetched head and commits on top of the other writer's change, which stays.
+func TestRepoWriterCommitOnOutdatedHeadConflicts(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	url := newBareRepo(t, map[string]string{"a": "a"})
-	w, _, _ := newCachingRepoWriter(t, url, time.Hour)
+	url := newBareRepo(t, map[string]string{"a": "a", "b": "b"})
+	w, _, fetches := newCachingRepoWriter(t, url, time.Hour)
 	other := newTestRepoWriter(t, url)
-	if _, err := other.Commit(ctx, mustHead(t, other).Revision(), Change{Put: map[string][]byte{"a": []byte("a2")}, Message: "other"}); err != nil {
+	if _, err := other.Commit(ctx, mustHead(t, other).Revision(), Change{Put: map[string][]byte{"b": []byte("b2")}, Message: "other"}); err != nil {
 		t.Fatalf("other Commit() error = %v", err)
 	}
 
-	attempts := 0
-	err := RetryOnConflict(ctx, func() error {
-		attempts++
-		head, err := w.Head(ctx)
-		if err != nil {
-			return err
-		}
-		data, err := head.Read("a")
-		if err != nil {
-			return err
-		}
-		_, err = w.Commit(ctx, head.Revision(), Change{Put: map[string][]byte{"a": append(data, '+')}, Message: "m"})
-		return err
-	})
+	attempts, err := writeAppending(ctx, w, "a")
 	if err != nil {
 		t.Fatalf("RetryOnConflict() error = %v", err)
 	}
-	if attempts != 2 {
-		t.Fatalf("%d attempts, want 2: the stale read, then one on the fetched head", attempts)
+	if len(attempts) != 2 {
+		t.Fatalf("%d attempts, want 2: one on the outdated head, then one on the fetched head", len(attempts))
 	}
-	mustRead(t, mustHead(t, w), "a", "a2+")
+	if first := attempts[0]; !errors.Is(first, ErrConflict) || !strings.Contains(first.Error(), "non-fast-forward") {
+		t.Fatalf("first attempt error = %v, want ErrConflict from the refused push", first)
+	}
+	if n := fetches.Load(); n != 1 {
+		t.Fatalf("%d fetches, want 1: the rerun's read; neither commit fetches", n)
+	}
+	head := mustHead(t, newTestRepoWriter(t, url))
+	mustRead(t, head, "a", "a+")
+	mustRead(t, head, "b", "b2")
+}
+
+// With no window a commit fetches first, as before the window existed: a
+// commit on a base another writer has moved past, to files it didn't touch,
+// lands in one attempt.
+func TestRepoWriterMaxAgeZeroCommitFetchesFirst(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	url := newBareRepo(t, map[string]string{"a": "a", "b": "b"})
+	w, _, fetches := newCachingRepoWriter(t, url, 0)
+	other := newTestRepoWriter(t, url)
+	base := mustHead(t, w)
+	if _, err := other.Commit(ctx, mustHead(t, other).Revision(), Change{Put: map[string][]byte{"b": []byte("b2")}, Message: "other"}); err != nil {
+		t.Fatalf("other Commit() error = %v", err)
+	}
+	before := fetches.Load()
+	if _, err := w.Commit(ctx, base.Revision(), Change{Put: map[string][]byte{"a": []byte("a2")}, Message: "m"}); err != nil {
+		t.Fatalf("Commit() on a base the remote moved past error = %v", err)
+	}
+	if n := fetches.Load() - before; n != 1 {
+		t.Fatalf("%d fetches for a commit with no window, want 1", n)
+	}
+	head := mustHead(t, newTestRepoWriter(t, url))
+	mustRead(t, head, "a", "a2")
+	mustRead(t, head, "b", "b2")
 }
 
 // A push that loses a race leaves the remote at a head this writer never

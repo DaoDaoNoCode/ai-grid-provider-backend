@@ -42,8 +42,9 @@ type RepoConfig struct {
 	// AuthorName and AuthorEmail sign every commit.
 	AuthorName  string
 	AuthorEmail string
-	// ReadMaxAge is how old a fetch may be for Head to return its head
-	// instead of fetching again. Zero fetches on every Head. A commit
+	// ReadMaxAge is how old a fetch or push may be for Head to return its
+	// head instead of fetching again, and for Commit to build on that head
+	// without a fetch. Zero fetches on every Head and every Commit. A commit
 	// another writer pushes shows in Head within about ReadMaxAge, plus the
 	// time one fetch takes; the RepoWriter's own commits show at once.
 	ReadMaxAge time.Duration
@@ -57,18 +58,26 @@ type RepoConfig struct {
 const fetchTimeout = time.Minute
 
 // RepoWriter is a Writer over a remote repository. It keeps an in-memory
-// clone, fetches before every Commit, and pushes each commit. A push the
-// remote rejects because the branch moved is ErrConflict.
+// clone and pushes each commit. A push the remote rejects because the branch
+// moved is ErrConflict.
 //
-// Head fetches only when the last fetch is cfg.ReadMaxAge old or older, and
-// otherwise returns the head that fetch saw. A fetch can cost seconds even
-// when nothing changed: from the demo hub's backend in 2026-11, GitHub's
-// info/refs took about 2 s to the first byte and an up-to-date fetch about
-// 3 s. Every catalog read used to pay that, one read at a time. Reads that
-// need a fetch while one is running wait for it and share its head instead
-// of fetching again (fetchCall). A Commit records the
-// head it fetched and, once pushed, its own commit, so the next read sees the
-// write without a fetch. With ReadMaxAge zero every Head fetches, as before.
+// Head and Commit fetch only when the last fetch or push is cfg.ReadMaxAge
+// old or older, and otherwise use the head that fetch or push saw. A fetch
+// can cost seconds even when nothing changed: from the demo hub's backend in
+// 2026-11, GitHub's info/refs took about 2 s to the first byte and an
+// up-to-date fetch about 3 s. Every catalog read and write used to pay that,
+// reads one at a time. Reads that need a fetch while one is running wait for
+// it and share its head instead of fetching again (fetchCall). A Commit
+// records the head it fetched and, once pushed, its own commit, so the next
+// read sees the write without a fetch.
+//
+// A Commit that builds on a head another writer has since moved past can't
+// land: its commit's parent is no longer the remote's head, so the remote
+// refuses the push as not a fast-forward, and Commit answers ErrConflict and
+// forgets the head. The caller's rerun (RetryOnConflict) reads a fetched
+// head. A Create then costs one push when nothing raced it, and a push, a
+// fetch and a push when something did. With ReadMaxAge zero every Head and
+// every Commit fetches first, as before.
 //
 // Locking, outermost first:
 //
@@ -206,8 +215,7 @@ func (w *RepoWriter) Head(ctx context.Context) (Snapshot, error) {
 	}
 
 	w.mu.Lock()
-	if !w.headAsOf.IsZero() && w.now().Sub(w.headAsOf) < w.cfg.ReadMaxAge {
-		head := w.head
+	if head, ok := w.freshHeadLocked(); ok {
 		w.mu.Unlock()
 		return w.snapshot(head)
 	}
@@ -294,6 +302,15 @@ func (w *RepoWriter) lockOp(ctx context.Context) error {
 
 func (w *RepoWriter) unlockOp() { <-w.op }
 
+// freshHeadLocked returns the head the last fetch or push saw, when that was
+// less than cfg.ReadMaxAge ago. The caller holds mu.
+func (w *RepoWriter) freshHeadLocked() (plumbing.Hash, bool) {
+	if w.cfg.ReadMaxAge <= 0 || w.headAsOf.IsZero() || w.now().Sub(w.headAsOf) >= w.cfg.ReadMaxAge {
+		return plumbing.ZeroHash, false
+	}
+	return w.head, true
+}
+
 // remember records that the remote branch was at head at asOf or later.
 func (w *RepoWriter) remember(head plumbing.Hash, asOf time.Time) {
 	w.mu.Lock()
@@ -309,9 +326,13 @@ func (w *RepoWriter) forget() {
 	w.head, w.headAsOf = plumbing.ZeroHash, time.Time{}
 }
 
-// Commit fetches the branch, checks c's files against base, commits c on top
-// of the branch head and pushes it. It fetches whatever cfg.ReadMaxAge is:
-// the check against base must see the remote's head.
+// Commit checks c's files against base, commits c on top of the branch head
+// and pushes it. The head is the one the last fetch or push saw while that is
+// younger than cfg.ReadMaxAge, and otherwise, or with ReadMaxAge zero, the
+// one a fetch sees first. Either way the change lands only on the head it was
+// checked against: when another writer has pushed since, the remote refuses
+// the push as not a fast-forward, and Commit answers ErrConflict and forgets
+// the head, so the caller's next Head fetches (RetryOnConflict).
 func (w *RepoWriter) Commit(ctx context.Context, base string, c Change) (string, error) {
 	if err := c.validate(); err != nil {
 		return "", err
@@ -321,9 +342,14 @@ func (w *RepoWriter) Commit(ctx context.Context, base string, c Change) (string,
 	}
 	defer w.unlockOp()
 
-	head, err := w.fetch(ctx)
-	if err != nil {
-		return "", err
+	w.mu.Lock()
+	head, fresh := w.freshHeadLocked()
+	w.mu.Unlock()
+	if !fresh {
+		var err error
+		if head, err = w.fetch(ctx); err != nil {
+			return "", err
+		}
 	}
 	if !plumbing.IsHash(base) {
 		return "", fmt.Errorf("gitops: invalid base revision %q", base)
@@ -396,10 +422,10 @@ func (w *RepoWriter) Commit(ctx context.Context, base string, c Change) (string,
 		if rerr := w.repo.Storer.SetReference(plumbing.NewHashReference(w.local, head)); rerr != nil {
 			err = errors.Join(err, fmt.Errorf("reset branch: %w", rerr))
 		}
-		// A push that lost a race left the branch at a commit this clone
-		// hasn't fetched, and one that failed otherwise, on a timeout say,
-		// may still have landed: either way the head fetched above is no
-		// longer known to be the remote's.
+		// A push that lost a race, or built on a head the remote had moved
+		// past, left the branch at a commit this clone hasn't fetched, and
+		// one that failed otherwise, on a timeout say, may still have
+		// landed: either way head is no longer known to be the remote's.
 		w.forget()
 		if pushRaced(err) {
 			return "", fmt.Errorf("%w: push: %w", ErrConflict, err)

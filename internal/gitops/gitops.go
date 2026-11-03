@@ -15,7 +15,8 @@ var (
 	ErrNotFound = errors.New("gitops: file not found")
 	// ErrConflict reports a Commit whose base is stale: a file the change
 	// touches or reads differs between the base revision and the branch head,
-	// or the push lost a race. RetryOnConflict reruns a write that got it.
+	// or the remote refused the push because its branch had moved past the
+	// head the commit was made on. RetryOnConflict reruns a write that got it.
 	ErrConflict = errors.New("gitops: a file in the change was modified since the base revision")
 )
 
@@ -47,11 +48,12 @@ type Snapshot interface {
 type Writer interface {
 	// Head returns the snapshot at the branch head. It may be a little
 	// behind the remote (RepoConfig.ReadMaxAge), never behind the Writer's
-	// own commits; Commit checks against the remote's head either way.
+	// own commits. Commit lands only on the remote's head either way.
 	Head(ctx context.Context) (Snapshot, error)
 	// Commit applies c on top of the branch head and returns the new revision.
 	// It fails with ErrConflict when a file c touches or reads changed since
-	// base, or when another commit reached the branch first, and with
+	// base, or when another commit reached the branch first, which includes
+	// one pushed since the head Commit built on was fetched, and with
 	// ErrNotFound when c deletes a file the head doesn't have. ErrConflict
 	// doesn't tell a change to the caller's object from one to a file it
 	// shares with other objects, such as an index: callers rerun the whole

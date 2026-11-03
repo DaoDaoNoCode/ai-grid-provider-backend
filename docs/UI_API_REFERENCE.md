@@ -542,9 +542,12 @@ ingress clusters. See README "Git catalog" for the repository layout.
 Reads of Models and Subscriptions come from a fetch of the repository at most
 `AI_GRID_GIT_READ_MAX_AGE` old (default 10 seconds). The backend's own writes
 show in the next read at once; a commit made outside the backend, such as a
-hand edit or another replica's write, shows within about that long. Writes
-always check against the branch head, so a stale read never overwrites a
-newer commit.
+hand edit or another replica's write, shows within about that long. Within
+that window a write commits on the head it read without fetching first;
+the push lands only if nobody else has pushed since, and otherwise the
+backend makes the write again on a freshly fetched head. A stale read never
+overwrites a newer commit, and a client sees no difference beyond the
+time a write takes.
 
 `spec.placement` is required and names at least one cluster, by the ACM
 `name` label only (`name In [...]` or a `name` match label); cluster sets, other labels,
