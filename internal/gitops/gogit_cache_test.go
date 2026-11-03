@@ -9,6 +9,9 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	git "github.com/go-git/go-git/v5"
+	"github.com/go-git/go-git/v5/plumbing"
 )
 
 // fakeClock is a RepoWriter's now that moves only when a test says so.
@@ -315,9 +318,9 @@ func writeAppending(ctx context.Context, w Writer, files ...string) ([]error, er
 }
 
 // A commit within the window builds on the head it last saw. When another
-// writer has pushed since, even to files the commit doesn't touch, the
-// remote refuses the push as not a fast-forward, and Commit answers
-// ErrConflict and forgets the head: the rerun (RetryOnConflict) reads a
+// writer has pushed since, even to files the commit doesn't touch, the push,
+// which requires the remote branch to be at that head, is refused, and
+// Commit answers ErrConflict and forgets the head: the rerun (RetryOnConflict) reads a
 // fetched head and commits on top of the other writer's change, which stays.
 func TestRepoWriterCommitOnOutdatedHeadConflicts(t *testing.T) {
 	t.Parallel()
@@ -336,7 +339,7 @@ func TestRepoWriterCommitOnOutdatedHeadConflicts(t *testing.T) {
 	if len(attempts) != 2 {
 		t.Fatalf("%d attempts, want 2: one on the outdated head, then one on the fetched head", len(attempts))
 	}
-	if first := attempts[0]; !errors.Is(first, ErrConflict) || !strings.Contains(first.Error(), "non-fast-forward") {
+	if first := attempts[0]; !errors.Is(first, ErrConflict) || !strings.Contains(first.Error(), "required to be") {
 		t.Fatalf("first attempt error = %v, want ErrConflict from the refused push", first)
 	}
 	if n := fetches.Load(); n != 1 {
@@ -345,6 +348,52 @@ func TestRepoWriterCommitOnOutdatedHeadConflicts(t *testing.T) {
 	head := mustHead(t, newTestRepoWriter(t, url))
 	mustRead(t, head, "a", "a+")
 	mustRead(t, head, "b", "b2")
+}
+
+// A branch reset to an older commit within the window is respected: a commit
+// on the head this writer last saw would be a fast-forward of the reset
+// branch, but the push requires the branch to be at that head, so it is
+// refused as ErrConflict, and the rerun commits on the reset branch without
+// bringing back what the reset removed.
+func TestRepoWriterCommitRespectsRemoteReset(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	url := newBareRepo(t, map[string]string{"a": "a", "b": "b"})
+	remote, err := git.PlainOpen(url)
+	if err != nil {
+		t.Fatalf("open the remote: %v", err)
+	}
+	main := plumbing.NewBranchReferenceName("main")
+	seeded, err := remote.Reference(main, true)
+	if err != nil {
+		t.Fatalf("remote main: %v", err)
+	}
+	other := newTestRepoWriter(t, url)
+	if _, err := other.Commit(ctx, mustHead(t, other).Revision(), Change{Put: map[string][]byte{"b": []byte("b2")}, Message: "to be reset"}); err != nil {
+		t.Fatalf("other Commit() error = %v", err)
+	}
+	w, _, fetches := newCachingRepoWriter(t, url, time.Hour)
+	mustRead(t, mustHead(t, w), "b", "b2")
+	if err := remote.Storer.SetReference(plumbing.NewHashReference(main, seeded.Hash())); err != nil {
+		t.Fatalf("reset the remote: %v", err)
+	}
+
+	attempts, err := writeAppending(ctx, w, "a")
+	if err != nil {
+		t.Fatalf("RetryOnConflict() error = %v", err)
+	}
+	if len(attempts) != 2 {
+		t.Fatalf("%d attempts, want 2: one on the head before the reset, then one on the reset branch", len(attempts))
+	}
+	if first := attempts[0]; !errors.Is(first, ErrConflict) || !strings.Contains(first.Error(), "required to be") {
+		t.Fatalf("first attempt error = %v, want ErrConflict from the refused push", first)
+	}
+	if n := fetches.Load(); n != 1 {
+		t.Fatalf("%d fetches, want 1: the rerun's read", n)
+	}
+	head := mustHead(t, newTestRepoWriter(t, url))
+	mustRead(t, head, "a", "a+")
+	mustRead(t, head, "b", "b")
 }
 
 // With no window a commit fetches first, as before the window existed: a

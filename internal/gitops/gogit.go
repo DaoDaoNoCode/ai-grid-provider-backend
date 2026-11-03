@@ -71,10 +71,10 @@ const fetchTimeout = time.Minute
 // records the head it fetched and, once pushed, its own commit, so the next
 // read sees the write without a fetch.
 //
-// A Commit that builds on a head another writer has since moved past can't
-// land: its commit's parent is no longer the remote's head, so the remote
-// refuses the push as not a fast-forward, and Commit answers ErrConflict and
-// forgets the head. The caller's rerun (RetryOnConflict) reads a fetched
+// A Commit that builds on a head the remote branch has since left, because
+// another writer pushed or someone reset it, can't land: the push requires
+// the remote branch to be at the commit's parent, so it is refused, and
+// Commit answers ErrConflict and forgets the head. The caller's rerun (RetryOnConflict) reads a fetched
 // head. A Create then costs one push when nothing raced it, and a push, a
 // fetch and a push when something did. With ReadMaxAge zero every Head and
 // every Commit fetches first, as before.
@@ -330,9 +330,10 @@ func (w *RepoWriter) forget() {
 // and pushes it. The head is the one the last fetch or push saw while that is
 // younger than cfg.ReadMaxAge, and otherwise, or with ReadMaxAge zero, the
 // one a fetch sees first. Either way the change lands only on the head it was
-// checked against: when another writer has pushed since, the remote refuses
-// the push as not a fast-forward, and Commit answers ErrConflict and forgets
-// the head, so the caller's next Head fetches (RetryOnConflict).
+// checked against: the push requires the remote branch to be at that head,
+// so when another writer has pushed since, or the branch was reset, the push
+// is refused, and Commit answers ErrConflict and forgets the head, so the
+// caller's next Head fetches (RetryOnConflict).
 func (w *RepoWriter) Commit(ctx context.Context, base string, c Change) (string, error) {
 	if err := c.validate(); err != nil {
 		return "", err
@@ -412,7 +413,18 @@ func (w *RepoWriter) Commit(ctx context.Context, base string, c Change) (string,
 	err = w.repo.PushContext(ctx, &git.PushOptions{
 		RemoteName: git.DefaultRemoteName,
 		RefSpecs:   []config.RefSpec{config.RefSpec(w.local + ":" + w.local)},
-		Auth:       w.auth,
+		// The push is a compare-and-swap on head, the commit's parent: a
+		// fast-forward check alone would let the commit land on a branch
+		// reset to an ancestor of head, and bring back the commits the reset
+		// removed. go-git compares the head the remote advertises with this
+		// before it sends anything (checkRequireRemoteRefs); the update it
+		// then sends names that head as the old value, which git's
+		// receive-pack, GitHub's included, checks again when it updates the
+		// ref. go-git's own server, which serves file:// here, doesn't
+		// (plumbing/transport/server, updateReferences), so on file:// a
+		// push that races the advertisement isn't caught.
+		RequireRemoteRefs: []config.RefSpec{config.RefSpec(head.String() + ":" + w.local.String())},
+		Auth:              w.auth,
 	})
 	if err != nil {
 		// The commit never reached the remote: point the branch back at the
@@ -422,10 +434,13 @@ func (w *RepoWriter) Commit(ctx context.Context, base string, c Change) (string,
 		if rerr := w.repo.Storer.SetReference(plumbing.NewHashReference(w.local, head)); rerr != nil {
 			err = errors.Join(err, fmt.Errorf("reset branch: %w", rerr))
 		}
-		// A push that lost a race, or built on a head the remote had moved
-		// past, left the branch at a commit this clone hasn't fetched, and
-		// one that failed otherwise, on a timeout say, may still have
-		// landed: either way head is no longer known to be the remote's.
+		// A push refused because the remote branch is no longer at head,
+		// moved on or reset, left it at a commit this clone may not have
+		// fetched, and one that failed otherwise, on a timeout say, may
+		// still have landed: either way head is no longer known to be the
+		// remote's. Both leave the local branch at head and the cache
+		// empty, so the next Head fetches and the next Commit starts from
+		// the fetched head.
 		w.forget()
 		if pushRaced(err) {
 			return "", fmt.Errorf("%w: push: %w", ErrConflict, err)
@@ -438,14 +453,20 @@ func (w *RepoWriter) Commit(ctx context.Context, base string, c Change) (string,
 	return commit.String(), nil
 }
 
-// pushRaced reports whether a push failed because the remote branch moved
-// after the fetch. go-git's own check answers a plain error, "non-fast-forward
-// update: <ref>", not git.ErrNonFastForwardUpdate (that one is Pull's); a
-// server that rejects the ref update reports "non-fast-forward" or "cannot
-// lock ref" in the push report.
+// pushRaced reports whether a push failed because the remote branch is no
+// longer at the head the commit was made on. go-git checks that on the
+// client, before it sends anything, so it answers the same over file:// and
+// HTTPS, with plain errors: RequireRemoteRefs' "remote ref <ref> required to
+// be <head> but is <hash>" (or "but is absent"; remote.go,
+// checkRequireRemoteRefs, go-git v5.19.3), and "non-fast-forward update:
+// <ref>" from its fast-forward check, not git.ErrNonFastForwardUpdate (that
+// one is Pull's). A server that rejects the ref update, because the branch
+// moved after it advertised it, reports "non-fast-forward" or "cannot lock
+// ref" in the push report.
 func pushRaced(err error) bool {
 	msg := err.Error()
 	return errors.Is(err, git.ErrNonFastForwardUpdate) ||
+		strings.Contains(msg, "required to be") ||
 		strings.Contains(msg, "non-fast-forward") || strings.Contains(msg, "cannot lock ref")
 }
 

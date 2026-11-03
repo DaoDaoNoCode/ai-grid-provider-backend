@@ -217,9 +217,10 @@ For both models and subscriptions:
   `AI_GRID_GIT_READ_MAX_AGE`, plus the time one fetch takes.
 - A write commits on the head its read saw, without fetching, while that
   head is younger than `AI_GRID_GIT_READ_MAX_AGE`, and pushes. A stale read
-  still can't overwrite a newer commit: when anyone else has pushed since,
-  the commit's parent is no longer the branch head, so the push is refused
-  as not a fast-forward, and the write is made again on a freshly fetched
+  still can't overwrite a newer commit, or undo a reset of the branch: the
+  push lands only while the branch is still at the commit's parent, so when
+  anyone else has pushed since, or the branch was reset to an older commit,
+  the push is refused, and the write is made again on a freshly fetched
   head, as above. Otherwise, and always with `0`, the write fetches first
   and checks its change against the fetched head.
 - The files belong to the backend. An update rewrites them from the stored
