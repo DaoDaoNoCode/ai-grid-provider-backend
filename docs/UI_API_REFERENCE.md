@@ -564,11 +564,11 @@ it for extended resources and hugepages; anything else is `InvalidArgument`.
 A GPU request with no limit is saved with the request as its limit, and an
 update of `spec.main.requests` alone moves that limit with the request (a
 removed GPU request removes the GPU limit too).
-`spec.main.image` is required unless `spec.base_refs` names a preset; with
-one it may be left empty, and KServe uses the presets' image, because an empty
-image in the model doesn't override theirs. The backend can't see the presets
-on the clusters: if none sets an image, Kubernetes refuses the workload on the
-cluster and the model stays not ready there. A `base_refs` item must be a
+`spec.main.image` is optional. Left empty, KServe uses the presets' image,
+because an empty image in the model doesn't override theirs: with no
+`spec.base_refs`, its default preset's, vLLM for NVIDIA GPUs. An image set
+here replaces any preset's. A blank image, or one with a space or tab, is
+`InvalidArgument`. A `base_refs` item must be a
 name with no whitespace; an empty one is `InvalidArgument`. Labels and
 annotations take only unprefixed keys plus `openshift.io/display-name` and
 `openshift.io/description`.

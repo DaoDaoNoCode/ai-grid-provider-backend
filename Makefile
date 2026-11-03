@@ -224,12 +224,13 @@ run: ## Run the API locally (gRPC :8080, REST/Swagger :8081)
 # The backend on 127.0.0.1:9090 (gRPC/Connect) and :9092 (REST), where the
 # console's make dev expects it, against the hub of your oc login, with the
 # deployed console's Git and namespace settings and ACM Search port-forwarded;
-# KEYCLOAK=hub also uses that console's Keycloak. LISTEN_ADDRESS and
+# KEYCLOAK=hub also uses that console's Keycloak; CATALOG=local writes Models
+# and Subscriptions to the local catalog instead. LISTEN_ADDRESS and
 # HTTP_LISTEN_ADDRESS move it (loopback only). See hack/run-hub.sh.
 run-hub: build ## Run the API locally against the hub of your oc login, set up like the console deployed there
 	@LISTEN_ADDRESS="$(if $(filter file,$(origin LISTEN_ADDRESS)),127.0.0.1:9090,$(LISTEN_ADDRESS))" \
 		HTTP_LISTEN_ADDRESS="$(if $(filter file,$(origin HTTP_LISTEN_ADDRESS)),127.0.0.1:9092,$(HTTP_LISTEN_ADDRESS))" \
-		KUBECONFIG_PATH="$(KUBECONFIG_PATH)" KEYCLOAK_URL="$(KEYCLOAK_URL)" KEYCLOAK="$(KEYCLOAK)" \
+		KUBECONFIG_PATH="$(KUBECONFIG_PATH)" KEYCLOAK_URL="$(KEYCLOAK_URL)" KEYCLOAK="$(KEYCLOAK)" CATALOG="$(CATALOG)" \
 		BACKEND_BIN="$(BACKEND_BIN)" DEV_CATALOG="$(DEV_CATALOG)" RUN_ARGS="$(RUN_ARGS)" \
 		bash hack/run-hub.sh
 

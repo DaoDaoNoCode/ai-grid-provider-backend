@@ -718,11 +718,11 @@ func validateModelSpec(spec *aigridv1.ModelSpec) error {
 		}
 	}
 	if main := spec.GetMain(); main != nil {
-		// With base_refs the presets may provide the image (ModelContainer.image
-		// in model_type.proto); without them nothing does.
+		// An empty image leaves it to the presets: KServe's default one when
+		// base_refs is empty (ModelContainer.image in model_type.proto).
 		img := strings.TrimSpace(main.GetImage())
-		if img == "" && (main.GetImage() != "" || len(spec.GetBaseRefs()) == 0) {
-			return connect.Errorf(connect.CodeInvalidArgument, "spec.main.image is required when spec.base_refs names no preset")
+		if img == "" && main.GetImage() != "" {
+			return connect.Errorf(connect.CodeInvalidArgument, "spec.main.image must not be blank; leave it empty to use the presets' image")
 		}
 		if strings.ContainsAny(img, " \t") {
 			return connect.Errorf(connect.CodeInvalidArgument, "spec.main.image must not contain whitespace")
