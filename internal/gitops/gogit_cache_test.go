@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"os"
+	"path"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -662,6 +664,42 @@ func TestRepoWriterMaxAgeZeroFetchesEveryRead(t *testing.T) {
 	if head := mustHead(t, w); head.Revision() != rev {
 		t.Fatalf("Head() = %s, want the other writer's %s at once", head.Revision(), rev)
 	}
+}
+
+// One snapshot read from many goroutines at once: object.Tree fills its
+// lookup map on first use, which treeSnapshot's own lock serializes. Run it
+// under -race.
+func TestRepoWriterSnapshotConcurrentReadAndList(t *testing.T) {
+	t.Parallel()
+	const readers = 8
+	files := map[string]string{}
+	for _, dir := range []string{"catalog/models", "catalog/subscriptions", "catalog/clusters/site-a"} {
+		for _, name := range []string{"a.yaml", "b.yaml", "c.yaml"} {
+			files[dir+"/"+name] = dir + "/" + name
+		}
+	}
+	w, _, _ := newCachingRepoWriter(t, newBareRepo(t, files), time.Hour)
+	head := mustHead(t, w)
+
+	start := make(chan struct{})
+	var done sync.WaitGroup
+	for i := range readers {
+		done.Go(func() {
+			<-start
+			for p, want := range files {
+				if data, err := head.Read(p); err != nil || string(data) != want {
+					t.Errorf("reader %d: Read(%s) = %q, %v; want %q", i, p, data, err, want)
+					return
+				}
+				if names, err := head.List(path.Dir(p)); err != nil || !slices.Contains(names, path.Base(p)) {
+					t.Errorf("reader %d: List(%s) = %v, %v; want %s in it", i, path.Dir(p), names, err, path.Base(p))
+					return
+				}
+			}
+		})
+	}
+	close(start)
+	done.Wait()
 }
 
 // BenchmarkRepoWriterConcurrentStaleReads measures ten reads that arrive
