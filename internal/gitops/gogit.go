@@ -49,9 +49,11 @@ type RepoConfig struct {
 	ReadMaxAge time.Duration
 }
 
-// fetchTimeout bounds a fetch that Head callers share. It runs on behalf of
-// all of them, so no one caller's context can end it, and without a bound a
-// remote that stops answering would hold every later read.
+// fetchTimeout bounds a fetch that Head callers share, waiting for the
+// operation lock included. It runs on behalf of all of them, so no one
+// caller's context can end it, and without a bound a remote that stops
+// answering, or a Commit that holds the lock that long, would hold every
+// later read.
 const fetchTimeout = time.Minute
 
 // RepoWriter is a Writer over a remote repository. It keeps an in-memory
@@ -69,12 +71,14 @@ const fetchTimeout = time.Minute
 //
 // Locking, outermost first:
 //
-//   - opMu serializes the operations that change the clone's references,
-//     index and worktree: every fetch and every Commit. It is held across
-//     the network, so a Commit and a fetch wait for each other, but a read
-//     that finds a recent fetch never takes it.
+//   - op, the operation lock, serializes the operations that change the
+//     clone's references, index and worktree: every fetch and every Commit.
+//     It is held across the network, so a Commit and a fetch wait for each
+//     other, but a read that finds a recent fetch never takes it. It is a
+//     one-slot channel rather than a sync.Mutex so that waiting for it ends
+//     with the waiter's context (lockOp).
 //   - mu guards the read cache: head, headAsOf and fetching. It is never
-//     held across the network or while waiting for opMu.
+//     held across the network or while waiting for op.
 //   - the storage's own lock guards its maps for one call at a time, so a
 //     snapshot reads files while a fetch or a commit adds objects
 //     (lockedStorage).
@@ -86,7 +90,8 @@ type RepoWriter struct {
 	local  plumbing.ReferenceName
 	now    func() time.Time
 
-	opMu sync.Mutex
+	// op holds a value while an operation has the clone (lockOp).
+	op chan struct{}
 
 	mu sync.Mutex
 	// head is the branch head the last fetch or push saw, and headAsOf when
@@ -105,6 +110,9 @@ type RepoWriter struct {
 	// use them to count fetches and to hold one while reads pile up.
 	beforeFetch func()
 	onShare     func()
+	// fetchContext, when set, makes the context a shared fetch runs in
+	// instead of a fetchTimeout bound, so a test can end it at will.
+	fetchContext func(context.Context) (context.Context, context.CancelFunc)
 }
 
 // fetchCall is one fetch that every Head arriving while it runs waits for.
@@ -155,6 +163,7 @@ func newRepoWriter(ctx context.Context, cfg RepoConfig, now func() time.Time) (*
 		remote: plumbing.NewRemoteReferenceName(git.DefaultRemoteName, cfg.Branch),
 		local:  plumbing.NewBranchReferenceName(cfg.Branch),
 		now:    now,
+		op:     make(chan struct{}, 1),
 	}
 	if cfg.Token != "" {
 		w.auth = &githttp.BasicAuth{Username: "x-access-token", Password: cfg.Token}
@@ -184,9 +193,11 @@ func newRepoWriter(ctx context.Context, cfg RepoConfig, now func() time.Time) (*
 // fetches.
 func (w *RepoWriter) Head(ctx context.Context) (Snapshot, error) {
 	if w.cfg.ReadMaxAge <= 0 {
-		w.opMu.Lock()
+		if err := w.lockOp(ctx); err != nil {
+			return nil, fmt.Errorf("gitops: fetch: %w", err)
+		}
 		head, err := w.fetch(ctx)
-		w.opMu.Unlock()
+		w.unlockOp()
 		if err != nil {
 			return nil, err
 		}
@@ -225,24 +236,15 @@ func (w *RepoWriter) Head(ctx context.Context) (Snapshot, error) {
 	return w.snapshot(call.head)
 }
 
-// sharedFetch runs call's fetch, then lets its waiters go.
+// sharedFetch runs call's fetch, then lets its waiters go. fetchTimeout
+// bounds the whole call: when it runs out while the call still waits for the
+// operation lock, the call ends with that error, and the next Head starts a
+// fetch of its own.
 func (w *RepoWriter) sharedFetch(ctx context.Context, call *fetchCall) {
-	ctx, cancel := context.WithTimeout(ctx, fetchTimeout)
+	ctx, cancel := w.sharedFetchContext(ctx)
 	defer cancel()
 
-	w.opMu.Lock()
-	// A Commit may have held opMu while this call waited for it. A head it
-	// fetched or pushed after the call started is as recent as this fetch
-	// would see, so the call takes that one instead of going to the remote.
-	w.mu.Lock()
-	head := w.head
-	fresh := !w.headAsOf.IsZero() && !w.headAsOf.Before(call.started)
-	w.mu.Unlock()
-	var err error
-	if !fresh {
-		head, err = w.fetch(ctx)
-	}
-	w.opMu.Unlock()
+	head, err := w.fetchUnlessFresh(ctx, call.started)
 
 	w.mu.Lock()
 	call.head, call.err = head, err
@@ -250,6 +252,46 @@ func (w *RepoWriter) sharedFetch(ctx context.Context, call *fetchCall) {
 	w.mu.Unlock()
 	close(call.done)
 }
+
+// fetchUnlessFresh takes the operation lock and fetches, unless an operation
+// that held the lock while this one waited fetched or pushed a head at
+// started or later: that head is as recent as this fetch would see.
+func (w *RepoWriter) fetchUnlessFresh(ctx context.Context, started time.Time) (plumbing.Hash, error) {
+	if err := w.lockOp(ctx); err != nil {
+		return plumbing.ZeroHash, fmt.Errorf("gitops: fetch: %w", err)
+	}
+	defer w.unlockOp()
+	w.mu.Lock()
+	head := w.head
+	fresh := !w.headAsOf.IsZero() && !w.headAsOf.Before(started)
+	w.mu.Unlock()
+	if fresh {
+		return head, nil
+	}
+	return w.fetch(ctx)
+}
+
+// sharedFetchContext returns the context a shared fetch runs in: ctx bounded
+// by fetchTimeout, or what the test hook fetchContext makes of ctx.
+func (w *RepoWriter) sharedFetchContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	if w.fetchContext != nil {
+		return w.fetchContext(ctx)
+	}
+	return context.WithTimeout(ctx, fetchTimeout)
+}
+
+// lockOp takes the operation lock, or gives up with ctx's cause when ctx
+// ends first. Every lockOp that returns nil is paired with an unlockOp.
+func (w *RepoWriter) lockOp(ctx context.Context) error {
+	select {
+	case w.op <- struct{}{}:
+		return nil
+	case <-ctx.Done():
+		return context.Cause(ctx)
+	}
+}
+
+func (w *RepoWriter) unlockOp() { <-w.op }
 
 // remember records that the remote branch was at head at asOf or later.
 func (w *RepoWriter) remember(head plumbing.Hash, asOf time.Time) {
@@ -273,8 +315,10 @@ func (w *RepoWriter) Commit(ctx context.Context, base string, c Change) (string,
 	if err := c.validate(); err != nil {
 		return "", err
 	}
-	w.opMu.Lock()
-	defer w.opMu.Unlock()
+	if err := w.lockOp(ctx); err != nil {
+		return "", fmt.Errorf("gitops: commit: %w", err)
+	}
+	defer w.unlockOp()
 
 	head, err := w.fetch(ctx)
 	if err != nil {
@@ -379,7 +423,7 @@ func pushRaced(err error) bool {
 }
 
 // fetch updates the remote-tracking branch, records its head for Head and
-// returns it. The caller holds opMu.
+// returns it. The caller holds the operation lock.
 func (w *RepoWriter) fetch(ctx context.Context) (plumbing.Hash, error) {
 	if w.beforeFetch != nil {
 		w.beforeFetch()

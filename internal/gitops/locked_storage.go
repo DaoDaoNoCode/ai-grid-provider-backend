@@ -22,7 +22,7 @@ import (
 // snapshots, which read immutable objects by hash: an object is complete
 // before SetEncodedObject publishes it, and nothing changes it afterwards.
 // The references, the index and the config, which go-git reads, changes and
-// writes back, are used only by the operation that holds RepoWriter.opMu.
+// writes back, are used only by the operation that holds RepoWriter.op.
 //
 // It implements storage.Storer and nothing else, on purpose: the optional
 // interfaces memory.Storage also has (Transactioner, LooseObjectStorer,

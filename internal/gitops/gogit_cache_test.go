@@ -389,6 +389,84 @@ func TestRepoWriterReaderGivesUpOnSharedFetch(t *testing.T) {
 	}
 }
 
+// A shared fetch's bound covers its wait for the clone: one that runs out
+// while a Commit holds the clone ends with that error, its readers get it,
+// and the next read starts a fetch of its own instead of joining the expired
+// one. A Commit waiting for the clone gives up with its own context too.
+func TestRepoWriterSharedFetchExpiresWaitingForCommit(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	w, clock, _ := newCachingRepoWriter(t, newBareRepo(t, map[string]string{"a": "a"}), 10*time.Second)
+	base := mustHead(t, w)
+
+	// The commit holds the clone, before its push, until released.
+	pushing := make(chan struct{})
+	release := make(chan struct{})
+	w.beforePush = func() {
+		close(pushing)
+		<-release
+	}
+	committed := make(chan string, 1)
+	go func() {
+		rev, err := w.Commit(ctx, base.Revision(), Change{Put: map[string][]byte{"a": []byte("a2")}, Message: "m"})
+		if err != nil {
+			t.Errorf("Commit() error = %v", err)
+		}
+		committed <- rev
+	}()
+	<-pushing
+	// The head the commit fetched is too old for the reads below.
+	clock.Advance(time.Minute)
+
+	canceled, cancel := context.WithCancel(ctx)
+	cancel()
+	if _, err := w.Commit(canceled, base.Revision(), Change{Put: map[string][]byte{"b": []byte("b")}, Message: "m"}); !errors.Is(err, context.Canceled) {
+		t.Fatalf("Commit() waiting for the clone with its context canceled error = %v, want context.Canceled", err)
+	}
+
+	// Each shared fetch's bound is one the test ends, as if it had run out.
+	expire := make(chan context.CancelCauseFunc, 2)
+	w.fetchContext = func(ctx context.Context) (context.Context, context.CancelFunc) {
+		ctx, cancel := context.WithCancelCause(ctx)
+		expire <- cancel
+		return ctx, func() { cancel(context.Canceled) }
+	}
+	joined := make(chan struct{}, 1)
+	w.onShare = func() { joined <- struct{}{} }
+
+	first := make(chan error, 1)
+	go func() {
+		_, err := w.Head(ctx)
+		first <- err
+	}()
+	(<-expire)(context.DeadlineExceeded)
+	if err := <-first; !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("Head() whose fetch ran out waiting for the commit error = %v, want context.DeadlineExceeded", err)
+	}
+
+	second := make(chan string, 1)
+	go func() {
+		head, err := w.Head(ctx)
+		if err != nil {
+			t.Errorf("Head() after the expired fetch error = %v", err)
+			second <- ""
+			return
+		}
+		second <- head.Revision()
+	}()
+	select {
+	case <-expire:
+	case <-joined:
+		t.Fatal("the read after the expired fetch joined it instead of starting its own")
+	}
+
+	close(release)
+	rev := <-committed
+	if got := <-second; got != rev {
+		t.Fatalf("Head() after the commit = %s, want the commit %s", got, rev)
+	}
+}
+
 // With no window every read fetches, as before the window existed, and a
 // commit another writer pushed shows at once.
 func TestRepoWriterMaxAgeZeroFetchesEveryRead(t *testing.T) {
