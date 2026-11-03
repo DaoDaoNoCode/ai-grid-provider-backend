@@ -4,7 +4,6 @@ import (
 	"strconv"
 	"time"
 
-	connect "connectrpc.com/connect/v2"
 	aigridv1 "github.com/osac-project/ai-grid-provider-backend/gen/ai_grid/v1"
 	"google.golang.org/protobuf/types/known/timestamppb"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -154,35 +153,6 @@ func replaceStringMapPatch(current, next, preserve map[string]string) map[string
 		}
 	}
 	return out
-}
-
-func validateListLimit(limit *int32) error {
-	if limit != nil && *limit < 0 {
-		return connect.NewError(connect.CodeInvalidArgument, "limit must not be negative")
-	}
-	return nil
-}
-
-func applyListWindow[T any](items []T, offset, limit *int32) (page []T, total int32) {
-	total = int32(len(items))
-	start := 0
-	if offset != nil && *offset > 0 {
-		start = int(*offset)
-		if start > len(items) {
-			start = len(items)
-		}
-	}
-	end := len(items)
-	if limit != nil && *limit >= 0 {
-		end = start + int(*limit)
-		if end > len(items) {
-			end = len(items)
-		}
-		if *limit == 0 {
-			end = start
-		}
-	}
-	return items[start:end], total
 }
 
 // resourceVersionToVersion maps the hub's resourceVersion to metadata.version.

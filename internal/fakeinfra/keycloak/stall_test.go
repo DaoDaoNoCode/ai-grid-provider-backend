@@ -11,9 +11,15 @@ import (
 )
 
 // TestStalledBodyDoesNotBlockOthers: a client that sends its headers and
-// then stalls in the body must not hold up other requests.
+// then stalls in the body must not hold up other requests. Body bytes are
+// read before the server mutex, so concurrent list/token calls succeed
+// without waiting on the stalled connection. The server signals
+// s.readStarted once it begins the body read, so the GET and token requests
+// below only fire once the stalled POST is provably blocked in that read —
+// a regression that held the mutex during the read would still fail.
 func TestStalledBodyDoesNotBlockOthers(t *testing.T) {
-	f := start(t)
+	readStarted := make(chan struct{}, 1)
+	f := start(t, func(s *Server) { s.readStarted = readStarted })
 	conn, err := net.Dial("tcp", strings.TrimPrefix(f.srv.URL, "http://"))
 	if err != nil {
 		t.Fatal(err)
@@ -22,7 +28,12 @@ func TestStalledBodyDoesNotBlockOthers(t *testing.T) {
 	if _, err := fmt.Fprintf(conn, "POST %s HTTP/1.1\r\nHost: kc\r\nAuthorization: Bearer %s\r\nContent-Type: application/json\r\nContent-Length: 100\r\n\r\n{\"name\":", orgs, f.token); err != nil {
 		t.Fatal(err)
 	}
-	time.Sleep(100 * time.Millisecond) // let the server start reading the body
+
+	select {
+	case <-readStarted:
+	case <-time.After(2 * time.Second):
+		t.Fatal("server never started reading the stalled body")
+	}
 
 	client := &http.Client{Timeout: 2 * time.Second}
 	req, _ := http.NewRequest(http.MethodGet, f.srv.URL+orgs, nil)

@@ -20,7 +20,7 @@ The OSAC fulfillment-service standards are the reference architecture. Apply the
 
 ## Non-negotiable invariants
 
-- Protobuf is the API contract. Edit sources under `proto/`; never hand-edit generated files under `gen/`, `docs/openapi/`, or `internal/restgateway/openapi/`.
+- Protobuf is the API contract. Edit sources under `proto/`; never hand-edit generated files under `gen/`, `docs/openapi/`, or `internal/restgateway/openapi/` (regenerate with `make generate` only).
 - After any protobuf change, run `make generate`, commit all generated outputs, and verify regeneration leaves the worktree clean.
 - `buf breaking` must pass for `ai_grid.v1`. Never remove, renumber, rename or retype a field, enum value, message or RPC in one step: expand (add the replacement, deprecate the old), let consumers migrate, then contract (remove, and `reserved` both the number and the name) as an approved break. Never reuse a field number. A changed meaning is a new field, not an edited comment. See [`docs/API_CONTRACT.md`](docs/API_CONTRACT.md).
 - Managed resources use the OSAC shape: `id`, `metadata`, `spec`, and `status`.
@@ -123,99 +123,37 @@ command above can see, because an orphaned generated file is committed and unmod
 
 ## Validation
 
-Run commands from the repository root.
+Run commands from the repository root. Full target catalog: `make help` (and
+[`README.md`](README.md) for workflows).
 
 ### Required for every Go change
 
 ```bash
-make build
-make test
-make lint
-make help             # list targets
-make prereqs          # toolchain check (Podman, Kind, kubectl, grpcurl, Go, clusteradm)
-make build            # bin/ai-grid-provider-backend
-make unit             # unit tests (excludes ./integration)
-make smoke            # live gRPC/REST smoke (needs make run; optional keycloak-up)
-make test             # alias for unit
-make lint             # gofmt check, go vet; golangci-lint when installed
-make verify           # build + unit + lint
-make generate         # regenerate proto / gateway / OpenAPI
-make run              # local API (gRPC :8080, REST/Swagger :8081) against kubeconfig
-make run-hub          # local API on 127.0.0.1:9090/:9092 against your oc login's hub, set up like its console; KEYCLOAK=hub
-make keycloak-up      # local Keycloak on :8180 + seed tenant-a/tenant-b
-make keycloak-seed    # re-seed ai-grid realm / Organizations (idempotent)
-make keycloak-down    # remove local Keycloak container
-make kind-test        # full Kind integration (KIND_EXPERIMENTAL_PROVIDER=podman)
-make image            # build container image (IMAGE/TAG, default ghcr.io :latest)
-make push             # push container (podman login ghcr.io first)
-make build-and-push   # image + push
-make openshift-up     # deploy to current oc context (ghcr.io image by default)
-make openshift-down   # remove OpenShift deploy
-make acm-hub-up       # RHACM via Helm/OLM + playground ManagedClusters
-make acm-hub-down     # tear down ACM hub Helm release
+make verify            # CI-aligned gate: build + unit + lint + buf lint + check-generated
+# make check           # alias for verify
 ```
 
-`make verify` is the aggregate check and must pass before a change is considered ready.
+`make verify` must pass before a change is considered ready. It matches CI Check except
+`buf breaking`, which stays pull-request / base-branch only in CI (needs the PR base ref;
+see [`docs/API_CONTRACT.md`](docs/API_CONTRACT.md)).
 
-### Required for protobuf or API changes
+While iterating, narrower targets (`make build`, `make unit`, `make lint`, …) are fine;
+finish on `make verify`. `make prereqs` confirms local tooling against CI pins.
 
-```bash
-buf lint proto
-buf breaking proto --against '.git#branch=main,subdir=proto'   # docs/API_CONTRACT.md
-make generate
-git status --porcelain   # must print nothing
-make check-generated     # also catches output the protobuf no longer produces
-make verify
-```
+### Also required when the change touches these areas
 
-Also verify the generated OpenAPI and REST routes match the protobuf contract.
-
-### Required for shell-script changes
-
-```bash
-bash -n path/to/changed-script.sh
-shellcheck path/to/changed-script.sh
-```
-
-If `shellcheck` is unavailable, report that gap; do not claim shell validation passed.
-
-### Required for container or deployment changes
-
-```bash
-make image
-```
-
-Use an explicit non-production image destination for development. Do not push images or deploy to a cluster unless the user explicitly requests it and the destination/context has been confirmed.
-
-### Required for integration-sensitive changes
-
-```bash
-export KIND_EXPERIMENTAL_PROVIDER=podman
-make kind-test
-```
-
-Run this for changes affecting Kubernetes behavior, OCM/RHACM resources, Keycloak integration, generated API behavior, deployment manifests, or end-to-end request flow. If the environment cannot run it, state exactly what was not validated.
+| Area | Extra gate |
+|------|------------|
+| Protobuf / API contract | `make generate` after editing `proto/`, then re-run `make verify`. PR/CI only: `buf breaking` (see [`docs/API_CONTRACT.md`](docs/API_CONTRACT.md)). Confirm OpenAPI and REST routes match. |
+| Shell under `hack/` | `bash -n` and `shellcheck` on each changed script (report if `shellcheck` is missing). |
+| Container / image | `make image` (non-production destination; do not push/deploy unless asked). |
+| Integration-sensitive (K8s, Keycloak, manifests, e2e flow) | `KIND_EXPERIMENTAL_PROVIDER=podman make kind-test` (state clearly if the environment cannot run it). |
 
 ### Local development without a cluster
 
-```bash
-make dev-fake         # real backend on the fake hub (:9091) and fake Keycloak (:9093); gRPC :9090, REST :9092; draft fake :9094
-make dev-fake-poc     # the same on fixtures/poc and fixtures/draft/poc; override ports with DEV_*_PORT=...
-make dev-fake-locations  # the same on fixtures/locations (and fixtures/draft/default for the draft fake), one cluster per status.location edge case
-```
-
-`make dev-fake` runs the unmodified backend against `internal/fakeinfra` (README.md, "Dev mode with fake infrastructure"). With the console, run `make -j2 dev-bff-fake dev-frontend-fake` in the console repo in a second terminal. It is a development aid, not a substitute for `make kind-test`.
-
-### Optional live smoke and deploy helpers
-
-```bash
-make smoke            # live gRPC/REST smoke against a running API
-make smoke-openshift  # same suite via oc port-forward
-make openshift-up     # deploy to current oc context; auto-installs ACM if ManagedCluster CRD missing
-make openshift-down   # remove OpenShift deploy (does not tear down ACM)
-make acm-hub-up       # RHACM via Helm/OLM + playground ManagedClusters
-make acm-hub-down     # tear down ACM hub Helm release
-```
+`make dev-fake` (and `dev-fake-poc` / `dev-fake-locations`) run the real backend against
+`internal/fakeinfra` — see README.md, "Dev mode with fake infrastructure". Not a substitute
+for `make kind-test`. Live smoke and OpenShift/ACM helpers: `make help`.
 
 ## Testing conventions
 
@@ -223,6 +161,9 @@ make acm-hub-down     # tear down ACM hub Helm release
 - Keep Kind-backed integration coverage under `integration/` and its supporting scripts.
 - Keep `internal/fakeinfra` faithful to the real hub and Keycloak: every status code, reason, and message it writes cites its source, and `go test ./internal/fakeinfra/...` runs the real servers and clients against it. Change fixtures by re-running `hack/convert-console-fixtures` (fixtures/README.md), not by hand-editing the converted JSON.
 - Prefer deterministic tests and typed assertions over matching human-readable error strings.
+- For API / Connect handler tests, match errors by Connect status code or typed sentinels (`assertConnectCode`, `errors.As` / `errors.Is`, `connect.CodeOf`) — never by `err.Error()` text or `strings.Contains` on the message.
+- Exception: `internal/fakeinfra` “cites source” tests may assert exact upstream messages when the fake’s job is to reproduce Kubernetes/Keycloak wire text.
+- Exception: the few wire tests whose purpose is “the cause message survives to the caller” (the console shows the Connect message to admins) may assert message text via `assertConnectMessage` — `errors.As` failing is a test failure, never a skip.
 - Test gRPC status codes and response contracts.
 - Do not weaken or delete tests merely to make a change pass.
 - Do not introduce a new test framework without an explicit repository decision; follow the framework already used by neighboring tests.
@@ -239,21 +180,22 @@ make acm-hub-down     # tear down ACM hub Helm release
 requests and on pushes to `main` and `v*` tags (`make build`, `fmt-check`,
 `vet`, pinned golangci-lint + `.golangci.yml`, `unit`, `buf lint`, `buf
 breaking` against the base branch on pull requests (skipped by the `buf skip
-breaking` label for an approved break, docs/API_CONTRACT.md), `make generate`
-dirty diff). After Check passes, pushes, tags and manual runs publish the image to
-`ghcr.io/ai-grid-cloud/ai-grid-provider-backend` (never on PRs).
+breaking` label for an approved break, docs/API_CONTRACT.md), and
+`make check-generated` — tempdir generate + diff, not a worktree dirty check).
+Local `make verify` mirrors that gate except `buf breaking` (PR/base only).
 
+Check runs on every branch push and every pull request. After Check passes,
+**image build/publish runs only on push/merge to `main`**, on `v*` tags, and
+on `workflow_dispatch` — never on other branches or pull_request. CI uses
+Docker Buildx with digest-pinned actions; local `make image` stays Podman-first.
 Tags: `sha-<full sha>` on every publish (deploy this one), `latest` on `main`,
 and semver from `v*` tags. No repository secrets: the job pushes with
 `GITHUB_TOKEN` (`packages: write`).
 
-Pull requests also get an image: `publish-image.yml` builds it without
-credentials, `publish-pr-image.yml` pushes it as `pr-<number>` (never `sha-*`,
-`latest` or semver), `cleanup-pr-image.yml` deletes it when the PR closes, and
-`prune-images.yml` removes `pr-*` and untagged versions older than 30 days
-every Monday.
-
-## Security
+PR preview image workflows (`publish-image.yml` / `publish-pr-image.yml`) are
+disabled. `cleanup-pr-image.yml` may still delete leftover `pr-*` tags when a
+PR closes; `prune-images.yml` removes stale `pr-*` and untagged versions older
+than 30 days every Monday.
 
 ## Security and tenancy
 
@@ -268,10 +210,11 @@ every Monday.
 ## Build and image rules
 
 - `make build` builds `bin/ai-grid-provider-backend`.
-- `make image` builds the container image; `make push` publishes it.
+- `make image` builds the container image with Podman when available (falls back to docker); `make push` publishes it.
+- GitHub Actions image publish uses Docker Buildx; prefer Podman for all local/Kind container work.
 - Keep `Containerfile` multi-stage and the runtime non-root.
-- Pin tool and action versions used by CI. Do not use moving `latest` versions for linters or build tools.
-- Automated publication must target a team-owned image namespace, not a personal namespace.
+- Pin tool and action versions used by CI. Do not use moving `latest` versions for linters or build tools. `make prereqs` checks local Go / buf / golangci-lint against those pins.
+- Automated publication must target a team-owned image namespace, not a personal namespace. Images build in CI only on merge to `main` (and intentional `v*` tags / manual dispatch). Check (lint/tests/verify) still runs on other branches and PRs; those runs never publish.
 
 ## Git and review hygiene
 

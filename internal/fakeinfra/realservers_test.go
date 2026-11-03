@@ -324,7 +324,7 @@ func TestRealTenantsServerOnFakeKeycloak(t *testing.T) {
 	t.Cleanup(srv.Close)
 
 	tenants := func(password string) *servers.TenantsServer {
-		s, err := servers.NewTenantsServer().SetLogger(slog.New(slog.DiscardHandler)).SetOrganizationLister(keycloak.New(keycloak.Config{
+		s, err := servers.NewTenantsServer().SetLogger(slog.New(slog.DiscardHandler)).SetOrganizationClient(keycloak.New(keycloak.Config{
 			BaseURL: srv.URL, AdminRealm: "master", Realm: "ai-grid", Username: "admin", Password: password, HTTPClient: srv.Client(),
 		})).Build()
 		if err != nil {

@@ -252,7 +252,7 @@ func TestGPUInventoryServesStaleWhileRefreshing(t *testing.T) {
 	t.Parallel()
 	now := time.Date(2026, 10, 26, 12, 0, 0, 0, time.UTC)
 	release := make(chan struct{})
-	src := &blockingSource{release: release, nodes: []acmsearch.Node{{Cluster: "site-a", Name: "gpu-a", Labels: gfdLabels(nil)}}}
+	src := &blockingSource{release: release, started: make(chan struct{}), nodes: []acmsearch.Node{{Cluster: "site-a", Name: "gpu-a", Labels: gfdLabels(nil)}}}
 	inv := NewGPUInventory(src, time.Minute, nil)
 	inv.now = func() time.Time { return now }
 	inv.byName = map[string]*aigridv1.ClusterGPUs{"site-old": {Total: 2}}
@@ -315,6 +315,35 @@ func TestClusterGPUsTotalSaturates(t *testing.T) {
 	})["site-a"]
 	if got.GetTotal() != math.MaxInt32 {
 		t.Fatalf("total = %d, want %d", got.GetTotal(), math.MaxInt32)
+	}
+}
+
+// A nil *GPUInventory — what newGPUInventory returns for
+// --search-api-url=off — reaches the server through the setter as a
+// non-nil interface holding a nil pointer, so the server's own nil check
+// passes and Clusters used to panic locking the nil receiver. This is the
+// PR #61 review reproduction: build through the setter, like main.go does.
+func TestNilGPUInventoryThroughSetter(t *testing.T) {
+	t.Parallel()
+
+	var inventory *GPUInventory
+	server, err := NewClustersServer().
+		SetDynamicClient(newManagedClusterClient(managedCluster("cluster-a", nil, true))).
+		SetGPUInventory(inventory).
+		Build()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if got := server.clusterGPUs(context.Background()); got != nil {
+		t.Errorf("clusterGPUs() = %v, want nil without an inventory", got)
+	}
+	got, err := server.List(context.Background(), &aigridv1.ClustersListRequest{})
+	if err != nil {
+		t.Fatalf("List() error = %v, want it to work without an inventory", err)
+	}
+	if len(got.GetItems()) != 1 || got.GetItems()[0].GetStatus().GetGpus() != nil {
+		t.Errorf("List() items = %v, want cluster-a without status.gpus", got.GetItems())
 	}
 }
 
@@ -425,7 +454,7 @@ func TestClustersUpdateAttachesGPUs(t *testing.T) {
 func TestGPUInventoryQueriesOnceForConcurrentCallers(t *testing.T) {
 	t.Parallel()
 	release := make(chan struct{})
-	src := &blockingSource{release: release, nodes: []acmsearch.Node{{Cluster: "site-a", Name: "gpu-a", Labels: gfdLabels(nil)}}}
+	src := &blockingSource{release: release, started: make(chan struct{}), nodes: []acmsearch.Node{{Cluster: "site-a", Name: "gpu-a", Labels: gfdLabels(nil)}}}
 	inv := NewGPUInventory(src, time.Minute, nil)
 	var wg sync.WaitGroup
 	results := make([]map[string]*aigridv1.ClusterGPUs, 20)
@@ -454,7 +483,7 @@ func TestGPUInventoryQueriesOnceForConcurrentCallers(t *testing.T) {
 func TestGPUInventoryCallerStopsAtItsOwnDeadline(t *testing.T) {
 	t.Parallel()
 	release := make(chan struct{})
-	src := &blockingSource{release: release, nodes: []acmsearch.Node{{Cluster: "site-a", Name: "gpu-a", Labels: gfdLabels(nil)}}}
+	src := &blockingSource{release: release, started: make(chan struct{}), nodes: []acmsearch.Node{{Cluster: "site-a", Name: "gpu-a", Labels: gfdLabels(nil)}}}
 	inv := NewGPUInventory(src, time.Minute, nil)
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -481,25 +510,22 @@ func TestGPUInventoryCallerStopsAtItsOwnDeadline(t *testing.T) {
 }
 
 // blockingSource answers once release is closed, and records its calls.
+// Callers must set started to a fresh channel before the first GPUNodes call.
 type blockingSource struct {
 	release chan struct{}
 	nodes   []acmsearch.Node
-
-	mu      sync.Mutex
-	calls   int
 	started chan struct{}
-	once    sync.Once
+
+	mu    sync.Mutex
+	calls int
+	once  sync.Once
 }
 
 func (s *blockingSource) GPUNodes(ctx context.Context, _ ...string) ([]acmsearch.Node, error) {
 	s.mu.Lock()
 	s.calls++
-	if s.started == nil {
-		s.started = make(chan struct{})
-	}
-	started := s.started
 	s.mu.Unlock()
-	s.once.Do(func() { close(started) })
+	s.once.Do(func() { close(s.started) })
 	select {
 	case <-s.release:
 		return s.nodes, nil
@@ -510,18 +536,11 @@ func (s *blockingSource) GPUNodes(ctx context.Context, _ ...string) ([]acmsearch
 
 func (s *blockingSource) waitStarted(t *testing.T) {
 	t.Helper()
-	deadline := time.Now().Add(5 * time.Second)
-	for time.Now().Before(deadline) {
-		s.mu.Lock()
-		started := s.started
-		s.mu.Unlock()
-		if started != nil {
-			<-started
-			return
-		}
-		time.Sleep(time.Millisecond)
+	select {
+	case <-s.started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the query never started")
 	}
-	t.Fatal("the query never started")
 }
 
 func (s *blockingSource) callCount() int {

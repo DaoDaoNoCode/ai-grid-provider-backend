@@ -874,21 +874,21 @@ Earlier versions created two public Routes, and `oc apply` doesn't prune, so
 
 Default image: [`ghcr.io/ai-grid-cloud/ai-grid-provider-backend`](https://github.com/ai-grid-cloud/ai-grid-provider-backend/pkgs/container/ai-grid-provider-backend).
 
-CI (`.github/workflows/ci.yaml`) runs the Check job on pull requests and on
-pushes to `main` and `v*` tags (build, lint, unit tests, generated-file
-verify). After Check passes, pushes, tags and manual runs publish the image to
-ghcr.io: `sha-<full sha>` every time (pin deployments to it), `latest` on
-`main`, and semver from `v*` tags. It pushes with `GITHUB_TOKEN`; no repository
-secrets are needed.
+CI (`.github/workflows/ci.yaml`) runs the Check job on every branch push and
+every pull request (build, lint, unit tests, `make check-generated`).
+After Check passes, **image build/publish runs only on push/merge to `main`**,
+on `v*` tags, and on manual `workflow_dispatch` (Docker Buildx) — never on
+other branches or PRs. Local `make image` stays Podman-first. Published tags:
+`sha-<full sha>` every time (pin deployments to it), `latest` on `main`, and
+semver from `v*` tags. It pushes with `GITHUB_TOKEN`; no repository secrets
+are needed.
 A new ghcr package starts private: when CI first publishes a new image, an
 organization owner sets the package's visibility to Public, or clusters need a
 pull secret.
 
-Pull requests also get an image: `publish-image.yml` builds it without
-credentials, `publish-pr-image.yml` pushes it as `pr-<number>` (never `sha-*`,
-`latest` or semver), `cleanup-pr-image.yml` deletes it when the PR closes, and
-`prune-images.yml` removes `pr-*` and untagged versions older than 30 days
-every Monday.
+PR preview image workflows are disabled. `cleanup-pr-image.yml` may still delete
+leftover `pr-*` tags when a PR closes; `prune-images.yml` removes stale `pr-*`
+and untagged versions older than 30 days every Monday.
 
 Publish locally (login required once: `podman login ghcr.io`):
 

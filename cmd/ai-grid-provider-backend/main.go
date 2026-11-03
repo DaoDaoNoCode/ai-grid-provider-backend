@@ -66,12 +66,14 @@ func main() {
 		os.Exit(1)
 	}
 
+	logger := slog.Default()
 	aiGridServer, err := servers.NewAiGridServer().Build()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "build AiGrid server: %v\n", err)
 		os.Exit(1)
 	}
 	clustersServer, err := servers.NewClustersServer().
+		SetLogger(logger).
 		SetDynamicClient(kubeClient).
 		SetReadyPolicy(getEnv("AI_GRID_READY_POLICY", servers.DefaultReadyPolicy)).
 		SetGPUInventory(gpuInventory).
@@ -81,6 +83,7 @@ func main() {
 		os.Exit(1)
 	}
 	tenantsServer, err := servers.NewTenantsServer().
+		SetLogger(logger).
 		SetOrganizationClient(keycloak.New(keycloak.Config{
 			BaseURL:    getEnv("KEYCLOAK_URL", "http://keycloak.ai-grid.svc:8080"),
 			AdminRealm: getEnv("KEYCLOAK_ADMIN_REALM", "master"),
@@ -107,6 +110,7 @@ func main() {
 	status := servers.NewCatalogStatusReader(kubeClient, getEnv("AI_GRID_POLICY_NAMESPACE", servers.DefaultPolicyNamespace))
 	subscriptionNamespace := getEnv("AI_GRID_SUBSCRIPTION_NAMESPACE", "models-as-a-service")
 	modelsServer, err := servers.NewModelsServer().
+		SetLogger(logger).
 		SetWriter(writer).
 		SetCatalogStatus(status).
 		SetDynamicClient(kubeClient).
@@ -120,6 +124,7 @@ func main() {
 		os.Exit(1)
 	}
 	subscriptionsServer, err := servers.NewSubscriptionsServer().
+		SetLogger(logger).
 		SetWriter(writer).
 		SetCatalogStatus(status).
 		SetNamespace(subscriptionNamespace).

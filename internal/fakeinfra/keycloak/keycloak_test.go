@@ -57,12 +57,15 @@ type fixture struct {
 	token string
 }
 
-func start(t *testing.T) *fixture {
+func start(t *testing.T, configure ...func(*Server)) *fixture {
 	t.Helper()
 	c := &clock{now: time.Date(2026, 10, 19, 12, 0, 0, 0, time.UTC)}
 	s, err := New(Config{AdminRealm: "master", Realm: "ai-grid", Username: "admin", Password: "secret", Clock: c.Now, Logger: slog.New(slog.DiscardHandler)}, seedOrgs())
 	if err != nil {
 		t.Fatalf("New() error = %v", err)
+	}
+	for _, fn := range configure {
+		fn(s)
 	}
 	srv := httptest.NewServer(s.Handler())
 	t.Cleanup(srv.Close)

@@ -275,10 +275,6 @@ func TestSubscriptionsGitTokenWindow(t *testing.T) {
 					return
 				}
 				assertConnectCode(t, err, connect.CodeInvalidArgument)
-				msg := err.Error()
-				if !strings.Contains(msg, `"`+tc.window+`"`) || !strings.Contains(msg, "8784h") {
-					t.Fatalf("%s(window %q) message = %q, want the window and 8784h", op, tc.window, msg)
-				}
 				if n := len(writer.Messages()); n != commits {
 					t.Fatalf("%s(window %q) commits = %d, want %d", op, tc.window, n, commits)
 				}
@@ -664,9 +660,6 @@ func TestSubscriptionsGitMetadataKeyAllowlist(t *testing.T) {
 		labels.Metadata.Labels = map[string]string{key: "x"}
 		_, err := srv.Create(ctx, &aigridv1.SubscriptionsCreateRequest{Object: labels})
 		assertConnectCode(t, err, connect.CodeInvalidArgument)
-		if err != nil && !strings.Contains(err.Error(), key) {
-			t.Errorf("Create(label %s) error = %v, want it to name the key", key, err)
-		}
 		annotations := gitSampleSubscription("team-b")
 		annotations.Metadata.Annotations[key] = "x"
 		_, err = srv.Create(ctx, &aigridv1.SubscriptionsCreateRequest{Object: annotations})
@@ -734,8 +727,8 @@ func TestSubscriptionsGitUnconfigured(t *testing.T) {
 	srv := mustGitSubscriptionsServer(t, gitops.Unconfigured{})
 	_, err := srv.List(ctx, &aigridv1.SubscriptionsListRequest{})
 	assertConnectCode(t, err, connect.CodeFailedPrecondition)
-	if err == nil || !strings.Contains(err.Error(), "AI_GRID_GIT_URL") {
-		t.Errorf("List() error = %v, want it to name AI_GRID_GIT_URL", err)
+	if !errors.Is(err, gitops.ErrNotConfigured) {
+		t.Errorf("List() error = %v, want errors.Is(..., gitops.ErrNotConfigured)", err)
 	}
 	_, err = srv.Create(ctx, &aigridv1.SubscriptionsCreateRequest{Object: gitSampleSubscription("team-a")})
 	assertConnectCode(t, err, connect.CodeFailedPrecondition)

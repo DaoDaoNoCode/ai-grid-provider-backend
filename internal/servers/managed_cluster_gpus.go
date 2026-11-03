@@ -80,6 +80,13 @@ func NewGPUInventory(source GPUNodeSource, ttl time.Duration, logger *slog.Logge
 // empty map too: clusters then carry no `gpus`, and the call that asked
 // still succeeds. The map is shared; callers must not change it.
 func (inv *GPUInventory) Clusters(ctx context.Context) map[string]*aigridv1.ClusterGPUs {
+	// newGPUInventory returns a nil *GPUInventory for --search-api-url=off;
+	// stored in the clusterGPUSource interface that is a non-nil interface
+	// holding a nil pointer, so the server's own nil check can't catch it
+	// (as (*CatalogStatusReader).Read already guards).
+	if inv == nil {
+		return nil
+	}
 	inv.mu.Lock()
 	age := inv.now().Sub(inv.fetched)
 	if inv.byName != nil && age < inv.ttl {
@@ -119,7 +126,7 @@ func (inv *GPUInventory) refresh(done chan struct{}) {
 	defer cancel()
 	nodes, err := inv.source.GPUNodes(ctx, gpuLabelKeys...)
 	if err != nil {
-		inv.logger.Warn("read cluster GPUs from ACM Search", "error", err)
+		inv.logger.WarnContext(ctx, "read cluster GPUs from ACM Search", "error", err)
 	}
 	inv.mu.Lock()
 	now := inv.now()

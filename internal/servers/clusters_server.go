@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"log/slog"
 	"math"
-	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -16,6 +15,7 @@ import (
 	aigridv1 "github.com/osac-project/ai-grid-provider-backend/gen/ai_grid/v1"
 	"github.com/osac-project/ai-grid-provider-backend/gen/ai_grid/v1/aigridv1connect"
 	"github.com/osac-project/ai-grid-provider-backend/internal/geo"
+	"github.com/osac-project/ai-grid-provider-backend/internal/names"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -26,12 +26,15 @@ import (
 	"k8s.io/client-go/dynamic"
 )
 
+// clusterGPUSource is the GPU inventory surface Clusters needs (DIP; mirror
+// Tenants' organizationClient). Production wires *GPUInventory.
+type clusterGPUSource interface {
+	Clusters(ctx context.Context) map[string]*aigridv1.ClusterGPUs
+}
+
 var managedClustersResource = schema.GroupVersionResource{
 	Group: "cluster.open-cluster-management.io", Version: "v1", Resource: "managedclusters",
 }
-
-// RFC 1123 DNS label: 1–63 chars, lowercase alphanumeric, hyphens allowed inside.
-var managedClusterNameRE = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$`)
 
 var policiesResource = schema.GroupVersionResource{
 	Group: "policy.open-cluster-management.io", Version: "v1", Resource: "policies",
@@ -46,7 +49,7 @@ type ClustersServerBuilder struct {
 	logger      *slog.Logger
 	client      dynamic.Interface
 	readyPolicy string
-	gpus        *GPUInventory
+	gpus        clusterGPUSource
 }
 
 // ClustersServer implements ai_grid.v1.Clusters against hub ManagedCluster CRs.
@@ -56,7 +59,7 @@ type ClustersServer struct {
 	client               dynamic.Interface
 	readyPolicyNamespace string
 	readyPolicyName      string
-	gpus                 *GPUInventory
+	gpus                 clusterGPUSource
 }
 
 var _ aigridv1connect.ClustersHandler = (*ClustersServer)(nil)
@@ -66,7 +69,7 @@ func NewClustersServer() *ClustersServerBuilder {
 	return &ClustersServerBuilder{}
 }
 
-// SetLogger sets the logger. Optional.
+// SetLogger sets the logger. Optional; slog.Default() when unset.
 func (b *ClustersServerBuilder) SetLogger(logger *slog.Logger) *ClustersServerBuilder {
 	b.logger = logger
 	return b
@@ -100,7 +103,7 @@ func splitReadyPolicy(readyPolicy string) (namespace, name string, err error) {
 
 // SetGPUInventory sets where each cluster's GPUs come from (ACM Search).
 // Optional; without it clusters carry no `status.gpus`.
-func (b *ClustersServerBuilder) SetGPUInventory(inventory *GPUInventory) *ClustersServerBuilder {
+func (b *ClustersServerBuilder) SetGPUInventory(inventory clusterGPUSource) *ClustersServerBuilder {
 	b.gpus = inventory
 	return b
 }
@@ -321,7 +324,7 @@ func readProvisioning(ctx context.Context, client dynamic.Interface, logger *slo
 	policy, err := client.Resource(policiesResource).Namespace(namespace).Get(ctx, name, metav1.GetOptions{})
 	if err != nil {
 		if !apierrors.IsNotFound(err) {
-			logger.Warn("read ready policy", "policy", namespace+"/"+name, "error", err)
+			logger.WarnContext(ctx, "read ready policy", "policy", namespace+"/"+name, "error", err)
 		}
 		return map[string]string{}
 	}
@@ -482,7 +485,7 @@ func validateManagedClusterID(id string) error {
 	if id == "" {
 		return connect.Errorf(connect.CodeInvalidArgument, "id is required")
 	}
-	if !managedClusterNameRE.MatchString(id) {
+	if !names.ValidDNSLabel(id) {
 		return connect.Errorf(connect.CodeInvalidArgument, "id %q is not a valid RFC 1123 DNS label", id)
 	}
 	return nil

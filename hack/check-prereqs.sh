@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# Kind / local-cluster toolchain. CI Go/buf/golangci pins are checked by
+# hack/check-tooling.sh; `make prereqs` runs both.
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -15,7 +17,7 @@ require_command() {
   fi
 }
 
-require_command go 'install Go 1.26.3 or newer'
+require_command go 'install Go 1.26.3 or newer (see go.mod / make prereqs tooling check)'
 require_command podman 'install Podman'
 require_command kind 'install Kind'
 require_command kubectl 'install kubectl'

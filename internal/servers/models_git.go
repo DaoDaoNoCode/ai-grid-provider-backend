@@ -13,6 +13,7 @@ import (
 	connect "connectrpc.com/connect/v2"
 	aigridv1 "github.com/osac-project/ai-grid-provider-backend/gen/ai_grid/v1"
 	"github.com/osac-project/ai-grid-provider-backend/internal/gitops"
+	"github.com/osac-project/ai-grid-provider-backend/internal/names"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"sigs.k8s.io/yaml"
 )
@@ -137,7 +138,7 @@ func (s *ModelsServer) gitUpdate(ctx context.Context, req *aigridv1.ModelsUpdate
 	id := modelID(object)
 	version := object.GetMetadata().GetVersion()
 	if req.GetLock() && version == 0 {
-		return nil, connect.NewError(connect.CodeInvalidArgument, "lock requires metadata.version")
+		return nil, connect.Errorf(connect.CodeInvalidArgument, "lock requires metadata.version")
 	}
 	paths, err := parseModelUpdateMask(req.GetUpdateMask())
 	if err != nil {
@@ -296,7 +297,7 @@ func (s *ModelsServer) ingressClusters(ctx context.Context) []string {
 	}
 	items, err := s.listManagedClusters(ctx)
 	if err != nil {
-		s.logger.Warn("list ingress clusters for model status", "error", err)
+		s.logger.WarnContext(ctx, "list ingress clusters for model status", "error", err)
 		return nil
 	}
 	var names []string
@@ -607,14 +608,14 @@ func (s *ModelsServer) gitEnsureNotReferenced(head gitops.Snapshot, id string) e
 // to the ingress and deployed nowhere.
 func gitPlacementClusters(spec *aigridv1.ModelSpec) ([]string, error) {
 	if !defaultRollout(spec.GetRollout()) {
-		return nil, connect.NewError(connect.CodeInvalidArgument, "spec.rollout supports only strategy All in git mode")
+		return nil, connect.Errorf(connect.CodeInvalidArgument, "spec.rollout supports only strategy All in git mode")
 	}
 	placement := spec.GetPlacement()
 	if placement == nil {
-		return nil, connect.NewError(connect.CodeInvalidArgument, "spec.placement must name at least one cluster in git mode")
+		return nil, connect.Errorf(connect.CodeInvalidArgument, "spec.placement must name at least one cluster in git mode")
 	}
 	if len(placement.GetClusterSets()) > 0 || placement.NumberOfClusters != nil {
-		return nil, connect.NewError(connect.CodeInvalidArgument, "spec.placement supports only the cluster name label in git mode")
+		return nil, connect.Errorf(connect.CodeInvalidArgument, "spec.placement supports only the cluster name label in git mode")
 	}
 	var clusters []string
 	selector := placement.GetLabelSelector()
@@ -636,10 +637,10 @@ func gitPlacementClusters(spec *aigridv1.ModelSpec) ([]string, error) {
 		clusters = append(clusters, req.GetValues()...)
 	}
 	if len(clusters) == 0 {
-		return nil, connect.NewError(connect.CodeInvalidArgument, "spec.placement must name at least one cluster in git mode")
+		return nil, connect.Errorf(connect.CodeInvalidArgument, "spec.placement must name at least one cluster in git mode")
 	}
 	for _, cluster := range clusters {
-		if !modelNameRE.MatchString(cluster) {
+		if !names.ValidDNSLabel(cluster) {
 			return nil, connect.Errorf(connect.CodeInvalidArgument, "cluster name %q is not a valid RFC 1123 DNS label", cluster)
 		}
 	}
@@ -735,17 +736,7 @@ func renderKustomization(resources []string) []byte {
 }
 
 func modelGitError(op, id string, err error) error {
-	switch {
-	case errors.Is(err, gitops.ErrNotFound):
-		return connect.Errorf(connect.CodeNotFound, "Model %q not found", id).WithCause(err)
-	case errors.Is(err, gitops.ErrConflict):
-		return staleModelError(op, id).WithCause(err)
-	case errors.Is(err, gitops.ErrNotConfigured):
-		// Not one model's problem, so the message names the API, not the id.
-		return connect.Errorf(connect.CodeFailedPrecondition, "Models: %v", err).WithCause(err)
-	default:
-		return connect.Errorf(connect.CodeUnavailable, "%s Model %q: git: %v", op, id, err).WithCause(err)
-	}
+	return mapGitopsError("Model", "Models", op, id, err, staleModelError)
 }
 
 // servedModelName is the name vLLM serves the model as and the ExternalModel

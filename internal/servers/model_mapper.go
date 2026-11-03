@@ -1,8 +1,6 @@
 package servers
 
 import (
-	"regexp"
-
 	aigridv1 "github.com/osac-project/ai-grid-provider-backend/gen/ai_grid/v1"
 	"google.golang.org/protobuf/types/known/timestamppb"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -24,10 +22,7 @@ const (
 	maasModelRefKind       = "MaaSModelRef"
 )
 
-var (
-	modelNameRE     = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$`)
-	modelURISchemes = []string{"hf://", "oci://", "s3://", "pvc://", "http://", "https://"}
-)
+var modelURISchemes = []string{"hf://", "oci://", "s3://", "pvc://", "http://", "https://"}
 
 func modelID(object *aigridv1.Model) string {
 	if object == nil {

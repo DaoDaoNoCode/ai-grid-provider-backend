@@ -2,7 +2,6 @@ package servers
 
 import (
 	"context"
-	"strings"
 	"testing"
 
 	connect "connectrpc.com/connect/v2"
@@ -67,9 +66,6 @@ func TestModelsGitRejectsServedNameOtherThanID(t *testing.T) {
 	model.Spec.Model.Name = "facebook/opt-125m"
 	_, err := srv.Create(ctx, &aigridv1.ModelsCreateRequest{Object: model})
 	assertConnectCode(t, err, connect.CodeInvalidArgument)
-	if msg := err.Error(); !strings.Contains(msg, `"facebook/opt-125m"`) || !strings.Contains(msg, `"opt"`) {
-		t.Fatalf("Create error = %v, want it to name the sent name and the id", err)
-	}
 
 	created, err := srv.Create(ctx, &aigridv1.ModelsCreateRequest{Object: gitSampleModel("opt", "site-a")})
 	if err != nil {

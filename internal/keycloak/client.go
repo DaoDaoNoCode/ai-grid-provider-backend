@@ -15,7 +15,7 @@ import (
 	"strings"
 )
 
-// Client is the small part of the Keycloak Admin API used by ai-grid-provider-backend.
+// Client is the Admin API surface used by Tenants.
 // The local Kind deployment uses the bootstrap admin password grant; a
 // production deployment should use a service account with manage-organization
 // (and related) roles instead of these credentials.

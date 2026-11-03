@@ -1,8 +1,9 @@
 name: cleanup-pr-image
 
-# Delete the pr-<number> image once its pull request closes, so PR images
-# don't pile up in ghcr.io. sha-*, semver and latest are never touched: PR
-# pushes only ever create pr-<number>.
+# Delete a leftover pr-<number> package version when a pull request closes.
+# PR image publish is disabled (images build only on main merge via ci.yaml);
+# this cleanup remains for any historical pr-* tags still in ghcr.io.
+# sha-*, semver and latest are never touched.
 #
 # pull_request_target, because a fork's pull_request token is read-only and
 # can't delete package versions. It's safe here because this workflow never

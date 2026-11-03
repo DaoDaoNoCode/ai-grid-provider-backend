@@ -35,10 +35,7 @@ const (
 // error messages; derived so the two can't disagree.
 var maxTokenWindow = strconv.FormatInt(maxTokenWindowSeconds/3600, 10) + "h"
 
-var (
-	subscriptionNameRE = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$`)
-	tokenWindowRE      = regexp.MustCompile(`^[1-9]\d{0,3}(s|m|h)$`)
-)
+var tokenWindowRE = regexp.MustCompile(`^[1-9]\d{0,3}(s|m|h)$`)
 
 // tokenWindowSeconds returns the length of a rate-limit window in seconds, or
 // false when it doesn't match tokenWindowRE.

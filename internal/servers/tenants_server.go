@@ -1,7 +1,6 @@
 package servers
 
 import (
-	connect "connectrpc.com/connect/v2"
 	"context"
 	"errors"
 	"hash/fnv"
@@ -13,9 +12,11 @@ import (
 	"strings"
 	"time"
 
+	connect "connectrpc.com/connect/v2"
 	aigridv1 "github.com/osac-project/ai-grid-provider-backend/gen/ai_grid/v1"
 	"github.com/osac-project/ai-grid-provider-backend/gen/ai_grid/v1/aigridv1connect"
 	"github.com/osac-project/ai-grid-provider-backend/internal/keycloak"
+	"github.com/osac-project/ai-grid-provider-backend/internal/names"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
@@ -31,9 +32,6 @@ const (
 	// stamped on Create.
 	tenantCreateTimeAttribute = "ai-grid/create-time"
 )
-
-// RFC 1123 DNS label: 1–63 chars, lowercase alphanumeric, hyphens allowed inside.
-var tenantNameRE = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$`)
 
 // Approximate IPv4 / IPv6 rejection for tenant domains (OSAC parity); not a full IP parser.
 var (
@@ -101,7 +99,7 @@ func NewTenantsServer() *TenantsServerBuilder {
 	return &TenantsServerBuilder{}
 }
 
-// SetLogger sets the logger. Optional.
+// SetLogger sets the logger. Optional; slog.Default() when unset.
 func (b *TenantsServerBuilder) SetLogger(logger *slog.Logger) *TenantsServerBuilder {
 	b.logger = logger
 	return b
@@ -111,12 +109,6 @@ func (b *TenantsServerBuilder) SetLogger(logger *slog.Logger) *TenantsServerBuil
 func (b *TenantsServerBuilder) SetOrganizationClient(client organizationClient) *TenantsServerBuilder {
 	b.tenants = client
 	return b
-}
-
-// SetOrganizationLister sets the Keycloak organization client. Mandatory.
-// Deprecated: use SetOrganizationClient.
-func (b *TenantsServerBuilder) SetOrganizationLister(client organizationClient) *TenantsServerBuilder {
-	return b.SetOrganizationClient(client)
 }
 
 // Build creates the TenantsServer.
@@ -428,7 +420,7 @@ func keepDomainDetails(next, current []keycloak.OrganizationDomain) []keycloak.O
 }
 
 // staleTenantError is the Aborted error for a write against an old version.
-func staleTenantError(op, id string) error {
+func staleTenantError(op, id string) *connect.Error {
 	return connect.Errorf(connect.CodeAborted, "%s tenant %q: the tenant changed since it was read; reload and retry", op, id)
 }
 
@@ -513,7 +505,7 @@ func validateTenantName(name string) error {
 	if name == "" {
 		return connect.Errorf(connect.CodeInvalidArgument, "metadata.name is required")
 	}
-	if !tenantNameRE.MatchString(name) {
+	if !names.ValidDNSLabel(name) {
 		return connect.Errorf(connect.CodeInvalidArgument, "metadata.name %q is not a valid RFC 1123 DNS label", name)
 	}
 	return nil
@@ -540,7 +532,7 @@ func validateTenantDomains(domains []keycloak.OrganizationDomain) error {
 		}
 		labels := strings.Split(name, ".")
 		for _, label := range labels {
-			if !tenantNameRE.MatchString(label) {
+			if !names.ValidDNSLabel(label) {
 				return connect.Errorf(connect.CodeInvalidArgument, "spec.domains entry %q has invalid DNS label %q (lowercase a-z/0-9/hyphen only)", name, label)
 			}
 		}
