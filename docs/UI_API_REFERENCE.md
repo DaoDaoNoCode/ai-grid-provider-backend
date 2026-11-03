@@ -539,6 +539,13 @@ Argo CD delivers it; the backend never writes to a cluster. Each model is an
 `ExternalModel` and `MaaSModelRef` in `AI_GRID_SUBSCRIPTION_NAMESPACE` on the
 ingress clusters. See README "Git catalog" for the repository layout.
 
+Reads of Models and Subscriptions come from a fetch of the repository at most
+`AI_GRID_GIT_READ_MAX_AGE` old (default 10 seconds). The backend's own writes
+show in the next read at once; a commit made outside the backend, such as a
+hand edit or another replica's write, shows within about that long. Writes
+always check against the branch head, so a stale read never overwrites a
+newer commit.
+
 `spec.placement` is required and names at least one cluster, by the ACM
 `name` label only (`name In [...]` or a `name` match label); cluster sets, other labels,
 `number_of_clusters` and any rollout other than strategy `All` alone are

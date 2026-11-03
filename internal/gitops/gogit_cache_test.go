@@ -1,0 +1,474 @@
+package gitops
+
+import (
+	"context"
+	"errors"
+	"os"
+	"sync"
+	"sync/atomic"
+	"testing"
+	"time"
+)
+
+// fakeClock is a RepoWriter's now that moves only when a test says so.
+type fakeClock struct {
+	mu sync.Mutex
+	t  time.Time
+}
+
+func (c *fakeClock) Now() time.Time {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.t
+}
+
+func (c *fakeClock) Advance(d time.Duration) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.t = c.t.Add(d)
+}
+
+// newCachingRepoWriter clones url with reads served from a fetch at most
+// maxAge old, on a fake clock, and counts the fetches it makes after the
+// clone: the shared fetches of Head and the fetch every Commit makes.
+func newCachingRepoWriter(t *testing.T, url string, maxAge time.Duration) (*RepoWriter, *fakeClock, *atomic.Int32) {
+	t.Helper()
+	clock := &fakeClock{t: time.Date(2026, 11, 3, 12, 0, 0, 0, time.UTC)}
+	w, err := newRepoWriter(context.Background(), RepoConfig{
+		URL: url, Branch: "main", AuthorName: "ai-grid-provider-backend", AuthorEmail: "backend@example.com",
+		ReadMaxAge: maxAge,
+	}, clock.Now)
+	if err != nil {
+		t.Fatalf("newRepoWriter() error = %v", err)
+	}
+	fetches := new(atomic.Int32)
+	w.beforeFetch = func() { fetches.Add(1) }
+	return w, clock, fetches
+}
+
+func mustHead(t *testing.T, w Writer) Snapshot {
+	t.Helper()
+	head, err := w.Head(context.Background())
+	if err != nil {
+		t.Fatalf("Head() error = %v", err)
+	}
+	return head
+}
+
+func mustRead(t *testing.T, s Snapshot, p, want string) {
+	t.Helper()
+	if data, err := s.Read(p); err != nil || string(data) != want {
+		t.Fatalf("Read(%s) at %s = %q, %v; want %q", p, s.Revision(), data, err, want)
+	}
+}
+
+// Reads within the window are served from the clone's last fetch, without
+// going to the remote; the clone itself counts as that fetch.
+func TestRepoWriterReadsWithinMaxAgeDoNotFetch(t *testing.T) {
+	t.Parallel()
+	w, clock, fetches := newCachingRepoWriter(t, newBareRepo(t, map[string]string{"a": "a"}), 10*time.Second)
+	first := mustHead(t, w)
+	for range 3 {
+		clock.Advance(3 * time.Second)
+		head := mustHead(t, w)
+		if head.Revision() != first.Revision() {
+			t.Fatalf("Head() = %s, want the cloned head %s", head.Revision(), first.Revision())
+		}
+		mustRead(t, head, "a", "a")
+	}
+	if n := fetches.Load(); n != 0 {
+		t.Fatalf("%d fetches for reads within the window, want 0", n)
+	}
+}
+
+// A commit another writer pushes shows once the window has passed: before,
+// reads keep the head this writer fetched; after, one read fetches and the
+// reads after it reuse that fetch.
+func TestRepoWriterOtherWritersChangeAppearsAfterMaxAge(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	url := newBareRepo(t, map[string]string{"a": "a"})
+	w, clock, fetches := newCachingRepoWriter(t, url, 10*time.Second)
+	other := newTestRepoWriter(t, url)
+
+	before := mustHead(t, w)
+	rev, err := other.Commit(ctx, mustHead(t, other).Revision(), Change{Put: map[string][]byte{"a": []byte("a2")}, Message: "other"})
+	if err != nil {
+		t.Fatalf("other Commit() error = %v", err)
+	}
+
+	clock.Advance(10*time.Second - time.Nanosecond)
+	if head := mustHead(t, w); head.Revision() != before.Revision() {
+		t.Fatalf("Head() within the window = %s, want the fetched %s", head.Revision(), before.Revision())
+	}
+	if n := fetches.Load(); n != 0 {
+		t.Fatalf("%d fetches within the window, want 0", n)
+	}
+
+	clock.Advance(time.Nanosecond)
+	head := mustHead(t, w)
+	if head.Revision() != rev {
+		t.Fatalf("Head() after the window = %s, want the other writer's %s", head.Revision(), rev)
+	}
+	mustRead(t, head, "a", "a2")
+	mustHead(t, w)
+	if n := fetches.Load(); n != 1 {
+		t.Fatalf("%d fetches, want 1: the read after the window, reused by the next", n)
+	}
+}
+
+// Reads that find the last fetch too old while another read is fetching
+// wait for that fetch instead of making their own.
+func TestRepoWriterConcurrentReadsShareOneFetch(t *testing.T) {
+	t.Parallel()
+	const readers = 8
+	url := newBareRepo(t, map[string]string{"a": "a"})
+	w, clock, fetches := newCachingRepoWriter(t, url, 10*time.Second)
+	other := newTestRepoWriter(t, url)
+	rev, err := other.Commit(context.Background(), mustHead(t, other).Revision(), Change{Put: map[string][]byte{"a": []byte("a2")}, Message: "other"})
+	if err != nil {
+		t.Fatalf("other Commit() error = %v", err)
+	}
+	clock.Advance(time.Minute)
+
+	// The first reader's fetch waits until every other reader has joined it.
+	release := make(chan struct{})
+	w.beforeFetch = func() {
+		fetches.Add(1)
+		<-release
+	}
+	var joined sync.WaitGroup
+	joined.Add(readers - 1)
+	w.onShare = joined.Done
+
+	revs := make(chan string, readers)
+	errs := make(chan error, readers)
+	var done sync.WaitGroup
+	for range readers {
+		done.Go(func() {
+			head, err := w.Head(context.Background())
+			if err != nil {
+				errs <- err
+				return
+			}
+			if data, err := head.Read("a"); err != nil || string(data) != "a2" {
+				errs <- errors.New("a reader did not see the fetched a2")
+				return
+			}
+			revs <- head.Revision()
+		})
+	}
+	joined.Wait()
+	close(release)
+	done.Wait()
+	close(revs)
+	close(errs)
+	for err := range errs {
+		t.Error(err)
+	}
+	for got := range revs {
+		if got != rev {
+			t.Errorf("Head() = %s, want %s", got, rev)
+		}
+	}
+	if n := fetches.Load(); n != 1 {
+		t.Fatalf("%d fetches for %d concurrent reads, want 1", n, readers)
+	}
+}
+
+// The backend's own commit is the head the next read sees, without a fetch.
+func TestRepoWriterCommitIsReadWithoutFetch(t *testing.T) {
+	t.Parallel()
+	w, _, fetches := newCachingRepoWriter(t, newBareRepo(t, map[string]string{"a": "a"}), 10*time.Second)
+	rev, err := w.Commit(context.Background(), mustHead(t, w).Revision(), Change{Put: map[string][]byte{"b": []byte("b")}, Message: "m"})
+	if err != nil {
+		t.Fatalf("Commit() error = %v", err)
+	}
+	if n := fetches.Load(); n != 1 {
+		t.Fatalf("%d fetches for a commit, want 1: a write still fetches first", n)
+	}
+	head := mustHead(t, w)
+	if head.Revision() != rev {
+		t.Fatalf("Head() after Commit() = %s, want the commit %s", head.Revision(), rev)
+	}
+	mustRead(t, head, "b", "b")
+	if n := fetches.Load(); n != 1 {
+		t.Fatalf("%d fetches after reading the commit, want still 1", n)
+	}
+}
+
+// Reads that need a fetch while a Commit runs wait for it and take the head
+// it pushed: it is as recent as their own fetch would be.
+func TestRepoWriterReadsWaitingOnCommitTakeItsHead(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	w, clock, fetches := newCachingRepoWriter(t, newBareRepo(t, map[string]string{"a": "a"}), 10*time.Second)
+	base := mustHead(t, w)
+	clock.Advance(time.Minute)
+
+	// The commit holds the clone, in its own fetch, until the reads wait.
+	commitFetching := make(chan struct{})
+	release := make(chan struct{})
+	w.beforeFetch = func() {
+		if fetches.Add(1) == 1 {
+			close(commitFetching)
+			<-release
+		}
+	}
+	committed := make(chan string, 1)
+	go func() {
+		rev, err := w.Commit(ctx, base.Revision(), Change{Put: map[string][]byte{"a": []byte("a2")}, Message: "m"})
+		if err != nil {
+			t.Errorf("Commit() error = %v", err)
+		}
+		committed <- rev
+	}()
+	<-commitFetching
+
+	// Two reads: whichever comes second joins the first one's fetch, so once
+	// one has joined, that fetch exists and waits for the commit.
+	var joined sync.WaitGroup
+	joined.Add(1)
+	w.onShare = joined.Done
+	revs := make(chan string, 2)
+	for range 2 {
+		go func() {
+			head, err := w.Head(ctx)
+			if err != nil {
+				t.Errorf("Head() error = %v", err)
+				revs <- ""
+				return
+			}
+			revs <- head.Revision()
+		}()
+	}
+	joined.Wait()
+	close(release)
+
+	rev := <-committed
+	for range 2 {
+		if got := <-revs; got != rev {
+			t.Errorf("Head() waiting on a commit = %s, want the commit %s", got, rev)
+		}
+	}
+	if n := fetches.Load(); n != 1 {
+		t.Fatalf("%d fetches, want 1: the commit's, which the reads reuse", n)
+	}
+}
+
+// A commit refused because its base is stale fetched the branch, so the
+// rerun's read (RetryOnConflict) sees the new head without waiting out the
+// window, and the rerun commits.
+func TestRepoWriterConflictRefreshesReads(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	url := newBareRepo(t, map[string]string{"a": "a"})
+	w, _, _ := newCachingRepoWriter(t, url, time.Hour)
+	other := newTestRepoWriter(t, url)
+	if _, err := other.Commit(ctx, mustHead(t, other).Revision(), Change{Put: map[string][]byte{"a": []byte("a2")}, Message: "other"}); err != nil {
+		t.Fatalf("other Commit() error = %v", err)
+	}
+
+	attempts := 0
+	err := RetryOnConflict(ctx, func() error {
+		attempts++
+		head, err := w.Head(ctx)
+		if err != nil {
+			return err
+		}
+		data, err := head.Read("a")
+		if err != nil {
+			return err
+		}
+		_, err = w.Commit(ctx, head.Revision(), Change{Put: map[string][]byte{"a": append(data, '+')}, Message: "m"})
+		return err
+	})
+	if err != nil {
+		t.Fatalf("RetryOnConflict() error = %v", err)
+	}
+	if attempts != 2 {
+		t.Fatalf("%d attempts, want 2: the stale read, then one on the fetched head", attempts)
+	}
+	mustRead(t, mustHead(t, w), "a", "a2+")
+}
+
+// A push that loses a race leaves the remote at a head this writer never
+// saw, so the next read fetches instead of serving the head the commit was
+// made on.
+func TestRepoWriterLostPushForgetsHead(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	url := newBareRepo(t, map[string]string{"a": "a", "b": "b"})
+	w, _, fetches := newCachingRepoWriter(t, url, time.Hour)
+	other := newTestRepoWriter(t, url)
+	w.beforePush = func() {
+		head, _ := other.Head(ctx)
+		if _, err := other.Commit(ctx, head.Revision(), Change{Put: map[string][]byte{"b": []byte("b2")}, Message: "other"}); err != nil {
+			t.Errorf("other Commit() error = %v", err)
+		}
+	}
+	if _, err := w.Commit(ctx, mustHead(t, w).Revision(), Change{Put: map[string][]byte{"a": []byte("a2")}, Message: "m"}); !errors.Is(err, ErrConflict) {
+		t.Fatalf("Commit() racing a push error = %v, want ErrConflict", err)
+	}
+	w.beforePush = nil
+	before := fetches.Load()
+	head := mustHead(t, w)
+	mustRead(t, head, "a", "a")
+	mustRead(t, head, "b", "b2")
+	if n := fetches.Load() - before; n != 1 {
+		t.Fatalf("%d fetches for the read after a lost push, want 1", n)
+	}
+}
+
+// A failed fetch is not remembered: every reader waiting on it gets its
+// error, and the next read tries again.
+func TestRepoWriterFailedFetchIsRetried(t *testing.T) {
+	t.Parallel()
+	url := newBareRepo(t, map[string]string{"a": "a"})
+	w, clock, fetches := newCachingRepoWriter(t, url, 10*time.Second)
+	clock.Advance(time.Minute)
+
+	if err := os.Rename(url, url+".gone"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := w.Head(context.Background()); err == nil {
+		t.Fatal("Head() with the remote gone succeeded")
+	}
+	if err := os.Rename(url+".gone", url); err != nil {
+		t.Fatal(err)
+	}
+	mustRead(t, mustHead(t, w), "a", "a")
+	if n := fetches.Load(); n != 2 {
+		t.Fatalf("%d fetches, want 2: the failed one and the retry", n)
+	}
+}
+
+// A reader that gives up while waiting for a shared fetch gets its own
+// context's error; the fetch goes on for the others, and its head serves
+// the reads after it.
+func TestRepoWriterReaderGivesUpOnSharedFetch(t *testing.T) {
+	t.Parallel()
+	w, clock, fetches := newCachingRepoWriter(t, newBareRepo(t, map[string]string{"a": "a"}), 10*time.Second)
+	clock.Advance(time.Minute)
+	started := make(chan struct{})
+	release := make(chan struct{})
+	w.beforeFetch = func() {
+		fetches.Add(1)
+		close(started)
+		<-release
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	gaveUp := make(chan error, 1)
+	go func() {
+		_, err := w.Head(ctx)
+		gaveUp <- err
+	}()
+	<-started
+	cancel()
+	if err := <-gaveUp; !errors.Is(err, context.Canceled) {
+		t.Fatalf("Head() with its context canceled error = %v, want context.Canceled", err)
+	}
+
+	var joined sync.WaitGroup
+	joined.Add(1)
+	w.onShare = joined.Done
+	result := make(chan error, 1)
+	go func() {
+		_, err := w.Head(context.Background())
+		result <- err
+	}()
+	joined.Wait()
+	close(release)
+	if err := <-result; err != nil {
+		t.Fatalf("Head() sharing the fetch error = %v", err)
+	}
+	mustRead(t, mustHead(t, w), "a", "a")
+	if n := fetches.Load(); n != 1 {
+		t.Fatalf("%d fetches, want 1", n)
+	}
+}
+
+// With no window every read fetches, as before the window existed, and a
+// commit another writer pushed shows at once.
+func TestRepoWriterMaxAgeZeroFetchesEveryRead(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	url := newBareRepo(t, map[string]string{"a": "a"})
+	w, _, fetches := newCachingRepoWriter(t, url, 0)
+	other := newTestRepoWriter(t, url)
+
+	mustHead(t, w)
+	mustHead(t, w)
+	if n := fetches.Load(); n != 2 {
+		t.Fatalf("%d fetches for 2 reads, want 2", n)
+	}
+	rev, err := other.Commit(ctx, mustHead(t, other).Revision(), Change{Put: map[string][]byte{"a": []byte("a2")}, Message: "other"})
+	if err != nil {
+		t.Fatalf("other Commit() error = %v", err)
+	}
+	if head := mustHead(t, w); head.Revision() != rev {
+		t.Fatalf("Head() = %s, want the other writer's %s at once", head.Revision(), rev)
+	}
+}
+
+// BenchmarkRepoWriterConcurrentStaleReads measures ten reads that arrive
+// together after the window has passed, with each fetch slowed down to
+// stand in for a remote Git host. Without a window the reads fetch one
+// after another; with one they share a single fetch.
+//
+//	go test ./internal/gitops -run '^$' -bench ConcurrentStaleReads
+func BenchmarkRepoWriterConcurrentStaleReads(b *testing.B) {
+	const readers = 10
+	const fetchDelay = 20 * time.Millisecond
+	url := newBareRepo(b, map[string]string{"a": "a"})
+	for _, maxAge := range []time.Duration{0, 10 * time.Second} {
+		b.Run("max-age="+maxAge.String(), func(b *testing.B) {
+			clock := &fakeClock{t: time.Now()}
+			w, err := newRepoWriter(context.Background(), RepoConfig{
+				URL: url, Branch: "main", AuthorName: "a", AuthorEmail: "a@example.com", ReadMaxAge: maxAge,
+			}, clock.Now)
+			if err != nil {
+				b.Fatal(err)
+			}
+			w.beforeFetch = func() { time.Sleep(fetchDelay) }
+			for b.Loop() {
+				clock.Advance(time.Minute)
+				var wg sync.WaitGroup
+				for range readers {
+					wg.Go(func() {
+						if _, err := w.Head(context.Background()); err != nil {
+							b.Error(err)
+						}
+					})
+				}
+				wg.Wait()
+			}
+		})
+	}
+}
+
+// BenchmarkRepoWriterParallelReads measures reads that find a fresh fetch,
+// from many goroutines at once: no network, no shared lock across reads.
+func BenchmarkRepoWriterParallelReads(b *testing.B) {
+	url := newBareRepo(b, map[string]string{"catalog/models/a.yaml": "a"})
+	w, err := newRepoWriter(context.Background(), RepoConfig{
+		URL: url, Branch: "main", AuthorName: "a", AuthorEmail: "a@example.com", ReadMaxAge: time.Hour,
+	}, time.Now)
+	if err != nil {
+		b.Fatal(err)
+	}
+	b.RunParallel(func(pb *testing.PB) {
+		for pb.Next() {
+			head, err := w.Head(context.Background())
+			if err != nil {
+				b.Error(err)
+				return
+			}
+			if _, err := head.Read("catalog/models/a.yaml"); err != nil {
+				b.Error(err)
+				return
+			}
+		}
+	})
+}

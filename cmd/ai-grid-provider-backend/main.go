@@ -267,15 +267,42 @@ func newGitWriter() (gitops.Writer, error) {
 		}
 		cfg.Token = strings.TrimSpace(string(token))
 	}
+	readMaxAge, err := gitReadMaxAge()
+	if err != nil {
+		return nil, err
+	}
+	cfg.ReadMaxAge = readMaxAge
 	if err := cfg.Validate(); err != nil {
 		return nil, err
 	}
-	slog.Info("git write mode", "url", cfg.URL, "branch", cfg.Branch)
+	slog.Info("git write mode", "url", cfg.URL, "branch", cfg.Branch, "readMaxAge", cfg.ReadMaxAge.String())
 	return gitops.StartBackgroundWriter(context.Background(), func(ctx context.Context) (gitops.Writer, error) {
 		ctx, cancel := context.WithTimeout(ctx, time.Minute)
 		defer cancel()
 		return gitops.NewRepoWriter(ctx, cfg)
 	}, time.Second), nil
+}
+
+// defaultGitReadMaxAge is how old a fetch of the Git repository may be for a
+// Models or Subscriptions read to use it. Fetching costs seconds against
+// GitHub even when nothing changed, and the console gives a call ten.
+const defaultGitReadMaxAge = 10 * time.Second
+
+// gitReadMaxAge reads AI_GRID_GIT_READ_MAX_AGE, a Go duration such as "10s",
+// default defaultGitReadMaxAge. Reads fetch the repository only when the
+// last fetch is that old, so a commit pushed by anyone else shows within
+// about that long; the backend's own writes show at once. "0" fetches on
+// every read.
+func gitReadMaxAge() (time.Duration, error) {
+	value := os.Getenv("AI_GRID_GIT_READ_MAX_AGE")
+	if value == "" {
+		return defaultGitReadMaxAge, nil
+	}
+	d, err := time.ParseDuration(value)
+	if err != nil || d < 0 {
+		return 0, fmt.Errorf("AI_GRID_GIT_READ_MAX_AGE %q must be a duration of 0 or more, such as 10s; 0 fetches on every read", value)
+	}
+	return d, nil
 }
 
 func newRestConfig(kubeconfig string) (*rest.Config, error) {

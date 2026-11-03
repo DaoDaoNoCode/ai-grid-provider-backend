@@ -45,7 +45,9 @@ type Snapshot interface {
 
 // Writer reads and commits to one branch.
 type Writer interface {
-	// Head returns the snapshot at the branch head.
+	// Head returns the snapshot at the branch head. It may be a little
+	// behind the remote (RepoConfig.ReadMaxAge), never behind the Writer's
+	// own commits; Commit checks against the remote's head either way.
 	Head(ctx context.Context) (Snapshot, error)
 	// Commit applies c on top of the branch head and returns the new revision.
 	// It fails with ErrConflict when a file c touches or reads changed since

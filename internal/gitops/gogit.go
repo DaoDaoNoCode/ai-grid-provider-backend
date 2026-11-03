@@ -22,7 +22,6 @@ import (
 	"github.com/go-git/go-git/v5/plumbing/transport/client"
 	githttp "github.com/go-git/go-git/v5/plumbing/transport/http"
 	"github.com/go-git/go-git/v5/plumbing/transport/server"
-	"github.com/go-git/go-git/v5/storage/memory"
 )
 
 // go-git's file transport runs the git-upload-pack and git-receive-pack
@@ -43,21 +42,78 @@ type RepoConfig struct {
 	// AuthorName and AuthorEmail sign every commit.
 	AuthorName  string
 	AuthorEmail string
+	// ReadMaxAge is how old a fetch may be for Head to return its head
+	// instead of fetching again. Zero fetches on every Head. A commit
+	// another writer pushes shows in Head within about ReadMaxAge, plus the
+	// time one fetch takes; the RepoWriter's own commits show at once.
+	ReadMaxAge time.Duration
 }
 
+// fetchTimeout bounds a fetch that Head callers share. It runs on behalf of
+// all of them, so no one caller's context can end it, and without a bound a
+// remote that stops answering would hold every later read.
+const fetchTimeout = time.Minute
+
 // RepoWriter is a Writer over a remote repository. It keeps an in-memory
-// clone, fetches before every Head and Commit, and pushes each commit. A push
-// the remote rejects because the branch moved is ErrConflict.
+// clone, fetches before every Commit, and pushes each commit. A push the
+// remote rejects because the branch moved is ErrConflict.
+//
+// Head fetches only when the last fetch is cfg.ReadMaxAge old or older, and
+// otherwise returns the head that fetch saw. Fetching a remote branch costs
+// seconds even when nothing changed (GitHub takes about two to answer the
+// first request of a fetch), which every catalog read used to pay, one read
+// at a time. Reads that need a fetch while one is running wait for it and
+// share its head instead of fetching again (fetchCall). A Commit records the
+// head it fetched and, once pushed, its own commit, so the next read sees the
+// write without a fetch. With ReadMaxAge zero every Head fetches, as before.
+//
+// Locking, outermost first:
+//
+//   - opMu serializes the operations that change the clone's references,
+//     index and worktree: every fetch and every Commit. It is held across
+//     the network, so a Commit and a fetch wait for each other, but a read
+//     that finds a recent fetch never takes it.
+//   - mu guards the read cache: head, headAsOf and fetching. It is never
+//     held across the network or while waiting for opMu.
+//   - the storage's own lock guards its maps for one call at a time, so a
+//     snapshot reads files while a fetch or a commit adds objects
+//     (lockedStorage).
 type RepoWriter struct {
-	mu     sync.Mutex
 	cfg    RepoConfig
 	auth   transport.AuthMethod
 	repo   *git.Repository
 	remote plumbing.ReferenceName
 	local  plumbing.ReferenceName
+	now    func() time.Time
+
+	opMu sync.Mutex
+
+	mu sync.Mutex
+	// head is the branch head the last fetch or push saw, and headAsOf when
+	// that fetch or push started: the remote was at head at headAsOf or
+	// later. A zero headAsOf means no head is known, and Head fetches.
+	head     plumbing.Hash
+	headAsOf time.Time
+	// fetching is the fetch Head callers share while it runs, or nil.
+	fetching *fetchCall
+
 	// beforePush, when set, runs between the commit and its push. Tests use
 	// it to move the remote branch in that gap.
 	beforePush func()
+	// beforeFetch, when set, runs before each fetch goes to the remote, and
+	// onShare whenever a Head waits for a fetch another Head started. Tests
+	// use them to count fetches and to hold one while reads pile up.
+	beforeFetch func()
+	onShare     func()
+}
+
+// fetchCall is one fetch that every Head arriving while it runs waits for.
+// head and err are set before done is closed.
+type fetchCall struct {
+	started time.Time
+	done    chan struct{}
+	head    plumbing.Hash
+	err     error
 }
 
 var _ Writer = (*RepoWriter)(nil)
@@ -71,6 +127,9 @@ func (cfg RepoConfig) Validate() error {
 	if cfg.AuthorName == "" || cfg.AuthorEmail == "" {
 		return errors.New("gitops: commit author name and email are required")
 	}
+	if cfg.ReadMaxAge < 0 {
+		return errors.New("gitops: the read max age must not be negative")
+	}
 	if cfg.Token != "" {
 		if u, err := url.Parse(cfg.URL); err != nil || u.Scheme != "https" {
 			return errors.New("gitops: a token is sent only over https; the repository URL must start with https://")
@@ -82,6 +141,12 @@ func (cfg RepoConfig) Validate() error {
 // NewRepoWriter clones cfg.Branch of cfg.URL into memory. The branch must
 // exist and have at least one commit.
 func NewRepoWriter(ctx context.Context, cfg RepoConfig) (*RepoWriter, error) {
+	return newRepoWriter(ctx, cfg, time.Now)
+}
+
+// newRepoWriter is NewRepoWriter on the clock now, which tells how old a
+// fetch is.
+func newRepoWriter(ctx context.Context, cfg RepoConfig, now func() time.Time) (*RepoWriter, error) {
 	if err := cfg.Validate(); err != nil {
 		return nil, err
 	}
@@ -89,11 +154,13 @@ func NewRepoWriter(ctx context.Context, cfg RepoConfig) (*RepoWriter, error) {
 		cfg:    cfg,
 		remote: plumbing.NewRemoteReferenceName(git.DefaultRemoteName, cfg.Branch),
 		local:  plumbing.NewBranchReferenceName(cfg.Branch),
+		now:    now,
 	}
 	if cfg.Token != "" {
 		w.auth = &githttp.BasicAuth{Username: "x-access-token", Password: cfg.Token}
 	}
-	repo, err := git.CloneContext(ctx, memory.NewStorage(), memfs.New(), &git.CloneOptions{
+	clonedAt := now()
+	repo, err := git.CloneContext(ctx, newLockedStorage(), memfs.New(), &git.CloneOptions{
 		URL:           cfg.URL,
 		Auth:          w.auth,
 		ReferenceName: w.local,
@@ -103,28 +170,111 @@ func NewRepoWriter(ctx context.Context, cfg RepoConfig) (*RepoWriter, error) {
 		return nil, fmt.Errorf("gitops: clone branch %s: %w", cfg.Branch, err)
 	}
 	w.repo = repo
+	// The clone counts as the first fetch. Without a remote-tracking branch
+	// the first Head fetches instead.
+	if ref, err := repo.Reference(w.remote, true); err == nil {
+		w.remember(ref.Hash(), clonedAt)
+	}
 	return w, nil
 }
 
-// Head fetches the branch and returns its snapshot.
+// Head returns the snapshot of the branch head. It fetches the branch when
+// the last fetch or push is cfg.ReadMaxAge old or older, sharing the fetch
+// with every Head that arrives while it runs; with ReadMaxAge zero it always
+// fetches.
 func (w *RepoWriter) Head(ctx context.Context) (Snapshot, error) {
+	if w.cfg.ReadMaxAge <= 0 {
+		w.opMu.Lock()
+		head, err := w.fetch(ctx)
+		w.opMu.Unlock()
+		if err != nil {
+			return nil, err
+		}
+		return w.snapshot(head)
+	}
+
+	w.mu.Lock()
+	if !w.headAsOf.IsZero() && w.now().Sub(w.headAsOf) < w.cfg.ReadMaxAge {
+		head := w.head
+		w.mu.Unlock()
+		return w.snapshot(head)
+	}
+	call := w.fetching
+	shared := call != nil
+	if !shared {
+		call = &fetchCall{started: w.now(), done: make(chan struct{})}
+		w.fetching = call
+		// The fetch serves every Head that arrives while it runs, so it
+		// must not end when this caller gives up: it keeps ctx's values but
+		// not its cancellation, and has a bound of its own.
+		go w.sharedFetch(context.WithoutCancel(ctx), call)
+	}
+	w.mu.Unlock()
+	if shared && w.onShare != nil {
+		w.onShare()
+	}
+
+	select {
+	case <-call.done:
+	case <-ctx.Done():
+		return nil, fmt.Errorf("gitops: fetch: %w", ctx.Err())
+	}
+	if call.err != nil {
+		return nil, call.err
+	}
+	return w.snapshot(call.head)
+}
+
+// sharedFetch runs call's fetch, then lets its waiters go.
+func (w *RepoWriter) sharedFetch(ctx context.Context, call *fetchCall) {
+	ctx, cancel := context.WithTimeout(ctx, fetchTimeout)
+	defer cancel()
+
+	w.opMu.Lock()
+	// A Commit may have held opMu while this call waited for it. A head it
+	// fetched or pushed after the call started is as recent as this fetch
+	// would see, so the call takes that one instead of going to the remote.
+	w.mu.Lock()
+	head := w.head
+	fresh := !w.headAsOf.IsZero() && !w.headAsOf.Before(call.started)
+	w.mu.Unlock()
+	var err error
+	if !fresh {
+		head, err = w.fetch(ctx)
+	}
+	w.opMu.Unlock()
+
+	w.mu.Lock()
+	call.head, call.err = head, err
+	w.fetching = nil
+	w.mu.Unlock()
+	close(call.done)
+}
+
+// remember records that the remote branch was at head at asOf or later.
+func (w *RepoWriter) remember(head plumbing.Hash, asOf time.Time) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	head, err := w.fetch(ctx)
-	if err != nil {
-		return nil, err
-	}
-	return w.snapshot(head)
+	w.head, w.headAsOf = head, asOf
+}
+
+// forget makes the next Head fetch: the remote branch may be at a head this
+// clone hasn't seen.
+func (w *RepoWriter) forget() {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.head, w.headAsOf = plumbing.ZeroHash, time.Time{}
 }
 
 // Commit fetches the branch, checks c's files against base, commits c on top
-// of the branch head and pushes it.
+// of the branch head and pushes it. It fetches whatever cfg.ReadMaxAge is:
+// the check against base must see the remote's head.
 func (w *RepoWriter) Commit(ctx context.Context, base string, c Change) (string, error) {
 	if err := c.validate(); err != nil {
 		return "", err
 	}
-	w.mu.Lock()
-	defer w.mu.Unlock()
+	w.opMu.Lock()
+	defer w.opMu.Unlock()
 
 	head, err := w.fetch(ctx)
 	if err != nil {
@@ -187,6 +337,7 @@ func (w *RepoWriter) Commit(ctx context.Context, base string, c Change) (string,
 	if w.beforePush != nil {
 		w.beforePush()
 	}
+	pushedAt := w.now()
 	err = w.repo.PushContext(ctx, &git.PushOptions{
 		RemoteName: git.DefaultRemoteName,
 		RefSpecs:   []config.RefSpec{config.RefSpec(w.local + ":" + w.local)},
@@ -200,11 +351,19 @@ func (w *RepoWriter) Commit(ctx context.Context, base string, c Change) (string,
 		if rerr := w.repo.Storer.SetReference(plumbing.NewHashReference(w.local, head)); rerr != nil {
 			err = errors.Join(err, fmt.Errorf("reset branch: %w", rerr))
 		}
+		// A push that lost a race left the branch at a commit this clone
+		// hasn't fetched, and one that failed otherwise, on a timeout say,
+		// may still have landed: either way the head fetched above is no
+		// longer known to be the remote's.
+		w.forget()
 		if pushRaced(err) {
 			return "", fmt.Errorf("%w: push: %w", ErrConflict, err)
 		}
 		return "", fmt.Errorf("gitops: push: %w", err)
 	}
+	// The push moved the remote branch from head to commit, so the remote
+	// was at commit when the push started or later.
+	w.remember(commit, pushedAt)
 	return commit.String(), nil
 }
 
@@ -219,8 +378,13 @@ func pushRaced(err error) bool {
 		strings.Contains(msg, "non-fast-forward") || strings.Contains(msg, "cannot lock ref")
 }
 
-// fetch updates the remote-tracking branch and returns its head.
+// fetch updates the remote-tracking branch, records its head for Head and
+// returns it. The caller holds opMu.
 func (w *RepoWriter) fetch(ctx context.Context) (plumbing.Hash, error) {
+	if w.beforeFetch != nil {
+		w.beforeFetch()
+	}
+	started := w.now()
 	err := w.repo.FetchContext(ctx, &git.FetchOptions{
 		RemoteName: git.DefaultRemoteName,
 		RefSpecs:   []config.RefSpec{config.RefSpec("+" + w.local + ":" + w.remote)},
@@ -234,6 +398,7 @@ func (w *RepoWriter) fetch(ctx context.Context) (plumbing.Hash, error) {
 	if err != nil {
 		return plumbing.ZeroHash, fmt.Errorf("gitops: resolve %s: %w", w.remote, err)
 	}
+	w.remember(ref.Hash(), started)
 	return ref.Hash(), nil
 }
 
@@ -254,7 +419,7 @@ func (w *RepoWriter) snapshot(h plumbing.Hash) (Snapshot, error) {
 	if err != nil {
 		return nil, err
 	}
-	return treeSnapshot{rev: h.String(), tree: tree, mu: &w.mu}, nil
+	return treeSnapshot{rev: h.String(), tree: tree, mu: new(sync.Mutex)}, nil
 }
 
 // blobHash returns the hash of the file or directory at p, or the zero hash
@@ -269,8 +434,10 @@ func blobHash(tree *object.Tree, p string) plumbing.Hash {
 
 // treeSnapshot reads one commit's tree. Git objects are immutable, so it
 // stays valid after later fetches and commits. Reading them goes through the
-// clone's in-memory storage, which fetches and commits write to, so each read
-// holds the writer's lock.
+// clone's in-memory storage, which fetches and commits write to while the
+// snapshot reads: lockedStorage makes that safe. mu is the snapshot's own:
+// object.Tree fills a lookup map on first use, so two reads of one snapshot
+// at once would race on it.
 type treeSnapshot struct {
 	rev  string
 	tree *object.Tree

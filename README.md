@@ -164,6 +164,7 @@ status from the hub's ACM Policies ([Status](#status-from-the-spokes)).
 | `AI_GRID_GIT_URL` | Repository URL, without credentials. Without it the backend still starts: Models' and Subscriptions' list, get, create, update and delete answer `FailedPrecondition`, naming this setting, and `Models/ListPlacementClusters` and `Models/ListLocations` (which read the cluster) and the other APIs serve as usual. Setting `AI_GRID_GIT_TOKEN_FILE` without it is an error at startup. The backend clones it in the background and retries a failed clone, waiting up to a minute between attempts; until a clone succeeds, Models and Subscriptions answer `Unavailable` and the other APIs serve as usual. A `file://` URL or local path is served in-process, so the image needs no `git`. |
 | `AI_GRID_GIT_BRANCH` | Branch to commit to. Default `main`. It must have at least one commit. |
 | `AI_GRID_GIT_TOKEN_FILE` | File holding a GitHub personal access token with `contents: write` on that repository only, for example a mounted Secret. Sent as HTTPS basic auth, so `AI_GRID_GIT_URL` must be `https://` when it is set; never logged. |
+| `AI_GRID_GIT_READ_MAX_AGE` | How old the last fetch of the branch may be for a read to use it, as a Go duration. Default `10s`; `0` fetches on every read. A commit pushed by anyone else shows in reads within about this long (below); a value that doesn't parse, or a negative one, is an error at startup. |
 | `AI_GRID_MODELS_NAMESPACE` | Namespace of each model's `LLMInferenceService` on the inference spokes. Default `ai-grid-internal-models`. An override must name a namespace that's already enabled for grid routing on every inference spoke: labelled `grid.opendatahub.io/allowed: "true"`, allowed by the inference Gateway's `allowedRoutes`, and with NetworkPolicies that let the grid reach the model and its scheduler's metrics. The backend writes one NetworkPolicy per model that admits the grid namespace; the namespace and its other policies come from the environment. |
 | `AI_GRID_SUBSCRIPTION_NAMESPACE` | Namespace of the subscriptions, their policies and the models' catalog entries on the ingress spokes. Default `models-as-a-service`. |
 | `AI_GRID_POLICY_NAMESPACE` | Hub namespace of the ACM Policies that status is read from. Default `ai-grid-policies`. |
@@ -202,6 +203,16 @@ For both models and subscriptions:
   is `Aborted`, an id created meanwhile is `AlreadyExists`, and a write
   without a version applies to the latest object. Only a write that still
   conflicts on the 5th try answers `Aborted`.
+- Reads (`List`, `Get`, and the checks a write makes before it commits) come
+  from the backend's clone of the branch, fetched at most once every
+  `AI_GRID_GIT_READ_MAX_AGE` (default 10 seconds): a fetch from GitHub takes
+  seconds even when nothing changed. Reads that arrive while a fetch runs
+  wait for that one fetch. A write always fetches before it commits and
+  checks its change against the branch head, so a stale read can't
+  overwrite a newer commit: the write is made again on the new head, as
+  above. The backend's own writes show in the next read at once; a commit
+  pushed by anyone else, a hand edit or another replica, shows within about
+  `AI_GRID_GIT_READ_MAX_AGE`, plus the time one fetch takes.
 - The files belong to the backend. An update rewrites them from the stored
   object and the request, so a hand edit to a catalog file is lost on the
   next write to that object.

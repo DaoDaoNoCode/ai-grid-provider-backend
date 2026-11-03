@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/osac-project/ai-grid-provider-backend/internal/gitops"
 	"k8s.io/client-go/rest"
@@ -101,6 +102,36 @@ func TestNewGitWriterRefusesTokenFileWithoutURL(t *testing.T) {
 	t.Setenv("AI_GRID_GIT_TOKEN_FILE", "/var/run/secrets/ai-grid-git/token")
 	if _, err := newGitWriter(); err == nil {
 		t.Fatal("newGitWriter() succeeded with a token file and no URL")
+	}
+}
+
+func TestGitReadMaxAge(t *testing.T) {
+	for value, want := range map[string]time.Duration{
+		"":    defaultGitReadMaxAge,
+		"0":   0,
+		"30s": 30 * time.Second,
+		"1m":  time.Minute,
+	} {
+		t.Setenv("AI_GRID_GIT_READ_MAX_AGE", value)
+		if got, err := gitReadMaxAge(); err != nil || got != want {
+			t.Errorf("AI_GRID_GIT_READ_MAX_AGE=%q: %v, %v; want %v", value, got, err, want)
+		}
+	}
+	for _, value := range []string{"10", "soon", "-1s"} {
+		t.Setenv("AI_GRID_GIT_READ_MAX_AGE", value)
+		if got, err := gitReadMaxAge(); err == nil {
+			t.Errorf("AI_GRID_GIT_READ_MAX_AGE=%q = %v, want an error", value, got)
+		}
+	}
+}
+
+// A read max age that doesn't parse stops the process at startup.
+func TestNewGitWriterRefusesBadReadMaxAge(t *testing.T) {
+	t.Setenv("AI_GRID_GIT_URL", "https://example.com/catalog.git")
+	t.Setenv("AI_GRID_GIT_TOKEN_FILE", "")
+	t.Setenv("AI_GRID_GIT_READ_MAX_AGE", "soon")
+	if _, err := newGitWriter(); err == nil {
+		t.Fatal("newGitWriter() succeeded with AI_GRID_GIT_READ_MAX_AGE=soon")
 	}
 }
 
