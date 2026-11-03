@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"path"
 	"slices"
 	"testing"
 
@@ -101,6 +102,77 @@ func TestModelsGitWriteRetriesAnotherModelsIndexChange(t *testing.T) {
 	}
 	if got := writer.Messages(); !slices.Equal(got, want) {
 		t.Fatalf("commit messages = %v, want %v", got, want)
+	}
+}
+
+// A write decides on every index it reads, also one it leaves as it is: an
+// update that keeps the model where it is conflicts when that index changed
+// meanwhile, and its rerun puts the model's entry back. A delete decides which
+// files to remove from the model's directories, so a file added there
+// meanwhile makes it conflict, and the rerun removes that file too.
+func TestModelsGitWriteConflictsOnWhatItRead(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	writer := &racingWriter{MemoryWriter: gitops.NewMemoryWriter(nil)}
+	models := mustGitModelsServer(t, writer)
+	if _, err := models.Create(ctx, &aigridv1.ModelsCreateRequest{Object: gitSampleModel("model-a", "site-a")}); err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	// otherCommit commits put on the latest revision, as another writer
+	// would, between the write's Head and its Commit.
+	otherCommit := func(put map[string][]byte) func() {
+		return func() {
+			head, err := writer.Head(ctx)
+			if err != nil {
+				t.Errorf("Head() error = %v", err)
+				return
+			}
+			if _, err := writer.MemoryWriter.Commit(ctx, head.Revision(), gitops.Change{Put: put, Message: "edit by hand"}); err != nil {
+				t.Errorf("racing Commit() error = %v", err)
+			}
+		}
+	}
+
+	for i, tc := range []struct{ index, entry string }{
+		{ingressGitIndex, "../models/model-a/catalog"},
+		{clusterGitIndex("site-a"), "../../models/model-a/deployment"},
+	} {
+		writer.commits = 0
+		writer.race = otherCommit(map[string][]byte{tc.index: renderKustomization(nil)})
+		object := gitSampleModel("model-a", "site-a")
+		replicas := int32(2 + i)
+		object.Spec.Replicas = &replicas
+		if _, err := models.Update(ctx, &aigridv1.ModelsUpdateRequest{
+			Object:     object,
+			UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.replicas"}},
+		}); err != nil {
+			t.Fatalf("Update() racing a change to %s error = %v", tc.index, err)
+		}
+		if writer.commits != 2 {
+			t.Fatalf("Update() racing a change to %s: commits = %d, want 2: one that conflicted and its rerun", tc.index, writer.commits)
+		}
+		if got := kustomizationResources(t, writer, tc.index); !slices.Equal(got, []string{tc.entry}) {
+			t.Fatalf("%s resources = %v, want [%s]", tc.index, got, tc.entry)
+		}
+	}
+
+	extra := path.Join(modelCatalogGitDir("model-a"), "extra.yaml")
+	writer.commits = 0
+	writer.race = otherCommit(map[string][]byte{extra: []byte("kind: ConfigMap\n")})
+	if _, err := models.Delete(ctx, &aigridv1.ModelsDeleteRequest{Id: "model-a"}); err != nil {
+		t.Fatalf("Delete() racing a file added to the model error = %v", err)
+	}
+	if writer.commits != 2 {
+		t.Fatalf("Delete() commits = %d, want 2", writer.commits)
+	}
+	head, err := writer.Head(ctx)
+	if err != nil {
+		t.Fatalf("Head() error = %v", err)
+	}
+	for _, dir := range []string{modelDeploymentGitDir("model-a"), modelCatalogGitDir("model-a")} {
+		if files, err := head.List(dir); err != nil || len(files) > 0 {
+			t.Fatalf("%s after Delete() = %v, %v; want no files", dir, files, err)
+		}
 	}
 }
 

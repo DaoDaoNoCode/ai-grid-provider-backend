@@ -195,6 +195,10 @@ For both models and subscriptions:
   `resource_version` is checked the same way; zero skips the check. A deleted
   and re-created id starts again at version 1, so a client still holding
   version 1 of the old object can update or delete the new one.
+- A write's commit checks every file the write was decided on against the
+  branch head: the files it writes, the indexes it read and left as they
+  were, and the files its checks read. A commit conflicts when any of them
+  changed since the read.
 - A write whose commit conflicts, because another write reached the branch
   first, is made again from the start on the new head, up to 5 times in all,
   like client-go's `retry.RetryOnConflict`. Two writes to different objects
