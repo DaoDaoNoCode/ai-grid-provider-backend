@@ -61,11 +61,12 @@ const fetchTimeout = time.Minute
 // remote rejects because the branch moved is ErrConflict.
 //
 // Head fetches only when the last fetch is cfg.ReadMaxAge old or older, and
-// otherwise returns the head that fetch saw. Fetching a remote branch costs
-// seconds even when nothing changed (GitHub takes about two to answer the
-// first request of a fetch), which every catalog read used to pay, one read
-// at a time. Reads that need a fetch while one is running wait for it and
-// share its head instead of fetching again (fetchCall). A Commit records the
+// otherwise returns the head that fetch saw. A fetch can cost seconds even
+// when nothing changed: from the demo hub's backend in 2026-11, GitHub's
+// info/refs took about 2 s to the first byte and an up-to-date fetch about
+// 3 s. Every catalog read used to pay that, one read at a time. Reads that
+// need a fetch while one is running wait for it and share its head instead
+// of fetching again (fetchCall). A Commit records the
 // head it fetched and, once pushed, its own commit, so the next read sees the
 // write without a fetch. With ReadMaxAge zero every Head fetches, as before.
 //
