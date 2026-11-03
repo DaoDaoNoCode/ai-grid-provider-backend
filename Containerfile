@@ -8,7 +8,7 @@
 ARG TARGETOS=linux
 ARG TARGETARCH=amd64
 
-FROM --platform=$BUILDPLATFORM registry.access.redhat.com/ubi9/go-toolset:1793232585@sha256:a3b89f072fe0704b9388f3c9ad5681a6cf16293324e3f25ca0107bc09217cf62 AS build
+FROM --platform=$BUILDPLATFORM registry.access.redhat.com/ubi9/go-toolset:1793621898@sha256:5f0dead6a152de46a19f51322ea8e06d0d9f282a4937d663cf5a226cb8744bc8 AS build
 ARG TARGETOS
 ARG TARGETARCH
 # go-toolset runs as 1001 with its home as the working directory.
