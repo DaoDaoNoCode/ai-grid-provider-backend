@@ -149,6 +149,7 @@ func TestRepoWriterConcurrentReadsShareOneFetch(t *testing.T) {
 
 	revs := make(chan string, readers)
 	errs := make(chan error, readers)
+	var fresh atomic.Int32
 	var done sync.WaitGroup
 	for range readers {
 		done.Go(func() {
@@ -156,6 +157,9 @@ func TestRepoWriterConcurrentReadsShareOneFetch(t *testing.T) {
 			if err != nil {
 				errs <- err
 				return
+			}
+			if head.Fresh() {
+				fresh.Add(1)
 			}
 			if data, err := head.Read("a"); err != nil || string(data) != "a2" {
 				errs <- errors.New("a reader did not see the fetched a2")
@@ -179,6 +183,12 @@ func TestRepoWriterConcurrentReadsShareOneFetch(t *testing.T) {
 	}
 	if n := fetches.Load(); n != 1 {
 		t.Fatalf("%d fetches for %d concurrent reads, want 1", n, readers)
+	}
+	// Only the reader that started the fetch knows it began after its call;
+	// the others joined a fetch that may have started before theirs, though
+	// the clock didn't move between them.
+	if n := fresh.Load(); n != 1 {
+		t.Fatalf("%d of %d snapshots Fresh, want 1: the one whose call started the fetch", n, readers)
 	}
 }
 
@@ -761,4 +771,82 @@ func BenchmarkRepoWriterParallelReads(b *testing.B) {
 			}
 		}
 	})
+}
+
+// A push the server refuses after it advertised the branch, because another
+// writer moved it in between, is a conflict whatever the server's git says
+// about it ("incorrect old value provided" from git 2.54, "failed to update
+// ref" from older ones): Commit reads where the remote branch is instead of
+// matching the error's text, and the rerun commits on top of the other
+// writer's change.
+func TestRepoWriterServerSideRaceIsAConflict(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	url := newBareRepo(t, map[string]string{"a": "a", "b": "b"})
+	w, _, _ := newCachingRepoWriter(t, url, time.Hour)
+	other := newTestRepoWriter(t, url)
+	w.push = func(context.Context, *git.PushOptions) error {
+		w.push = nil
+		if _, err := other.Commit(ctx, mustHead(t, other).Revision(), Change{Put: map[string][]byte{"b": []byte("b2")}, Message: "other"}); err != nil {
+			t.Errorf("other Commit() error = %v", err)
+		}
+		return errors.New("command error on refs/heads/main: incorrect old value provided")
+	}
+
+	attempts, err := writeAppending(ctx, w, "a")
+	if err != nil {
+		t.Fatalf("RetryOnConflict() error = %v", err)
+	}
+	if len(attempts) != 2 || !errors.Is(attempts[0], ErrConflict) {
+		t.Fatalf("attempts = %v, want ErrConflict, then success on the moved branch", attempts)
+	}
+	head := mustHead(t, newTestRepoWriter(t, url))
+	mustRead(t, head, "a", "a+")
+	mustRead(t, head, "b", "b2")
+}
+
+// A push that landed although its answer was lost, cut off by a timeout say,
+// is the commit: Commit reads the remote branch at it and returns it, rather
+// than an error that would have the caller write it again.
+func TestRepoWriterPushThatLandedIsTheCommit(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	url := newBareRepo(t, map[string]string{"a": "a"})
+	w, _, _ := newCachingRepoWriter(t, url, time.Hour)
+	w.push = func(ctx context.Context, opts *git.PushOptions) error {
+		if err := w.repo.PushContext(ctx, opts); err != nil {
+			return err
+		}
+		return errors.New("context deadline exceeded")
+	}
+
+	rev, err := w.Commit(ctx, mustHead(t, w).Revision(), Change{Put: map[string][]byte{"a": []byte("a2")}, Message: "landed"})
+	if err != nil {
+		t.Fatalf("Commit() error = %v, want the commit that landed", err)
+	}
+	remote := mustHead(t, newTestRepoWriter(t, url))
+	if remote.Revision() != rev {
+		t.Fatalf("remote head = %s, want the returned commit %s", remote.Revision(), rev)
+	}
+	mustRead(t, remote, "a", "a2")
+	if head := mustHead(t, w); head.Revision() != rev {
+		t.Fatalf("Head() after the commit = %s, want %s", head.Revision(), rev)
+	}
+}
+
+// A push that failed with the remote branch still at the commit's head, a
+// network error say, is that error and not a conflict: nothing moved, so a
+// rerun would only fail the same way.
+func TestRepoWriterFailedPushOnUnmovedBranchIsAnError(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	url := newBareRepo(t, map[string]string{"a": "a"})
+	w, _, _ := newCachingRepoWriter(t, url, time.Hour)
+	w.push = func(context.Context, *git.PushOptions) error { return errors.New("connection reset by peer") }
+
+	_, err := w.Commit(ctx, mustHead(t, w).Revision(), Change{Put: map[string][]byte{"a": []byte("a2")}, Message: "lost"})
+	if err == nil || errors.Is(err, ErrConflict) || !strings.Contains(err.Error(), "connection reset by peer") {
+		t.Fatalf("Commit() error = %v, want the push's error, not ErrConflict", err)
+	}
+	mustRead(t, mustHead(t, newTestRepoWriter(t, url)), "a", "a")
 }
