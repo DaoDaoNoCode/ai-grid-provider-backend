@@ -176,6 +176,132 @@ func TestModelsGitWriteConflictsOnWhatItRead(t *testing.T) {
 	}
 }
 
+// laggingWriter serves its next Head from lag, a snapshot the remote has
+// since left, as a RepoWriter can within its read window; FreshHead and the
+// Heads after that one read the latest revision. It counts FreshHead calls.
+type laggingWriter struct {
+	*gitops.MemoryWriter
+	lag        gitops.Snapshot
+	freshHeads int
+}
+
+func (w *laggingWriter) Head(ctx context.Context) (gitops.Snapshot, error) {
+	if lag := w.lag; lag != nil {
+		w.lag = nil
+		return staleSnapshot{lag}, nil
+	}
+	return w.MemoryWriter.Head(ctx)
+}
+
+func (w *laggingWriter) FreshHead(ctx context.Context) (gitops.Snapshot, error) {
+	w.freshHeads++
+	return w.MemoryWriter.Head(ctx)
+}
+
+// lagHere makes the next Head serve the latest revision as it is now.
+func (w *laggingWriter) lagHere(t *testing.T) {
+	t.Helper()
+	head, err := w.MemoryWriter.Head(context.Background())
+	if err != nil {
+		t.Fatalf("Head() error = %v", err)
+	}
+	w.lag = head
+}
+
+type staleSnapshot struct{ gitops.Snapshot }
+
+func (staleSnapshot) Fresh() bool { return false }
+
+// A write refused on a snapshot that isn't fresh decides once more on a
+// fresh head: a create of an id another writer deleted meanwhile, and an
+// update or delete of one it created, go through. A refusal the fresh head
+// confirms is answered, and a refusal on a fresh snapshot is answered
+// without a fetch.
+func TestGitWritesDecideRefusalsAgainOnFreshHead(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	writer := &laggingWriter{MemoryWriter: gitops.NewMemoryWriter(nil)}
+	models := mustGitModelsServer(t, writer)
+	subscriptions := mustGitSubscriptionsServer(t, writer)
+	otherModels := mustGitModelsServer(t, writer.MemoryWriter)
+	otherSubscriptions := mustGitSubscriptionsServer(t, writer.MemoryWriter)
+	must := func(what string, err error) {
+		t.Helper()
+		if err != nil {
+			t.Fatalf("%s error = %v", what, err)
+		}
+	}
+	wantFreshHeads := func(what string, n int) {
+		t.Helper()
+		if writer.freshHeads != n {
+			t.Fatalf("%s: %d FreshHead calls, want %d", what, writer.freshHeads, n)
+		}
+		writer.freshHeads = 0
+	}
+	replicas := func(id string, n int32) *aigridv1.ModelsUpdateRequest {
+		object := gitSampleModel(id, "site-a")
+		object.Spec.Replicas = &n
+		return &aigridv1.ModelsUpdateRequest{Object: object, UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.replicas"}}}
+	}
+	_, err := otherModels.Create(ctx, &aigridv1.ModelsCreateRequest{Object: gitSampleModel("sim-model", "site-a")})
+	must("Create sim-model", err)
+
+	_, err = otherModels.Create(ctx, &aigridv1.ModelsCreateRequest{Object: gitSampleModel("model-a", "site-a")})
+	must("other Create model-a", err)
+	writer.lagHere(t)
+	_, err = otherModels.Delete(ctx, &aigridv1.ModelsDeleteRequest{Id: "model-a"})
+	must("other Delete model-a", err)
+	_, err = models.Create(ctx, &aigridv1.ModelsCreateRequest{Object: gitSampleModel("model-a", "site-a")})
+	must("Create of a model deleted meanwhile", err)
+	wantFreshHeads("Create of a model deleted meanwhile", 1)
+
+	writer.lagHere(t)
+	_, err = otherModels.Create(ctx, &aigridv1.ModelsCreateRequest{Object: gitSampleModel("model-b", "site-a")})
+	must("other Create model-b", err)
+	updated, err := models.Update(ctx, replicas("model-b", 3))
+	must("Update of a model created meanwhile", err)
+	if updated.GetObject().GetSpec().GetReplicas() != 3 {
+		t.Fatalf("Update of a model created meanwhile: replicas = %d, want 3", updated.GetObject().GetSpec().GetReplicas())
+	}
+	wantFreshHeads("Update of a model created meanwhile", 1)
+
+	writer.lagHere(t)
+	_, err = otherModels.Create(ctx, &aigridv1.ModelsCreateRequest{Object: gitSampleModel("model-c", "site-a")})
+	must("other Create model-c", err)
+	_, err = models.Delete(ctx, &aigridv1.ModelsDeleteRequest{Id: "model-c"})
+	must("Delete of a model created meanwhile", err)
+	wantFreshHeads("Delete of a model created meanwhile", 1)
+
+	writer.lagHere(t)
+	_, err = models.Create(ctx, &aigridv1.ModelsCreateRequest{Object: gitSampleModel("model-b", "site-a")})
+	assertConnectCode(t, err, connect.CodeAlreadyExists)
+	wantFreshHeads("Create of an existing model on a stale snapshot", 1)
+	_, err = models.Create(ctx, &aigridv1.ModelsCreateRequest{Object: gitSampleModel("model-b", "site-a")})
+	assertConnectCode(t, err, connect.CodeAlreadyExists)
+	wantFreshHeads("Create of an existing model on a fresh snapshot", 0)
+
+	_, err = otherSubscriptions.Create(ctx, &aigridv1.SubscriptionsCreateRequest{Object: gitSampleSubscription("team-a")})
+	must("other Create team-a", err)
+	writer.lagHere(t)
+	_, err = otherSubscriptions.Delete(ctx, &aigridv1.SubscriptionsDeleteRequest{Id: "team-a"})
+	must("other Delete team-a", err)
+	_, err = subscriptions.Create(ctx, &aigridv1.SubscriptionsCreateRequest{Object: gitSampleSubscription("team-a")})
+	must("Create of a subscription deleted meanwhile", err)
+	wantFreshHeads("Create of a subscription deleted meanwhile", 1)
+
+	writer.lagHere(t)
+	_, err = otherSubscriptions.Create(ctx, &aigridv1.SubscriptionsCreateRequest{Object: gitSampleSubscription("team-b")})
+	must("other Create team-b", err)
+	update := gitSampleSubscription("team-b")
+	update.Spec.Priority = 20
+	_, err = subscriptions.Update(ctx, &aigridv1.SubscriptionsUpdateRequest{
+		Object:     update,
+		UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.priority"}},
+	})
+	must("Update of a subscription created meanwhile", err)
+	wantFreshHeads("Update of a subscription created meanwhile", 1)
+}
+
 // A rerun decides again on the new head, so a change to the model itself is
 // refused as it would have been without the race: Aborted for a caller that
 // sent the version it read, AlreadyExists for a create of an id created

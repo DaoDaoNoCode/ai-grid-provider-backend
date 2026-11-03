@@ -38,6 +38,11 @@ func (w *MemoryWriter) Head(context.Context) (Snapshot, error) {
 	return memorySnapshot{rev: strconv.Itoa(rev), files: w.revisions[rev]}, nil
 }
 
+// FreshHead is Head: a MemoryWriter has no remote to lag behind.
+func (w *MemoryWriter) FreshHead(ctx context.Context) (Snapshot, error) {
+	return w.Head(ctx)
+}
+
 // Commit applies c on top of the latest revision.
 func (w *MemoryWriter) Commit(_ context.Context, base string, c Change) (string, error) {
 	if err := c.validate(); err != nil {
@@ -108,6 +113,9 @@ type memorySnapshot struct {
 }
 
 func (s memorySnapshot) Revision() string { return s.rev }
+
+// Fresh is true: a MemoryWriter's head is never behind.
+func (s memorySnapshot) Fresh() bool { return true }
 
 func (s memorySnapshot) Read(p string) ([]byte, error) {
 	data, ok := s.files[p]

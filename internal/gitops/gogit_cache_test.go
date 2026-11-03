@@ -396,6 +396,51 @@ func TestRepoWriterCommitRespectsRemoteReset(t *testing.T) {
 	mustRead(t, head, "b", "b")
 }
 
+// FreshHead fetches within the window, and shows a commit another writer
+// pushed that Head doesn't show yet; the head it fetched serves the reads
+// after it. Head's snapshots are Fresh only when they come from a fetch that
+// started after the call began.
+func TestRepoWriterFreshHeadFetchesWithinMaxAge(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	url := newBareRepo(t, map[string]string{"a": "a"})
+	w, clock, fetches := newCachingRepoWriter(t, url, time.Hour)
+	other := newTestRepoWriter(t, url)
+	rev, err := other.Commit(ctx, mustHead(t, other).Revision(), Change{Put: map[string][]byte{"a": []byte("a2")}, Message: "other"})
+	if err != nil {
+		t.Fatalf("other Commit() error = %v", err)
+	}
+
+	cached := mustHead(t, w)
+	if cached.Revision() == rev || cached.Fresh() {
+		t.Fatalf("Head() within the window = %s, Fresh() = %v; want the cloned head, not fresh", cached.Revision(), cached.Fresh())
+	}
+	clock.Advance(time.Nanosecond)
+	fresh, err := w.FreshHead(ctx)
+	if err != nil {
+		t.Fatalf("FreshHead() error = %v", err)
+	}
+	if fresh.Revision() != rev || !fresh.Fresh() {
+		t.Fatalf("FreshHead() = %s, Fresh() = %v; want the other writer's %s, fresh", fresh.Revision(), fresh.Fresh(), rev)
+	}
+	mustRead(t, fresh, "a", "a2")
+	if head := mustHead(t, w); head.Revision() != rev {
+		t.Fatalf("Head() after FreshHead() = %s, want %s", head.Revision(), rev)
+	}
+	if n := fetches.Load(); n != 1 {
+		t.Fatalf("%d fetches, want 1: FreshHead's", n)
+	}
+
+	clock.Advance(time.Hour)
+	if head := mustHead(t, w); !head.Fresh() {
+		t.Fatal("Head() that fetched after the window is not Fresh")
+	}
+	zero, _, _ := newCachingRepoWriter(t, url, 0)
+	if head := mustHead(t, zero); !head.Fresh() {
+		t.Fatal("Head() with no window is not Fresh")
+	}
+}
+
 // With no window a commit fetches first, as before the window existed: a
 // commit on a base another writer has moved past, to files it didn't touch,
 // lands in one attempt.

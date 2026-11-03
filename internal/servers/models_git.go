@@ -14,6 +14,7 @@ import (
 	aigridv1 "github.com/osac-project/ai-grid-provider-backend/gen/ai_grid/v1"
 	"github.com/osac-project/ai-grid-provider-backend/internal/gitops"
 	"github.com/osac-project/ai-grid-provider-backend/internal/names"
+	"google.golang.org/protobuf/proto"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"sigs.k8s.io/yaml"
 )
@@ -120,19 +121,21 @@ func (s *ModelsServer) gitCreate(ctx context.Context, object *aigridv1.Model) (*
 	if err != nil {
 		return nil, err
 	}
-	head, err := s.writer.Head(ctx)
-	if err != nil {
-		return nil, modelGitError("create", id, err)
-	}
-	if _, err := head.Read(path.Join(modelDeploymentGitDir(id), "deployment.yaml")); err == nil {
-		return nil, connect.Errorf(connect.CodeAlreadyExists, "Model %q already exists", id)
-	} else if !errors.Is(err, gitops.ErrNotFound) {
-		return nil, modelGitError("create", id, err)
-	}
-	if err := s.checkPlacementClusters(ctx, clusters); err != nil {
-		return nil, err
-	}
-	return s.gitCommitModel(ctx, head, "create", object, 1, nil, clusters)
+	var created *aigridv1.Model
+	err = decideOnHead(ctx, s.writer, func(err error) error { return modelGitError("create", id, err) }, func(head gitops.Snapshot) error {
+		if _, err := head.Read(path.Join(modelDeploymentGitDir(id), "deployment.yaml")); err == nil {
+			return connect.Errorf(connect.CodeAlreadyExists, "Model %q already exists", id)
+		} else if !errors.Is(err, gitops.ErrNotFound) {
+			return modelGitError("create", id, err)
+		}
+		if err := s.checkPlacementClusters(ctx, clusters); err != nil {
+			return err
+		}
+		var err error
+		created, err = s.gitCommitModel(ctx, head, "create", proto.CloneOf(object), 1, nil, clusters)
+		return err
+	})
+	return created, err
 }
 
 func (s *ModelsServer) gitUpdate(ctx context.Context, req *aigridv1.ModelsUpdateRequest) (*aigridv1.Model, error) {
@@ -146,10 +149,18 @@ func (s *ModelsServer) gitUpdate(ctx context.Context, req *aigridv1.ModelsUpdate
 	if err != nil {
 		return nil, err
 	}
-	head, err := s.writer.Head(ctx)
-	if err != nil {
-		return nil, modelGitError("update", id, err)
-	}
+	var updated *aigridv1.Model
+	err = decideOnHead(ctx, s.writer, func(err error) error { return modelGitError("update", id, err) }, func(head gitops.Snapshot) (err error) {
+		updated, err = s.gitUpdateOn(ctx, head, proto.CloneOf(object), version, paths)
+		return err
+	})
+	return updated, err
+}
+
+// gitUpdateOn decides and commits an update of object, at version (0 for
+// none), to the model as head has it.
+func (s *ModelsServer) gitUpdateOn(ctx context.Context, head gitops.Snapshot, object *aigridv1.Model, version int32, paths modelUpdatePaths) (*aigridv1.Model, error) {
+	id := modelID(object)
 	current, err := s.readGitModel(head, id)
 	if err != nil {
 		return nil, err
@@ -198,10 +209,14 @@ func (s *ModelsServer) gitUpdate(ctx context.Context, req *aigridv1.ModelsUpdate
 // model's two directories, whose listing decides which files go, and the
 // indexes it reads (putIndexChanges).
 func (s *ModelsServer) gitDelete(ctx context.Context, id string, version int32) error {
-	head, err := s.writer.Head(ctx)
-	if err != nil {
-		return modelGitError("delete", id, err)
-	}
+	return decideOnHead(ctx, s.writer, func(err error) error { return modelGitError("delete", id, err) }, func(head gitops.Snapshot) error {
+		return s.gitDeleteOn(ctx, head, id, version)
+	})
+}
+
+// gitDeleteOn decides and commits the delete of model id, at version (0 for
+// none), as head has it.
+func (s *ModelsServer) gitDeleteOn(ctx context.Context, head gitops.Snapshot, id string, version int32) error {
 	current, err := s.readGitModel(head, id)
 	if err != nil {
 		return err

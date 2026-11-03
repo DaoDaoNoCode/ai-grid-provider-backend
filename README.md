@@ -214,7 +214,16 @@ For both models and subscriptions:
   GitHub). Reads that arrive while a fetch runs wait for that one fetch. The
   backend's own writes show in the next read at once; a commit pushed by
   anyone else, a hand edit or another replica, shows within about
-  `AI_GRID_GIT_READ_MAX_AGE`, plus the time one fetch takes.
+  `AI_GRID_GIT_READ_MAX_AGE`, plus the time one fetch takes. Until then
+  `List` and `Get` answer from the older state: an object created elsewhere
+  is missing (`Get` answers `NotFound`), one deleted elsewhere is still
+  there, and one changed elsewhere has its older version.
+- A write doesn't answer a refusal from such a state. When what its read
+  showed refuses it (`NotFound`, `AlreadyExists`, `Aborted` for a version,
+  or `FailedPrecondition`, such as a model a subscription names that isn't
+  there) and that read came from the window rather than a fetch, it fetches
+  and decides once more, and answers that. A refusal costs one fetch more
+  than before; a write that goes through costs none.
 - A write commits on the head its read saw, without fetching, while that
   head is younger than `AI_GRID_GIT_READ_MAX_AGE`, and pushes. A stale read
   still can't overwrite a newer commit, or undo a reset of the branch: the

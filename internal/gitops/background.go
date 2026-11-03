@@ -72,6 +72,16 @@ func (w *BackgroundWriter) Head(ctx context.Context) (Snapshot, error) {
 	return writer.Head(ctx)
 }
 
+// FreshHead returns the snapshot at the remote's branch head, or
+// ErrNotReady.
+func (w *BackgroundWriter) FreshHead(ctx context.Context) (Snapshot, error) {
+	writer, err := w.ready()
+	if err != nil {
+		return nil, err
+	}
+	return writer.FreshHead(ctx)
+}
+
 // Commit applies c on top of the branch head, or fails with ErrNotReady.
 func (w *BackgroundWriter) Commit(ctx context.Context, base string, c Change) (string, error) {
 	writer, err := w.ready()

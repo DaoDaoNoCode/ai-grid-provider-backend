@@ -541,13 +541,25 @@ ingress clusters. See README "Git catalog" for the repository layout.
 
 Reads of Models and Subscriptions come from a fetch of the repository at most
 `AI_GRID_GIT_READ_MAX_AGE` old (default 10 seconds). The backend's own writes
-show in the next read at once; a commit made outside the backend, such as a
-hand edit or another replica's write, shows within about that long. Within
-that window a write commits on the head it read without fetching first;
-the push lands only if nobody else has pushed since, and otherwise the
-backend makes the write again on a freshly fetched head. A stale read never
-overwrites a newer commit, and a client sees no difference beyond the
-time a write takes.
+show in the next read at once. A commit made outside the backend, such as a
+hand edit or another replica's write, shows within about that long, plus
+the time one fetch takes; until then `List` and `Get` answer from the older
+state, so a client may see:
+
+- a model or subscription created elsewhere missing from `List`, and `Get`
+  answer `NotFound` for it;
+- one deleted elsewhere still listed, and returned by `Get`;
+- one changed elsewhere at its older `metadata.version`. An update or delete
+  sent with that version answers `Aborted`, as for any version that no
+  longer matches; that write fetched, so a reload shows the newer version.
+
+Writes don't answer from such a state. Within the window a write commits on
+the head it read without fetching first; the push lands only if the branch
+hasn't moved since, and otherwise the backend makes the write again on a
+freshly fetched head, so a stale read never overwrites a newer commit. When
+the state a write read refuses it (`NotFound`, `AlreadyExists`, `Aborted`
+for a version, or `FailedPrecondition`), the backend fetches and decides
+once more before answering.
 
 `spec.placement` is required and names at least one cluster, by the ACM
 `name` label only (`name In [...]` or a `name` match label); cluster sets, other labels,

@@ -20,6 +20,9 @@ var _ Writer = Unconfigured{}
 // Head fails with ErrNotConfigured.
 func (Unconfigured) Head(context.Context) (Snapshot, error) { return nil, ErrNotConfigured }
 
+// FreshHead fails with ErrNotConfigured.
+func (Unconfigured) FreshHead(context.Context) (Snapshot, error) { return nil, ErrNotConfigured }
+
 // Commit fails with ErrNotConfigured.
 func (Unconfigured) Commit(context.Context, string, Change) (string, error) {
 	return "", ErrNotConfigured

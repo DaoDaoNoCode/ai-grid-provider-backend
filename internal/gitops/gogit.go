@@ -200,7 +200,9 @@ func newRepoWriter(ctx context.Context, cfg RepoConfig, now func() time.Time) (*
 // Head returns the snapshot of the branch head. It fetches the branch when
 // the last fetch or push is cfg.ReadMaxAge old or older, sharing the fetch
 // with every Head that arrives while it runs; with ReadMaxAge zero it always
-// fetches.
+// fetches. The snapshot is Fresh when it comes from a fetch that started
+// after the call began: not one the window serves, nor, usually, one a Head
+// joined.
 func (w *RepoWriter) Head(ctx context.Context) (Snapshot, error) {
 	if w.cfg.ReadMaxAge <= 0 {
 		if err := w.lockOp(ctx); err != nil {
@@ -211,18 +213,19 @@ func (w *RepoWriter) Head(ctx context.Context) (Snapshot, error) {
 		if err != nil {
 			return nil, err
 		}
-		return w.snapshot(head)
+		return w.snapshot(head, true)
 	}
 
 	w.mu.Lock()
 	if head, ok := w.freshHeadLocked(); ok {
 		w.mu.Unlock()
-		return w.snapshot(head)
+		return w.snapshot(head, false)
 	}
+	begun := w.now()
 	call := w.fetching
 	shared := call != nil
 	if !shared {
-		call = &fetchCall{started: w.now(), done: make(chan struct{})}
+		call = &fetchCall{started: begun, done: make(chan struct{})}
 		w.fetching = call
 		// The fetch serves every Head that arrives while it runs, so it
 		// must not end when this caller gives up: it keeps ctx's values but
@@ -242,7 +245,20 @@ func (w *RepoWriter) Head(ctx context.Context) (Snapshot, error) {
 	if call.err != nil {
 		return nil, call.err
 	}
-	return w.snapshot(call.head)
+	return w.snapshot(call.head, !call.started.Before(begun))
+}
+
+// FreshHead returns the snapshot of the remote's branch head as of the call,
+// whatever cfg.ReadMaxAge is. It fetches, unless an operation that held the
+// clone while this call waited for it fetched or pushed after the call
+// began, and takes that head. It doesn't join a shared fetch, which may have
+// started before the call. The head it fetched serves later reads.
+func (w *RepoWriter) FreshHead(ctx context.Context) (Snapshot, error) {
+	head, err := w.fetchUnlessFresh(ctx, w.now())
+	if err != nil {
+		return nil, err
+	}
+	return w.snapshot(head, true)
 }
 
 // sharedFetch runs call's fetch, then lets its waiters go. fetchTimeout
@@ -506,12 +522,13 @@ func (w *RepoWriter) tree(h plumbing.Hash) (*object.Tree, error) {
 	return tree, nil
 }
 
-func (w *RepoWriter) snapshot(h plumbing.Hash) (Snapshot, error) {
+// snapshot returns the snapshot of commit h; fresh is what its Fresh says.
+func (w *RepoWriter) snapshot(h plumbing.Hash, fresh bool) (Snapshot, error) {
 	tree, err := w.tree(h)
 	if err != nil {
 		return nil, err
 	}
-	return treeSnapshot{rev: h.String(), tree: tree, mu: new(sync.Mutex)}, nil
+	return treeSnapshot{rev: h.String(), tree: tree, mu: new(sync.Mutex), fresh: fresh}, nil
 }
 
 // blobHash returns the hash of the file or directory at p, or the zero hash
@@ -531,12 +548,15 @@ func blobHash(tree *object.Tree, p string) plumbing.Hash {
 // object.Tree fills a lookup map on first use, so two reads of one snapshot
 // at once would race on it.
 type treeSnapshot struct {
-	rev  string
-	tree *object.Tree
-	mu   *sync.Mutex
+	rev   string
+	fresh bool
+	tree  *object.Tree
+	mu    *sync.Mutex
 }
 
 func (s treeSnapshot) Revision() string { return s.rev }
+
+func (s treeSnapshot) Fresh() bool { return s.fresh }
 
 func (s treeSnapshot) Read(p string) ([]byte, error) {
 	s.mu.Lock()
