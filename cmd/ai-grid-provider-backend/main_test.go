@@ -142,3 +142,29 @@ func TestNewGitWriterRefusesCredentialsInURL(t *testing.T) {
 		t.Fatal("newGitWriter() succeeded with credentials in the URL")
 	}
 }
+
+func TestNewRestConfigRaisesTheClientRateLimit(t *testing.T) {
+	kubeconfig := filepath.Join(t.TempDir(), "kubeconfig")
+	if err := os.WriteFile(kubeconfig, []byte(`apiVersion: v1
+kind: Config
+clusters:
+- name: hub
+  cluster: {server: "https://hub.example:6443"}
+users:
+- name: admin
+  user: {token: test}
+contexts:
+- name: hub
+  context: {cluster: hub, user: admin}
+current-context: hub
+`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	config, err := newRestConfig(kubeconfig)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if config.QPS != hubClientQPS || config.Burst != hubClientBurst {
+		t.Fatalf("QPS, Burst = %v, %d; want %v, %d", config.QPS, config.Burst, float32(hubClientQPS), hubClientBurst)
+	}
+}

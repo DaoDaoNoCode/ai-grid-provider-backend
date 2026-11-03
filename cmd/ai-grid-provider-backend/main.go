@@ -306,18 +306,32 @@ func gitReadMaxAge() (time.Duration, error) {
 	return d, nil
 }
 
+// The hub client's own rate limit. client-go's default, 5 requests a second
+// with bursts of 10, is meant for controllers; one model read here asks the
+// hub for several objects (the models' and the catalog's status Policies, the
+// clusters), so a page that opens a few reads at once waited on it: on the
+// demo hub in 2026-11, a Policy read sat 1.08 s in "client-side throttling".
+// The API server's priority and fairness still protects the hub.
+const (
+	hubClientQPS   = 50
+	hubClientBurst = 100
+)
+
 func newRestConfig(kubeconfig string) (*rest.Config, error) {
+	var config *rest.Config
+	var err error
 	if kubeconfig == "" {
-		config, err := rest.InClusterConfig()
+		config, err = rest.InClusterConfig()
 		if err != nil {
 			return nil, fmt.Errorf("load in-cluster Kubernetes config: %w", err)
 		}
-		return config, nil
+	} else {
+		config, err = clientcmd.BuildConfigFromFlags("", kubeconfig)
+		if err != nil {
+			return nil, fmt.Errorf("load kubeconfig: %w", err)
+		}
 	}
-	config, err := clientcmd.BuildConfigFromFlags("", kubeconfig)
-	if err != nil {
-		return nil, fmt.Errorf("load kubeconfig: %w", err)
-	}
+	config.QPS, config.Burst = hubClientQPS, hubClientBurst
 	return config, nil
 }
 
