@@ -632,6 +632,7 @@ like the console deployed there, for the console's `make dev`:
 oc login https://api.<hub>:6443 ...
 make run-hub              # gRPC/Connect 127.0.0.1:9090, REST 127.0.0.1:9092
 make run-hub KEYCLOAK=hub # also the deployed console's Keycloak (Organizations)
+make run-hub CATALOG=local # Models and Subscriptions in make run's local catalog
 ```
 
 It uses the current kubeconfig context as it is (`KUBECONFIG_PATH` picks
@@ -648,7 +649,10 @@ plain Git and namespace settings (`AI_GRID_GIT_URL`, `AI_GRID_GIT_BRANCH`,
 the Deployment labelled `app.kubernetes.io/name=ai-grid-provider-console`.
 Without exactly one such Deployment it keeps `make run`'s defaults. It never
 reads the Git token, so Models and Subscriptions read the console's catalog,
-and writes to it fail with the backend's error. `KEYCLOAK=hub` reads the console's Keycloak Secret into the
+and writes to it fail with the backend's error. `CATALOG=local` keeps
+`make run`'s local catalog (`DEV_CATALOG`) instead of the console's Git URL
+and branch: deploying a model then writes its files there, against the hub's
+real clusters, and the hub's catalog and clusters don't change. `KEYCLOAK=hub` reads the console's Keycloak Secret into the
 backend's environment only; without it Tenants use `make run`'s
 `KEYCLOAK_URL`. The API acts as you: adding or removing clusters, and with
 `KEYCLOAK=hub` organization changes, are real. Ctrl-C stops the API and the
