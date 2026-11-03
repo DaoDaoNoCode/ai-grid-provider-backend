@@ -242,8 +242,11 @@ var errPagingStalled = errors.New("keycloak returned a full page with no new ite
 // listAll reads every page of an Admin API list endpoint (first/max paging,
 // PaginationUtils.paginateQuery) and returns the items in the server's order.
 // endpoint may carry a query already; first and max are added to it. key is
-// an item's id: an item an earlier page returned is kept once, which covers
-// a page boundary shifted by a delete between two requests.
+// an item's id: an item an earlier page returned is kept once. Keycloak sorts
+// organizations by name and members by username, so an item created or
+// renamed to sort before the next page's first shifts the rest forward and
+// one comes back twice, which this drops. An item deleted before it shifts
+// them back and one is skipped, which no client of first/max paging can see.
 func listAll[T any](ctx context.Context, c *Client, endpoint, token, op string, key func(T) string) ([]T, error) {
 	separator := "?"
 	if strings.Contains(endpoint, "?") {
