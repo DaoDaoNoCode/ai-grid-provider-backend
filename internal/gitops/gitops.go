@@ -15,7 +15,8 @@ var (
 	ErrNotFound = errors.New("gitops: file not found")
 	// ErrConflict reports a Commit whose base is stale: a file the change
 	// touches or reads differs between the base revision and the branch head,
-	// or the push lost a race. RetryOnConflict reruns a write that got it.
+	// or the remote refused the push because its branch had moved past the
+	// head the commit was made on. RetryOnConflict reruns a write that got it.
 	ErrConflict = errors.New("gitops: a file in the change was modified since the base revision")
 )
 
@@ -41,15 +42,28 @@ type Snapshot interface {
 	// List returns the names of the files directly in dir, sorted. A missing
 	// directory has no files.
 	List(dir string) ([]string, error)
+	// Fresh reports whether the snapshot was the remote's head at some
+	// point after the call that returned it began: it came from a fetch
+	// that started then, or from a Writer that has no remote to lag behind.
+	// A snapshot Head serves from RepoConfig.ReadMaxAge's window is not.
+	Fresh() bool
 }
 
 // Writer reads and commits to one branch.
 type Writer interface {
-	// Head returns the snapshot at the branch head.
+	// Head returns the snapshot at the branch head. It may be a little
+	// behind the remote (RepoConfig.ReadMaxAge), never behind the Writer's
+	// own commits. Commit lands only on the remote's head either way.
 	Head(ctx context.Context) (Snapshot, error)
+	// FreshHead returns the snapshot at the remote's branch head as of the
+	// call, a Fresh one, whatever RepoConfig.ReadMaxAge is. It costs a
+	// fetch: a write uses it to make sure of a refusal it decided on a
+	// snapshot that wasn't fresh.
+	FreshHead(ctx context.Context) (Snapshot, error)
 	// Commit applies c on top of the branch head and returns the new revision.
 	// It fails with ErrConflict when a file c touches or reads changed since
-	// base, or when another commit reached the branch first, and with
+	// base, or when another commit reached the branch first, which includes
+	// one pushed since the head Commit built on was fetched, and with
 	// ErrNotFound when c deletes a file the head doesn't have. ErrConflict
 	// doesn't tell a change to the caller's object from one to a file it
 	// shares with other objects, such as an index: callers rerun the whole

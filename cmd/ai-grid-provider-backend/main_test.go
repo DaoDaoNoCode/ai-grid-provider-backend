@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/osac-project/ai-grid-provider-backend/internal/gitops"
 	"k8s.io/client-go/rest"
@@ -104,10 +105,66 @@ func TestNewGitWriterRefusesTokenFileWithoutURL(t *testing.T) {
 	}
 }
 
+func TestGitReadMaxAge(t *testing.T) {
+	for value, want := range map[string]time.Duration{
+		"":    defaultGitReadMaxAge,
+		"0":   0,
+		"30s": 30 * time.Second,
+		"1m":  time.Minute,
+	} {
+		t.Setenv("AI_GRID_GIT_READ_MAX_AGE", value)
+		if got, err := gitReadMaxAge(); err != nil || got != want {
+			t.Errorf("AI_GRID_GIT_READ_MAX_AGE=%q: %v, %v; want %v", value, got, err, want)
+		}
+	}
+	for _, value := range []string{"10", "soon", "-1s"} {
+		t.Setenv("AI_GRID_GIT_READ_MAX_AGE", value)
+		if got, err := gitReadMaxAge(); err == nil {
+			t.Errorf("AI_GRID_GIT_READ_MAX_AGE=%q = %v, want an error", value, got)
+		}
+	}
+}
+
+// A read max age that doesn't parse stops the process at startup.
+func TestNewGitWriterRefusesBadReadMaxAge(t *testing.T) {
+	t.Setenv("AI_GRID_GIT_URL", "https://example.com/catalog.git")
+	t.Setenv("AI_GRID_GIT_TOKEN_FILE", "")
+	t.Setenv("AI_GRID_GIT_READ_MAX_AGE", "soon")
+	if _, err := newGitWriter(); err == nil {
+		t.Fatal("newGitWriter() succeeded with AI_GRID_GIT_READ_MAX_AGE=soon")
+	}
+}
+
 // A URL with credentials is still refused at startup.
 func TestNewGitWriterRefusesCredentialsInURL(t *testing.T) {
 	t.Setenv("AI_GRID_GIT_URL", "https://user:token@example.com/catalog.git")
 	if _, err := newGitWriter(); err == nil {
 		t.Fatal("newGitWriter() succeeded with credentials in the URL")
+	}
+}
+
+func TestNewRestConfigRaisesTheClientRateLimit(t *testing.T) {
+	kubeconfig := filepath.Join(t.TempDir(), "kubeconfig")
+	if err := os.WriteFile(kubeconfig, []byte(`apiVersion: v1
+kind: Config
+clusters:
+- name: hub
+  cluster: {server: "https://hub.example:6443"}
+users:
+- name: admin
+  user: {token: test}
+contexts:
+- name: hub
+  context: {cluster: hub, user: admin}
+current-context: hub
+`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	config, err := newRestConfig(kubeconfig)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if config.QPS != hubClientQPS || config.Burst != hubClientBurst {
+		t.Fatalf("QPS, Burst = %v, %d; want %v, %d", config.QPS, config.Burst, float32(hubClientQPS), hubClientBurst)
 	}
 }

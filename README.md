@@ -164,6 +164,7 @@ status from the hub's ACM Policies ([Status](#status-from-the-spokes)).
 | `AI_GRID_GIT_URL` | Repository URL, without credentials. Without it the backend still starts: Models' and Subscriptions' list, get, create, update and delete answer `FailedPrecondition`, naming this setting, and `Models/ListPlacementClusters` and `Models/ListLocations` (which read the cluster) and the other APIs serve as usual. Setting `AI_GRID_GIT_TOKEN_FILE` without it is an error at startup. The backend clones it in the background and retries a failed clone, waiting up to a minute between attempts; until a clone succeeds, Models and Subscriptions answer `Unavailable` and the other APIs serve as usual. A `file://` URL or local path is served in-process, so the image needs no `git`. |
 | `AI_GRID_GIT_BRANCH` | Branch to commit to. Default `main`. It must have at least one commit. |
 | `AI_GRID_GIT_TOKEN_FILE` | File holding a GitHub personal access token with `contents: write` on that repository only, for example a mounted Secret. Sent as HTTPS basic auth, so `AI_GRID_GIT_URL` must be `https://` when it is set; never logged. |
+| `AI_GRID_GIT_READ_MAX_AGE` | How old the last fetch or push of the branch may be for a read to use its head, and for a write to commit on it without fetching, as a Go duration. Default `10s`; `0` fetches before every read and every write. A commit pushed by anyone else shows in reads within about this long (below); a value that doesn't parse, or a negative one, is an error at startup. |
 | `AI_GRID_MODELS_NAMESPACE` | Namespace of each model's `LLMInferenceService` on the inference spokes. Default `ai-grid-internal-models`. An override must name a namespace that's already enabled for grid routing on every inference spoke: labelled `grid.opendatahub.io/allowed: "true"`, allowed by the inference Gateway's `allowedRoutes`, and with NetworkPolicies that let the grid reach the model and its scheduler's metrics. The backend writes one NetworkPolicy per model that admits the grid namespace; the namespace and its other policies come from the environment. |
 | `AI_GRID_SUBSCRIPTION_NAMESPACE` | Namespace of the subscriptions, their policies and the models' catalog entries on the ingress spokes. Default `models-as-a-service`. |
 | `AI_GRID_POLICY_NAMESPACE` | Hub namespace of the ACM Policies that status is read from. Default `ai-grid-policies`. |
@@ -194,6 +195,10 @@ For both models and subscriptions:
   `resource_version` is checked the same way; zero skips the check. A deleted
   and re-created id starts again at version 1, so a client still holding
   version 1 of the old object can update or delete the new one.
+- A write's commit checks every file the write was decided on against the
+  branch head: the files it writes, the indexes it read and left as they
+  were, and the files its checks read. A commit conflicts when any of them
+  changed since the read.
 - A write whose commit conflicts, because another write reached the branch
   first, is made again from the start on the new head, up to 5 times in all,
   like client-go's `retry.RetryOnConflict`. Two writes to different objects
@@ -202,6 +207,31 @@ For both models and subscriptions:
   is `Aborted`, an id created meanwhile is `AlreadyExists`, and a write
   without a version applies to the latest object. Only a write that still
   conflicts on the 5th try answers `Aborted`.
+- Reads (`List`, `Get`, and the checks a write makes before it commits) come
+  from the backend's clone of the branch, fetched at most once every
+  `AI_GRID_GIT_READ_MAX_AGE` (default 10 seconds): a fetch can take seconds
+  even when nothing changed (from the demo hub, about 3 seconds from
+  GitHub). Reads that arrive while a fetch runs wait for that one fetch. The
+  backend's own writes show in the next read at once; a commit pushed by
+  anyone else, a hand edit or another replica, shows within about
+  `AI_GRID_GIT_READ_MAX_AGE`, plus the time one fetch takes. Until then
+  `List` and `Get` answer from the older state: an object created elsewhere
+  is missing (`Get` answers `NotFound`), one deleted elsewhere is still
+  there, and one changed elsewhere has its older version.
+- A write doesn't answer a refusal from such a state. When what its read
+  showed refuses it (`NotFound`, `AlreadyExists`, `Aborted` for a version,
+  or `FailedPrecondition`, such as a model a subscription names that isn't
+  there) and that read came from the window rather than a fetch, it fetches
+  and decides once more, and answers that. A refusal costs one fetch more
+  than before; a write that goes through costs none.
+- A write commits on the head its read saw, without fetching, while that
+  head is younger than `AI_GRID_GIT_READ_MAX_AGE`, and pushes. A stale read
+  still can't overwrite a newer commit, or undo a reset of the branch: the
+  push lands only while the branch is still at the commit's parent, so when
+  anyone else has pushed since, or the branch was reset to an older commit,
+  the push is refused, and the write is made again on a freshly fetched
+  head, as above. Otherwise, and always with `0`, the write fetches first
+  and checks its change against the fetched head.
 - The files belong to the backend. An update rewrites them from the stored
   object and the request, so a hand edit to a catalog file is lost on the
   next write to that object.

@@ -34,6 +34,9 @@ func TestBackgroundWriterRetriesTheClone(t *testing.T) {
 	if _, err := w.Head(ctx); !errors.Is(err, ErrNotReady) || strings.Contains(err.Error(), cloneErr.Error()) {
 		t.Fatalf("Head() before the clone error = %v, want ErrNotReady without the clone error", err)
 	}
+	if _, err := w.FreshHead(ctx); !errors.Is(err, ErrNotReady) {
+		t.Fatalf("FreshHead() before the clone error = %v, want ErrNotReady", err)
+	}
 	if _, err := w.Commit(ctx, "0", Change{Put: map[string][]byte{"b.yaml": []byte("b")}, Message: "add b"}); !errors.Is(err, ErrNotReady) {
 		t.Fatalf("Commit() before the clone error = %v, want ErrNotReady", err)
 	}
@@ -55,6 +58,13 @@ func TestBackgroundWriterRetriesTheClone(t *testing.T) {
 	}
 	if _, err := w.Commit(ctx, head.Revision(), Change{Put: map[string][]byte{"b.yaml": []byte("b")}, Message: "add b"}); err != nil {
 		t.Fatalf("Commit() error = %v", err)
+	}
+	fresh, err := w.FreshHead(ctx)
+	if err != nil {
+		t.Fatalf("FreshHead() after the clone error = %v", err)
+	}
+	if _, err := fresh.Read("b.yaml"); err != nil || !fresh.Fresh() {
+		t.Fatalf("FreshHead() after the commit: Read(b.yaml) error = %v, Fresh() = %v; want the commit, fresh", err, fresh.Fresh())
 	}
 }
 

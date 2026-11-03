@@ -290,10 +290,17 @@ func (s *SubscriptionsServer) gitCreate(ctx context.Context, object *aigridv1.Su
 	if _, err := qualifiedOwnerGroups(object.GetSpec()); err != nil {
 		return nil, err
 	}
-	head, err := s.writer.Head(ctx)
-	if err != nil {
-		return nil, subscriptionGitError("create", id, err)
-	}
+	var resp *aigridv1.SubscriptionsCreateResponse
+	err := decideOnHead(ctx, s.writer, func(err error) error { return subscriptionGitError("create", id, err) }, func(head gitops.Snapshot) (err error) {
+		resp, err = s.gitCreateOn(ctx, head, proto.CloneOf(object))
+		return err
+	})
+	return resp, err
+}
+
+// gitCreateOn decides and commits the create of object on head.
+func (s *SubscriptionsServer) gitCreateOn(ctx context.Context, head gitops.Snapshot, object *aigridv1.Subscription) (*aigridv1.SubscriptionsCreateResponse, error) {
+	id := subscriptionID(object)
 	if _, err := head.Read(subscriptionGitPath(id)); err == nil {
 		return nil, connect.Errorf(connect.CodeAlreadyExists, "Subscription %q already exists", id)
 	} else if !errors.Is(err, gitops.ErrNotFound) {
@@ -326,10 +333,18 @@ func (s *SubscriptionsServer) gitUpdate(ctx context.Context, req *aigridv1.Subsc
 	if err != nil {
 		return nil, err
 	}
-	head, err := s.writer.Head(ctx)
-	if err != nil {
-		return nil, subscriptionGitError("update", id, err)
-	}
+	var resp *aigridv1.SubscriptionsUpdateResponse
+	err = decideOnHead(ctx, s.writer, func(err error) error { return subscriptionGitError("update", id, err) }, func(head gitops.Snapshot) (err error) {
+		resp, err = s.gitUpdateOn(ctx, head, proto.CloneOf(object), version, paths)
+		return err
+	})
+	return resp, err
+}
+
+// gitUpdateOn decides and commits an update of object, at version (0 for
+// none), to the subscription as head has it.
+func (s *SubscriptionsServer) gitUpdateOn(ctx context.Context, head gitops.Snapshot, object *aigridv1.Subscription, version int32, paths subUpdatePaths) (*aigridv1.SubscriptionsUpdateResponse, error) {
+	id := subscriptionID(object)
 	current, err := readSubscriptionDoc(head, id)
 	if err != nil {
 		return nil, err
@@ -379,10 +394,14 @@ func (s *SubscriptionsServer) gitUpdate(ctx context.Context, req *aigridv1.Subsc
 // commit is made on the revision read, so a concurrent write to the file
 // makes it conflict, and Delete's rerun checks the version again.
 func (s *SubscriptionsServer) gitDelete(ctx context.Context, id string, version int32) error {
-	head, err := s.writer.Head(ctx)
-	if err != nil {
-		return subscriptionGitError("delete", id, err)
-	}
+	return decideOnHead(ctx, s.writer, func(err error) error { return subscriptionGitError("delete", id, err) }, func(head gitops.Snapshot) error {
+		return s.gitDeleteOn(ctx, head, id, version)
+	})
+}
+
+// gitDeleteOn decides and commits the delete of subscription id, at version
+// (0 for none), as head has it.
+func (s *SubscriptionsServer) gitDeleteOn(ctx context.Context, head gitops.Snapshot, id string, version int32) error {
 	current, err := readSubscriptionDoc(head, id)
 	if err != nil {
 		return err

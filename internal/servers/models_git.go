@@ -14,6 +14,7 @@ import (
 	aigridv1 "github.com/osac-project/ai-grid-provider-backend/gen/ai_grid/v1"
 	"github.com/osac-project/ai-grid-provider-backend/internal/gitops"
 	"github.com/osac-project/ai-grid-provider-backend/internal/names"
+	"google.golang.org/protobuf/proto"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"sigs.k8s.io/yaml"
 )
@@ -33,7 +34,9 @@ import (
 // when its last model goes, and Argo CD prunes instead of failing.
 //
 // The indexes are shared: writes to two different models at once both
-// rewrite the ingress index, so the second commit conflicts. Create, Update
+// rewrite the ingress index, so the second commit conflicts. A write that
+// reads an index and leaves it as it is has it in its read set, so a change
+// to it since the read conflicts as well. Create, Update
 // and Delete rerun the whole write on the new head (gitops.RetryOnConflict),
 // which succeeds unless the model itself changed in a way the caller's
 // version or checks refuse. Nothing before the commit writes anything:
@@ -118,19 +121,21 @@ func (s *ModelsServer) gitCreate(ctx context.Context, object *aigridv1.Model) (*
 	if err != nil {
 		return nil, err
 	}
-	head, err := s.writer.Head(ctx)
-	if err != nil {
-		return nil, modelGitError("create", id, err)
-	}
-	if _, err := head.Read(path.Join(modelDeploymentGitDir(id), "deployment.yaml")); err == nil {
-		return nil, connect.Errorf(connect.CodeAlreadyExists, "Model %q already exists", id)
-	} else if !errors.Is(err, gitops.ErrNotFound) {
-		return nil, modelGitError("create", id, err)
-	}
-	if err := s.checkPlacementClusters(ctx, clusters); err != nil {
-		return nil, err
-	}
-	return s.gitCommitModel(ctx, head, "create", object, 1, nil, clusters)
+	var created *aigridv1.Model
+	err = decideOnHead(ctx, s.writer, func(err error) error { return modelGitError("create", id, err) }, func(head gitops.Snapshot) error {
+		if _, err := head.Read(path.Join(modelDeploymentGitDir(id), "deployment.yaml")); err == nil {
+			return connect.Errorf(connect.CodeAlreadyExists, "Model %q already exists", id)
+		} else if !errors.Is(err, gitops.ErrNotFound) {
+			return modelGitError("create", id, err)
+		}
+		if err := s.checkPlacementClusters(ctx, clusters); err != nil {
+			return err
+		}
+		var err error
+		created, err = s.gitCommitModel(ctx, head, "create", proto.CloneOf(object), 1, nil, clusters)
+		return err
+	})
+	return created, err
 }
 
 func (s *ModelsServer) gitUpdate(ctx context.Context, req *aigridv1.ModelsUpdateRequest) (*aigridv1.Model, error) {
@@ -144,10 +149,18 @@ func (s *ModelsServer) gitUpdate(ctx context.Context, req *aigridv1.ModelsUpdate
 	if err != nil {
 		return nil, err
 	}
-	head, err := s.writer.Head(ctx)
-	if err != nil {
-		return nil, modelGitError("update", id, err)
-	}
+	var updated *aigridv1.Model
+	err = decideOnHead(ctx, s.writer, func(err error) error { return modelGitError("update", id, err) }, func(head gitops.Snapshot) (err error) {
+		updated, err = s.gitUpdateOn(ctx, head, proto.CloneOf(object), version, paths)
+		return err
+	})
+	return updated, err
+}
+
+// gitUpdateOn decides and commits an update of object, at version (0 for
+// none), to the model as head has it.
+func (s *ModelsServer) gitUpdateOn(ctx context.Context, head gitops.Snapshot, object *aigridv1.Model, version int32, paths modelUpdatePaths) (*aigridv1.Model, error) {
+	id := modelID(object)
 	current, err := s.readGitModel(head, id)
 	if err != nil {
 		return nil, err
@@ -192,12 +205,18 @@ func (s *ModelsServer) gitUpdate(ctx context.Context, req *aigridv1.ModelsUpdate
 // version must equal the model's, or the delete is Aborted. It is refused while
 // a subscription in the repository names the model, and the subscriptions
 // directory is in the commit's read set, so a subscription written since the
-// check makes the commit conflict, and Delete's rerun checks again.
+// check makes the commit conflict, and Delete's rerun checks again. So are the
+// model's two directories, whose listing decides which files go, and the
+// indexes it reads (putIndexChanges).
 func (s *ModelsServer) gitDelete(ctx context.Context, id string, version int32) error {
-	head, err := s.writer.Head(ctx)
-	if err != nil {
-		return modelGitError("delete", id, err)
-	}
+	return decideOnHead(ctx, s.writer, func(err error) error { return modelGitError("delete", id, err) }, func(head gitops.Snapshot) error {
+		return s.gitDeleteOn(ctx, head, id, version)
+	})
+}
+
+// gitDeleteOn decides and commits the delete of model id, at version (0 for
+// none), as head has it.
+func (s *ModelsServer) gitDeleteOn(ctx context.Context, head gitops.Snapshot, id string, version int32) error {
 	current, err := s.readGitModel(head, id)
 	if err != nil {
 		return err
@@ -218,8 +237,9 @@ func (s *ModelsServer) gitDelete(ctx context.Context, id string, version int32) 
 		for _, name := range names {
 			change.Delete = append(change.Delete, path.Join(dir, name))
 		}
+		change.Read = append(change.Read, dir)
 	}
-	if err := putIndexChanges(head, change.Put, id, current.clusters, nil, false); err != nil {
+	if err := putIndexChanges(head, &change, id, current.clusters, nil, false); err != nil {
 		return err
 	}
 	if _, err := s.writer.Commit(ctx, head.Revision(), change); err != nil {
@@ -246,7 +266,7 @@ func (s *ModelsServer) gitCommitModel(ctx context.Context, head gitops.Snapshot,
 	change.Put[path.Join(modelDeploymentGitDir(id), "kustomization.yaml")] = renderKustomization([]string{"deployment.yaml"})
 	change.Put[path.Join(modelCatalogGitDir(id), "model.yaml")] = catalog
 	change.Put[path.Join(modelCatalogGitDir(id), "kustomization.yaml")] = renderKustomization([]string{"model.yaml"})
-	if err := putIndexChanges(head, change.Put, id, from, to, true); err != nil {
+	if err := putIndexChanges(head, &change, id, from, to, true); err != nil {
 		return nil, err
 	}
 
@@ -664,34 +684,38 @@ func defaultRollout(r *aigridv1.ModelRollout) bool {
 	return r.GetMaxConcurrency() == "" && r.GetMaxFailures() == "" && r.GetProgressDeadline() == "" && r.GetMinSuccessTime() == ""
 }
 
-// putIndexChanges adds to put the index files that change when model id
+// putIndexChanges adds to change the index files that change when model id
 // moves from the clusters in from to those in to. With inIngress the model
-// is in the ingress index, without it the model leaves it.
-func putIndexChanges(head gitops.Snapshot, put map[string][]byte, id string, from, to []string, inIngress bool) error {
+// is in the ingress index, without it the model leaves it. Every index it
+// reads is decided on, so one it leaves as it is goes to change.Read: if
+// another write changes that index before the commit, the commit conflicts,
+// and the rerun decides again on the new head.
+func putIndexChanges(head gitops.Snapshot, change *gitops.Change, id string, from, to []string, inIngress bool) error {
 	deployment := "../../" + path.Join("models", id, "deployment")
 	for _, cluster := range from {
 		if !slices.Contains(to, cluster) {
-			if err := putIndexEntry(head, put, clusterGitIndex(cluster), deployment, false); err != nil {
+			if err := putIndexEntry(head, change, clusterGitIndex(cluster), deployment, false); err != nil {
 				return err
 			}
 		}
 	}
 	for _, cluster := range to {
-		if err := putIndexEntry(head, put, clusterGitIndex(cluster), deployment, true); err != nil {
+		if err := putIndexEntry(head, change, clusterGitIndex(cluster), deployment, true); err != nil {
 			return err
 		}
 	}
-	return putIndexEntry(head, put, ingressGitIndex, "../"+path.Join("models", id, "catalog"), inIngress)
+	return putIndexEntry(head, change, ingressGitIndex, "../"+path.Join("models", id, "catalog"), inIngress)
 }
 
-// putIndexEntry adds or removes one resource in a kustomization index, and
-// puts the file only when it changes.
-func putIndexEntry(head gitops.Snapshot, put map[string][]byte, index, resource string, present bool) error {
+// putIndexEntry adds or removes one resource in a kustomization index. It
+// puts the file when it changes, and otherwise adds it to change.Read.
+func putIndexEntry(head gitops.Snapshot, change *gitops.Change, index, resource string, present bool) error {
 	resources, err := readKustomizationResources(head, index)
 	if err != nil {
 		return err
 	}
 	if slices.Contains(resources, resource) == present {
+		change.Read = append(change.Read, index)
 		return nil
 	}
 	if present {
@@ -700,7 +724,7 @@ func putIndexEntry(head gitops.Snapshot, put map[string][]byte, index, resource 
 	} else {
 		resources = slices.DeleteFunc(resources, func(r string) bool { return r == resource })
 	}
-	put[index] = renderKustomization(resources)
+	change.Put[index] = renderKustomization(resources)
 	return nil
 }
 
