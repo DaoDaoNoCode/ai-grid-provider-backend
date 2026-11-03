@@ -33,8 +33,9 @@ func presetModel(id string, baseRefs ...string) *aigridv1.Model {
 // service's own spec (combineBaseRefsConfig in kserve
 // pkg/controller/v1alpha2/llmisvc/config_merge.go), and an empty image in the
 // service doesn't override theirs. So a model may leave the image empty, with
-// base_refs or without them: the default preset's image applies. The rule on
-// ModelSpec (buf.validate) must give the same answers.
+// base_refs or without them: the default preset's image applies. ModelSpec has
+// no buf.validate rule on the image, so protovalidate accepts both, and the
+// server alone refuses a blank image or one with a space or tab.
 func TestModelsGitImageFromPreset(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
