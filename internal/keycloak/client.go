@@ -230,7 +230,57 @@ func IsForbidden(err error) bool {
 	return errors.As(err, &apiErr) && (apiErr.StatusCode == http.StatusUnauthorized || apiErr.StatusCode == http.StatusForbidden)
 }
 
-// ListOrganizations lists Keycloak Organizations in the configured realm.
+// listPageSize is the max each Admin API list request asks for. A list reads
+// pages of this size until one comes back shorter.
+const listPageSize = 100
+
+// errPagingStalled is a list's error when a full page holds no item the
+// earlier pages didn't: the server is not honouring first, and asking for the
+// next page would return the same one forever.
+var errPagingStalled = errors.New("keycloak returned a full page with no new items")
+
+// listAll reads every page of an Admin API list endpoint (first/max paging,
+// PaginationUtils.paginateQuery) and returns the items in the server's order.
+// endpoint may carry a query already; first and max are added to it. key is
+// an item's id: an item an earlier page returned is kept once, which covers
+// a page boundary shifted by a delete between two requests.
+func listAll[T any](ctx context.Context, c *Client, endpoint, token, op string, key func(T) string) ([]T, error) {
+	separator := "?"
+	if strings.Contains(endpoint, "?") {
+		separator = "&"
+	}
+	all := make([]T, 0)
+	seen := map[string]struct{}{}
+	for first := 0; ; first += listPageSize {
+		if err := ctx.Err(); err != nil {
+			return nil, fmt.Errorf("%s: %w", op, err)
+		}
+		pageURL := endpoint + separator + "first=" + strconv.Itoa(first) + "&max=" + strconv.Itoa(listPageSize)
+		var page []T
+		if err := c.doJSON(ctx, http.MethodGet, pageURL, token, nil, &page, op); err != nil {
+			return nil, err
+		}
+		added := 0
+		for _, item := range page {
+			id := key(item)
+			if _, dup := seen[id]; dup {
+				continue
+			}
+			seen[id] = struct{}{}
+			all = append(all, item)
+			added++
+		}
+		if len(page) < listPageSize {
+			return all, nil
+		}
+		if added == 0 {
+			return nil, fmt.Errorf("%s at first=%d: %w", op, first, errPagingStalled)
+		}
+	}
+}
+
+// ListOrganizations lists every Keycloak Organization in the configured
+// realm, reading the Admin API's pages until a short one.
 func (c *Client) ListOrganizations(ctx context.Context) ([]Organization, error) {
 	token, err := c.token(ctx)
 	if err != nil {
@@ -238,12 +288,8 @@ func (c *Client) ListOrganizations(ctx context.Context) ([]Organization, error) 
 	}
 	// The full representation carries the attributes, where this backend
 	// keeps each tenant's version and creation time.
-	endpoint := c.orgsURL() + "?briefRepresentation=false&first=0&max=" + strconv.Itoa(100)
-	var organizations []Organization
-	if err := c.doJSON(ctx, http.MethodGet, endpoint, token, nil, &organizations, "list organizations"); err != nil {
-		return nil, err
-	}
-	return organizations, nil
+	return listAll(ctx, c, c.orgsURL()+"?briefRepresentation=false", token, "list organizations",
+		func(o Organization) string { return o.ID })
 }
 
 // GetOrganization returns one Keycloak Organization by id.
@@ -355,8 +401,8 @@ func (c *Client) DeleteOrganization(ctx context.Context, id string) error {
 	return c.doJSON(ctx, http.MethodDelete, c.orgURL(id), token, nil, nil, "delete organization")
 }
 
-// ListOrganizationMembers lists users that belong to a Keycloak Organization.
-// Uses first/max pagination against the Admin API (default first=0, max=100).
+// ListOrganizationMembers lists every user that belongs to a Keycloak
+// Organization, reading the Admin API's pages until a short one.
 func (c *Client) ListOrganizationMembers(ctx context.Context, orgID string) ([]OrganizationMember, error) {
 	if strings.TrimSpace(orgID) == "" {
 		return nil, fmt.Errorf("organization id is required")
@@ -365,12 +411,8 @@ func (c *Client) ListOrganizationMembers(ctx context.Context, orgID string) ([]O
 	if err != nil {
 		return nil, err
 	}
-	endpoint := c.orgMembersURL(orgID) + "?first=0&max=" + strconv.Itoa(100)
-	var members []OrganizationMember
-	if err := c.doJSON(ctx, http.MethodGet, endpoint, token, nil, &members, "list organization members"); err != nil {
-		return nil, err
-	}
-	return members, nil
+	return listAll(ctx, c, c.orgMembersURL(orgID), token, "list organization members",
+		func(m OrganizationMember) string { return m.ID })
 }
 
 // DomainNames returns the domain name strings for an organization.

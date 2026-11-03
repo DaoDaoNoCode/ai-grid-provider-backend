@@ -8,6 +8,7 @@ import (
 	"context"
 	"crypto/tls"
 	"errors"
+	"fmt"
 	"log/slog"
 	"maps"
 	"net"
@@ -350,6 +351,52 @@ func TestRealTenantsServerOnFakeKeycloak(t *testing.T) {
 	}
 	if _, err := tenants("wrong").List(context.Background(), &aigridv1.TenantsListRequest{}); err == nil {
 		t.Fatal("List() with a wrong password succeeded")
+	}
+}
+
+// TestRealTenantsServerListsEveryOrganization: a realm with more organizations
+// than one Admin API page lists all of them, and total counts all of them,
+// so a subscription's organization past the first page is still found.
+func TestRealTenantsServerListsEveryOrganization(t *testing.T) {
+	const count = 250
+	seed := make([]fakekeycloak.Organization, 0, count)
+	for i := range count {
+		seed = append(seed, fakekeycloak.Organization{
+			ID:   fmt.Sprintf("00000000-0000-4000-8000-%012d", i),
+			Name: fmt.Sprintf("org-%03d", i),
+		})
+	}
+	kc, err := fakekeycloak.New(fakekeycloak.Config{AdminRealm: "master", Realm: "ai-grid", Username: "admin", Password: "admin", Logger: slog.New(slog.DiscardHandler)}, seed)
+	if err != nil {
+		t.Fatalf("keycloak fake New() error = %v", err)
+	}
+	srv := httptest.NewServer(kc.Handler())
+	t.Cleanup(srv.Close)
+	s, err := servers.NewTenantsServer().SetLogger(slog.New(slog.DiscardHandler)).SetOrganizationClient(keycloak.New(keycloak.Config{
+		BaseURL: srv.URL, AdminRealm: "master", Realm: "ai-grid", Username: "admin", Password: "admin", HTTPClient: srv.Client(),
+	})).Build()
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+
+	list, err := s.List(context.Background(), &aigridv1.TenantsListRequest{})
+	if err != nil {
+		t.Fatalf("List() error = %v", err)
+	}
+	if list.GetTotal() != count || len(list.GetItems()) != count {
+		t.Fatalf("List() = total %d, %d items; want %d", list.GetTotal(), len(list.GetItems()), count)
+	}
+	if last := list.GetItems()[count-1].GetMetadata().GetName(); last != "org-249" {
+		t.Fatalf("last organization = %q, want org-249", last)
+	}
+
+	offset, limit := int32(240), int32(20)
+	tail, err := s.List(context.Background(), &aigridv1.TenantsListRequest{Offset: &offset, Limit: &limit})
+	if err != nil {
+		t.Fatalf("List(offset 240) error = %v", err)
+	}
+	if tail.GetTotal() != count || tail.GetSize() != 10 || tail.GetItems()[0].GetMetadata().GetName() != "org-240" {
+		t.Fatalf("List(offset 240) = total %d, size %d", tail.GetTotal(), tail.GetSize())
 	}
 }
 
