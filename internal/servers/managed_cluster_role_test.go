@@ -384,7 +384,7 @@ func TestUpdateClusterRoleMessages(t *testing.T) {
 	}
 	_, err = server.Update(ctx, labelsUpdate("site-a", roleLabels("ingress")))
 	assertConnectCode(t, err, connect.CodeFailedPrecondition)
-	assertConnectMessage(t, err, `cluster "site-a" cannot stop serving inference while 2 models are placed on it (model-a, model-b); move them to other clusters first`)
+	assertConnectMessage(t, err, `Cluster "site-a" has 2 models placed on it (model-a, model-b). Move them to other clusters before changing it to a role without inference.`)
 
 	placeModels(t, writer, map[string][]string{"m-1": {"site-c"}, "m-2": {"site-c"}, "m-3": {"site-c"}, "m-4": {"site-c"}, "m-5": {"site-c"}, "m-6": {"site-c"}, "m-7": {"site-c"}})
 	server, err = NewClustersServer().SetDynamicClient(newManagedClusterClient(gridCluster("site-c", "combined"), gridCluster("site-b", "ingress"))).SetCatalog(writer).Build()
@@ -393,7 +393,16 @@ func TestUpdateClusterRoleMessages(t *testing.T) {
 	}
 	_, err = server.Update(ctx, labelsUpdate("site-c", roleLabels("ingress")))
 	assertConnectCode(t, err, connect.CodeFailedPrecondition)
-	assertConnectMessage(t, err, `cluster "site-c" cannot stop serving inference while 7 models are placed on it (m-1, m-2, m-3, m-4, m-5 and 2 more); move them to other clusters first`)
+	assertConnectMessage(t, err, `Cluster "site-c" has 7 models placed on it (m-1, m-2, m-3, m-4, m-5 and 2 more). Move them to other clusters before changing it to a role without inference.`)
+
+	placeModels(t, writer, map[string][]string{"solo": {"site-d"}})
+	server, err = NewClustersServer().SetDynamicClient(newManagedClusterClient(gridCluster("site-d", "inference"), gridCluster("site-b", "ingress"))).SetCatalog(writer).Build()
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+	_, err = server.Update(ctx, labelsUpdate("site-d", roleLabels("ingress")))
+	assertConnectCode(t, err, connect.CodeFailedPrecondition)
+	assertConnectMessage(t, err, `Cluster "site-d" has 1 model placed on it (solo). Move it to another cluster before changing it to a role without inference.`)
 
 	server, err = NewClustersServer().SetDynamicClient(newManagedClusterClient(gridCluster("site-b", "ingress"), gridCluster("site-a", "inference"))).Build()
 	if err != nil {
@@ -401,7 +410,7 @@ func TestUpdateClusterRoleMessages(t *testing.T) {
 	}
 	_, err = server.Update(ctx, labelsUpdate("site-b", roleLabels("inference")))
 	assertConnectCode(t, err, connect.CodeFailedPrecondition)
-	assertConnectMessage(t, err, `cluster "site-b" is the last cluster in the grid that serves ingress, and users reach models through ingress clusters; give another cluster role ingress or combined before this one stops serving ingress`)
+	assertConnectMessage(t, err, `Cluster "site-b" is the only AI Grid cluster that serves ingress, and users reach models through ingress clusters. Give another cluster the ingress or combined role first.`)
 
 	_, err = server.Update(ctx, labelsUpdate("site-a", roleLabels("gateway")))
 	assertConnectCode(t, err, connect.CodeInvalidArgument)

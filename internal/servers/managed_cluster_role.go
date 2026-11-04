@@ -132,8 +132,9 @@ func (s *ClustersServer) checkOtherIngress(ctx context.Context, id string) error
 			return nil
 		}
 	}
+	// The console shows this message to provider admins as it is.
 	return connect.Errorf(connect.CodeFailedPrecondition,
-		"cluster %q is the last cluster in the grid that serves ingress, and users reach models through ingress clusters; give another cluster role %s or %s before this one stops serving ingress",
+		"Cluster %q is the only AI Grid cluster that serves ingress, and users reach models through ingress clusters. Give another cluster the %s or %s role first.",
 		id, roleIngress, roleCombined)
 }
 
@@ -172,13 +173,14 @@ func (s *ClustersServer) checkNoPlacedModels(ctx context.Context, id string) err
 	}
 	slices.Sort(ids)
 	ids = slices.Compact(ids)
-	placed, them := fmt.Sprintf("%d models are", len(ids)), "them"
+	// The console shows this message to provider admins as it is.
+	placed, move := fmt.Sprintf("%d models", len(ids)), "them to other clusters"
 	if len(ids) == 1 {
-		placed, them = "1 model is", "it"
+		placed, move = "1 model", "it to another cluster"
 	}
 	return connect.Errorf(connect.CodeFailedPrecondition,
-		"cluster %q cannot stop serving inference while %s placed on it (%s); move %s to other clusters first",
-		id, placed, nameModels(ids), them)
+		"Cluster %q has %s placed on it (%s). Move %s before changing it to a role without inference.",
+		id, placed, nameModels(ids), move)
 }
 
 // nameModels lists up to maxNamedModels ids and counts the rest.

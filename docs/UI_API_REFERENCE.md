@@ -341,8 +341,8 @@ Notes:
   refused.
 - Messages, for example:
   - `label "ai-grid/role" must be ingress, inference or combined, got "gateway"`
-  - `cluster "site-a" is the last cluster in the grid that serves ingress, and users reach models through ingress clusters; give another cluster role ingress or combined before this one stops serving ingress`
-  - `cluster "site-a" cannot stop serving inference while 2 models are placed on it (model-a, model-b); move them to other clusters first`
+  - `Cluster "site-a" is the only AI Grid cluster that serves ingress, and users reach models through ingress clusters. Give another cluster the ingress or combined role first.`
+  - `Cluster "site-a" has 2 models placed on it (model-a, model-b). Move them to other clusters before changing it to a role without inference.`
 
 **Enroll pattern (PoC-compatible intent):**
 
