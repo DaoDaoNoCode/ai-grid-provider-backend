@@ -844,6 +844,10 @@ func TestCreateTenant(t *testing.T) {
 		if store.idps["acme"].Config["useJwksUrl"] != "true" || store.idps["acme"].Config["jwksUrl"] == "" {
 			t.Fatalf("keycloak idp config = %+v, want jwksUrl and useJwksUrl", store.idps["acme"].Config)
 		}
+		// Brokered users' emails must read as verified, or the MaaS Portal's oauth2-proxy fails.
+		if !store.idps["acme"].TrustEmail {
+			t.Fatal("keycloak idp trustEmail = false, want true")
+		}
 		if store.mappers["acme"].Config["attribute.value"] != got.GetObject().GetId() {
 			t.Fatalf("mapper value = %q, want org id", store.mappers["acme"].Config["attribute.value"])
 		}

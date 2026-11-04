@@ -31,7 +31,7 @@ func TestCreateIdentityProvider(t *testing.T) {
 
 	client := testClient(server)
 	err := client.CreateIdentityProvider(context.Background(), IdentityProvider{
-		Alias: "acme", DisplayName: "Acme", ProviderID: "oidc", Enabled: true,
+		Alias: "acme", DisplayName: "Acme", ProviderID: "oidc", Enabled: true, TrustEmail: true,
 		Config: map[string]string{"clientId": "c", "clientSecret": "s"},
 	})
 	if err != nil {
@@ -40,7 +40,7 @@ func TestCreateIdentityProvider(t *testing.T) {
 	if gotMethod != http.MethodPost || !strings.HasSuffix(gotPath, "/identity-provider/instances") {
 		t.Fatalf("request = %s %s", gotMethod, gotPath)
 	}
-	if gotBody["alias"] != "acme" || gotBody["providerId"] != "oidc" {
+	if gotBody["alias"] != "acme" || gotBody["providerId"] != "oidc" || gotBody["trustEmail"] != true {
 		t.Fatalf("body = %#v", gotBody)
 	}
 }
