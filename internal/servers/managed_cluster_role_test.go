@@ -45,6 +45,34 @@ func placeModels(t *testing.T, writer gitops.Writer, placements map[string][]str
 	}
 }
 
+// newRoleCatalog is an in-memory catalog in which sim-model exists, so that
+// gitSampleSubscription can be created on it.
+func newRoleCatalog() *gitops.MemoryWriter {
+	return gitops.NewMemoryWriter(gitModelSeed("sim-model"))
+}
+
+// createSubscriptions commits one subscription per id to writer, a catalog
+// from newRoleCatalog, through the real Subscriptions server.
+func createSubscriptions(t *testing.T, writer gitops.Writer, ids ...string) {
+	t.Helper()
+	subscriptions := mustGitSubscriptionsServer(t, writer)
+	for _, id := range ids {
+		if _, err := subscriptions.Create(context.Background(), &aigridv1.SubscriptionsCreateRequest{Object: gitSampleSubscription(id)}); err != nil {
+			t.Fatalf("Create subscription %s: %v", id, err)
+		}
+	}
+}
+
+// removeLabels is the label set a removal from the grid sends: the cluster's
+// labels without ai-grid/enabled, its role kept.
+func removeLabels(role string) map[string]string {
+	labels := map[string]string{"location": "paris"}
+	if role != "" {
+		labels["ai-grid/role"] = role
+	}
+	return labels
+}
+
 // labelsUpdate is a labels-only Update of cluster id to labels, the whole
 // console set as the console sends it.
 func labelsUpdate(id string, labels map[string]string) *aigridv1.ClustersUpdateRequest {
@@ -59,17 +87,20 @@ func roleLabels(role string) map[string]string {
 }
 
 // Clusters/Update checks an ai-grid/role it writes, and refuses a role change
-// of a grid cluster that would leave a placed model without inference or the
-// grid without an ingress cluster. The catalog is the in-memory one; the
-// models are placed through the real Models server.
+// of a grid cluster, or its removal from the grid, that would revoke every
+// subscription's keys, leave the grid without an ingress cluster or leave a
+// placed model without its cluster. The catalog is the in-memory one; the
+// models and subscriptions are written through the real Models and
+// Subscriptions servers.
 func TestUpdateClusterRole(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
-		name     string
-		clusters []runtime.Object
-		models   map[string][]string // model id: the clusters it is placed on
-		request  *aigridv1.ClustersUpdateRequest
-		want     connect.Code // 0: the update succeeds and writes request's labels
+		name          string
+		clusters      []runtime.Object
+		models        map[string][]string // model id: the clusters it is placed on
+		subscriptions []string
+		request       *aigridv1.ClustersUpdateRequest
+		want          connect.Code // 0: the update succeeds and writes request's labels
 	}{
 		// The role's value.
 		{
@@ -216,29 +247,201 @@ func TestUpdateClusterRole(t *testing.T) {
 			want:    connect.CodeFailedPrecondition,
 		},
 
-		// No guard when the cluster isn't in the grid before or after.
+		// Refused: every subscription's keys would be revoked on all
+		// clusters. The same changes are allowed above without subscriptions.
 		{
-			name:     "joining the grid with a new role",
-			clusters: []runtime.Object{managedCluster("site-a", map[string]string{"ai-grid/role": "inference"}, true), gridCluster("site-b", "inference")},
-			models:   map[string][]string{"model-a": {"site-a"}},
-			request:  labelsUpdate("site-a", roleLabels("ingress")),
+			name:          "combined to inference with another ingress cluster and subscriptions",
+			clusters:      []runtime.Object{gridCluster("site-a", "combined"), gridCluster("site-b", "ingress")},
+			subscriptions: []string{"sub-a", "sub-b"},
+			request:       labelsUpdate("site-a", roleLabels("inference")),
+			want:          connect.CodeFailedPrecondition,
 		},
 		{
-			name:     "leaving the grid with a placed model",
+			name:          "ingress to inference with another ingress cluster and a subscription",
+			clusters:      []runtime.Object{gridCluster("site-a", "ingress"), gridCluster("site-b", "ingress")},
+			subscriptions: []string{"sub-a"},
+			request:       labelsUpdate("site-a", roleLabels("inference")),
+			want:          connect.CodeFailedPrecondition,
+		},
+		{
+			name:          "the role of an ingress cluster removed with a subscription",
+			clusters:      []runtime.Object{gridCluster("site-a", "ingress"), gridCluster("site-b", "combined")},
+			subscriptions: []string{"sub-a"},
+			request:       labelsUpdate("site-a", map[string]string{"ai-grid/enabled": "true", "location": "paris"}),
+			want:          connect.CodeFailedPrecondition,
+		},
+		{
+			name:          "removing an ingress cluster with another ingress cluster and a subscription",
+			clusters:      []runtime.Object{gridCluster("site-a", "ingress"), gridCluster("site-b", "ingress")},
+			subscriptions: []string{"sub-a"},
+			request:       labelsUpdate("site-a", removeLabels("ingress")),
+			want:          connect.CodeFailedPrecondition,
+		},
+		{
+			name:          "removing a combined cluster with another ingress cluster and a subscription",
+			clusters:      []runtime.Object{gridCluster("site-a", "combined"), gridCluster("site-b", "ingress")},
+			subscriptions: []string{"sub-a"},
+			request:       labelsUpdate("site-a", removeLabels("combined")),
+			want:          connect.CodeFailedPrecondition,
+		},
+		{
+			name:          "ai-grid/enabled false on an ingress cluster with a subscription",
+			clusters:      []runtime.Object{gridCluster("site-a", "ingress"), gridCluster("site-b", "ingress")},
+			subscriptions: []string{"sub-a"},
+			request:       labelsUpdate("site-a", map[string]string{"ai-grid/enabled": "false", "ai-grid/role": "ingress", "location": "paris"}),
+			want:          connect.CodeFailedPrecondition,
+		},
+		{
+			name:          "removing the grid's only cluster, an ingress one, with a subscription",
+			clusters:      []runtime.Object{gridCluster("site-a", "ingress")},
+			subscriptions: []string{"sub-a"},
+			request:       labelsUpdate("site-a", removeLabels("ingress")),
+			want:          connect.CodeFailedPrecondition,
+		},
+
+		// Subscriptions don't hold a cluster that keeps serving ingress, or
+		// never served it.
+		{
+			name:          "ingress to combined with a subscription",
+			clusters:      []runtime.Object{gridCluster("site-a", "ingress")},
+			subscriptions: []string{"sub-a"},
+			request:       labelsUpdate("site-a", roleLabels("combined")),
+		},
+		{
+			name:          "combined to ingress with a subscription",
+			clusters:      []runtime.Object{gridCluster("site-a", "combined")},
+			subscriptions: []string{"sub-a"},
+			request:       labelsUpdate("site-a", roleLabels("ingress")),
+		},
+		{
+			name:          "inference to ingress with a subscription",
+			clusters:      []runtime.Object{gridCluster("site-a", "inference"), gridCluster("site-b", "ingress")},
+			subscriptions: []string{"sub-a"},
+			request:       labelsUpdate("site-a", roleLabels("ingress")),
+		},
+		{
+			name:          "removing an inference cluster with a subscription",
+			clusters:      []runtime.Object{gridCluster("site-a", "inference"), gridCluster("site-b", "ingress")},
+			models:        map[string][]string{"model-b": {"site-b"}},
+			subscriptions: []string{"sub-a"},
+			request:       labelsUpdate("site-a", removeLabels("inference")),
+		},
+		{
+			name:          "other labels of an ingress cluster with a subscription",
+			clusters:      []runtime.Object{gridCluster("site-a", "ingress")},
+			subscriptions: []string{"sub-a"},
+			request:       labelsUpdate("site-a", map[string]string{"ai-grid/enabled": "true", "ai-grid/role": "ingress", "location": "berlin"}),
+		},
+
+		// Removing a cluster from the grid without subscriptions.
+		{
+			name:     "removing an ingress cluster with another ingress cluster",
+			clusters: []runtime.Object{gridCluster("site-a", "ingress"), gridCluster("site-b", "ingress")},
+			request:  labelsUpdate("site-a", removeLabels("ingress")),
+		},
+		{
+			name:     "removing a combined cluster with another ingress cluster and models elsewhere",
+			clusters: []runtime.Object{gridCluster("site-a", "combined"), gridCluster("site-b", "combined")},
+			models:   map[string][]string{"model-b": {"site-b"}},
+			request:  labelsUpdate("site-a", removeLabels("combined")),
+		},
+		{
+			name:     "removing the last ingress cluster while an inference cluster stays",
+			clusters: []runtime.Object{gridCluster("site-a", "ingress"), gridCluster("site-b", "inference")},
+			request:  labelsUpdate("site-a", removeLabels("ingress")),
+			want:     connect.CodeFailedPrecondition,
+		},
+		{
+			name:     "removing the last ingress cluster while a cluster without a role stays",
+			clusters: []runtime.Object{gridCluster("site-a", "combined"), gridCluster("site-b", "")},
+			request:  labelsUpdate("site-a", removeLabels("combined")),
+			want:     connect.CodeFailedPrecondition,
+		},
+		{
+			name: "removing the grid's last cluster, an ingress one",
+			clusters: []runtime.Object{
+				gridCluster("site-a", "ingress"),
+				managedCluster("site-b", map[string]string{"ai-grid/role": "inference"}, true),
+			},
+			request: labelsUpdate("site-a", removeLabels("ingress")),
+		},
+
+		// Removing a cluster from the grid with models placed on it, whatever
+		// its role.
+		{
+			name:     "removing an inference cluster with a placed model",
 			clusters: []runtime.Object{gridCluster("site-a", "inference"), gridCluster("site-b", "ingress")},
 			models:   map[string][]string{"model-a": {"site-a"}},
-			request:  labelsUpdate("site-a", map[string]string{"location": "paris"}),
+			request:  labelsUpdate("site-a", removeLabels("inference")),
+			want:     connect.CodeFailedPrecondition,
 		},
 		{
-			name:     "leaving the grid as the last ingress cluster",
-			clusters: []runtime.Object{gridCluster("site-a", "ingress"), gridCluster("site-b", "inference")},
-			request:  labelsUpdate("site-a", map[string]string{"ai-grid/role": "ingress", "location": "paris"}),
+			name:     "removing a combined cluster with a placed model",
+			clusters: []runtime.Object{gridCluster("site-a", "combined"), gridCluster("site-b", "ingress")},
+			models:   map[string][]string{"model-a": {"site-a", "site-c"}},
+			request:  labelsUpdate("site-a", removeLabels("combined")),
+			want:     connect.CodeFailedPrecondition,
 		},
 		{
-			name:     "a role change outside the grid",
-			clusters: []runtime.Object{managedCluster("site-a", map[string]string{"ai-grid/role": "combined"}, true)},
+			name:     "removing a cluster with a stored unknown role and a placed model",
+			clusters: []runtime.Object{gridCluster("site-a", "gateway"), gridCluster("site-b", "ingress")},
 			models:   map[string][]string{"model-a": {"site-a"}},
-			request:  labelsUpdate("site-a", map[string]string{"ai-grid/role": "ingress"}),
+			request:  labelsUpdate("site-a", removeLabels("gateway")),
+			want:     connect.CodeFailedPrecondition,
+		},
+		{
+			name:     "removing a cluster without a role but with a placed model",
+			clusters: []runtime.Object{gridCluster("site-a", ""), gridCluster("site-b", "ingress")},
+			models:   map[string][]string{"model-a": {"site-a"}},
+			request:  labelsUpdate("site-a", removeLabels("")),
+			want:     connect.CodeFailedPrecondition,
+		},
+		{
+			name:     "removing an inference cluster and setting role ingress with a placed model",
+			clusters: []runtime.Object{gridCluster("site-a", "inference"), gridCluster("site-b", "ingress")},
+			models:   map[string][]string{"model-a": {"site-a"}},
+			request:  labelsUpdate("site-a", removeLabels("ingress")),
+			want:     connect.CodeFailedPrecondition,
+		},
+		{
+			name:     "removing an inference cluster with models placed elsewhere only",
+			clusters: []runtime.Object{gridCluster("site-a", "inference"), gridCluster("site-b", "combined")},
+			models:   map[string][]string{"model-b": {"site-b"}},
+			request:  labelsUpdate("site-a", removeLabels("inference")),
+		},
+		{
+			name:     "removing a cluster without a role",
+			clusters: []runtime.Object{gridCluster("site-a", ""), gridCluster("site-b", "ingress")},
+			request:  labelsUpdate("site-a", removeLabels("")),
+		},
+
+		// No guard when the cluster isn't in the grid before the update.
+		{
+			name:          "joining the grid with a new role",
+			clusters:      []runtime.Object{managedCluster("site-a", map[string]string{"ai-grid/role": "inference"}, true), gridCluster("site-b", "inference")},
+			models:        map[string][]string{"model-a": {"site-a"}},
+			subscriptions: []string{"sub-a"},
+			request:       labelsUpdate("site-a", roleLabels("ingress")),
+		},
+		{
+			name:          "joining the grid as an ingress cluster with subscriptions",
+			clusters:      []runtime.Object{managedCluster("site-a", nil, true), gridCluster("site-b", "ingress")},
+			subscriptions: []string{"sub-a"},
+			request:       labelsUpdate("site-a", roleLabels("ingress")),
+		},
+		{
+			name:          "a role change outside the grid",
+			clusters:      []runtime.Object{managedCluster("site-a", map[string]string{"ai-grid/role": "combined"}, true)},
+			models:        map[string][]string{"model-a": {"site-a"}},
+			subscriptions: []string{"sub-a"},
+			request:       labelsUpdate("site-a", map[string]string{"ai-grid/role": "inference"}),
+		},
+		{
+			name:          "ai-grid/enabled false to absent on an ingress cluster",
+			clusters:      []runtime.Object{managedCluster("site-a", map[string]string{"ai-grid/enabled": "false", "ai-grid/role": "ingress"}, true)},
+			models:        map[string][]string{"model-a": {"site-a"}},
+			subscriptions: []string{"sub-a"},
+			request:       labelsUpdate("site-a", map[string]string{"ai-grid/role": "ingress"}),
 		},
 
 		// The role as it is, other fields changed.
@@ -263,8 +466,9 @@ func TestUpdateClusterRole(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			ctx := context.Background()
-			writer := gitops.NewMemoryWriter(nil)
+			writer := newRoleCatalog()
 			placeModels(t, writer, tc.models)
+			createSubscriptions(t, writer, tc.subscriptions...)
 			client := newManagedClusterClient(tc.clusters...)
 			server, err := NewClustersServer().SetDynamicClient(client).SetCatalog(writer).Build()
 			if err != nil {
@@ -415,37 +619,198 @@ func TestUpdateClusterRoleMessages(t *testing.T) {
 	_, err = server.Update(ctx, labelsUpdate("site-a", roleLabels("gateway")))
 	assertConnectCode(t, err, connect.CodeInvalidArgument)
 	assertConnectMessage(t, err, `label "ai-grid/role" must be ingress, inference or combined, got "gateway"`)
+
+	_, err = server.Update(ctx, labelsUpdate("site-b", removeLabels("ingress")))
+	assertConnectCode(t, err, connect.CodeFailedPrecondition)
+	assertConnectMessage(t, err, `Cluster "site-b" is the only AI Grid cluster that serves ingress, and users reach models through ingress clusters. Give another cluster the ingress or combined role first.`)
 }
 
-// The placed models come from the catalog as the remote has it now, not from
-// a snapshot the read window (AI_GRID_GIT_READ_MAX_AGE) serves: a model
-// another backend placed a moment ago, on a Git repository both use, refuses
-// the change. Without the catalog, and with a backend started without a
-// repository, there is nothing placed; a repository not cloned yet can't be
+// Removing a cluster from the grid, and the subscriptions, have their own
+// wording: what the admin is doing, how many there are, and what to do.
+func TestUpdateClusterRemoveAndSubscriptionMessages(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	writer := newRoleCatalog()
+	placeModels(t, writer, map[string][]string{"model-a": {"site-b"}, "model-b": {"site-b"}, "solo": {"site-c"}})
+	server, err := NewClustersServer().SetDynamicClient(newManagedClusterClient(
+		gridCluster("site-a", "ingress"), gridCluster("site-b", "inference"), gridCluster("site-c", "combined"), gridCluster("site-d", "ingress"),
+	)).SetCatalog(writer).Build()
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+
+	_, err = server.Update(ctx, labelsUpdate("site-b", removeLabels("inference")))
+	assertConnectCode(t, err, connect.CodeFailedPrecondition)
+	assertConnectMessage(t, err, `Cluster "site-b" has 2 models placed on it (model-a, model-b). Move them to other clusters before removing it from AI Grid.`)
+	_, err = server.Update(ctx, labelsUpdate("site-c", removeLabels("combined")))
+	assertConnectCode(t, err, connect.CodeFailedPrecondition)
+	assertConnectMessage(t, err, `Cluster "site-c" has 1 model placed on it (solo). Move it to another cluster before removing it from AI Grid.`)
+
+	createSubscriptions(t, writer, "sub-a")
+	_, err = server.Update(ctx, labelsUpdate("site-a", removeLabels("ingress")))
+	assertConnectCode(t, err, connect.CodeFailedPrecondition)
+	assertConnectMessage(t, err, `Cluster "site-a" serves ingress, and 1 subscription exists (sub-a). When a cluster stops serving ingress, the API keys of every subscription are revoked on all clusters. Delete the subscription first, or keep the cluster in AI Grid.`)
+
+	createSubscriptions(t, writer, "sub-b", "sub-c")
+	_, err = server.Update(ctx, labelsUpdate("site-a", roleLabels("inference")))
+	assertConnectCode(t, err, connect.CodeFailedPrecondition)
+	assertConnectMessage(t, err, `Cluster "site-a" serves ingress, and 3 subscriptions exist (sub-a, sub-b, sub-c). When a cluster stops serving ingress, the API keys of every subscription are revoked on all clusters. Delete the subscriptions first, or keep the ingress or combined role.`)
+
+	createSubscriptions(t, writer, "sub-d", "sub-e", "sub-f", "sub-g")
+	_, err = server.Update(ctx, labelsUpdate("site-d", roleLabels("inference")))
+	assertConnectCode(t, err, connect.CodeFailedPrecondition)
+	assertConnectMessage(t, err, `Cluster "site-d" serves ingress, and 7 subscriptions exist (sub-a, sub-b, sub-c, sub-d, sub-e and 2 more). When a cluster stops serving ingress, the API keys of every subscription are revoked on all clusters. Delete the subscriptions first, or keep the ingress or combined role.`)
+}
+
+// When several rules refuse one update, the first in checkRoleChange's
+// order answers: the subscriptions, then the last ingress cluster, then the
+// models placed on the cluster.
+func TestUpdateClusterRoleRuleOrder(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	const (
+		subscriptions = `Cluster "site-a" serves ingress, and 1 subscription exists (sub-a). When a cluster stops serving ingress, the API keys of every subscription are revoked on all clusters.`
+		lastIngress   = `Cluster "site-a" is the only AI Grid cluster that serves ingress, and users reach models through ingress clusters. Give another cluster the ingress or combined role first.`
+		models        = `Cluster "site-a" has 1 model placed on it (model-a). Move it to another cluster before`
+	)
+	noRole := map[string]string{"ai-grid/enabled": "true", "location": "paris"}
+	for _, tc := range []struct {
+		name          string
+		subscriptions bool
+		otherIngress  bool // site-b serves ingress; otherwise inference only
+		models        bool
+		request       *aigridv1.ClustersUpdateRequest
+		want          string // part of the message
+	}{
+		{"subscriptions before the last ingress cluster", true, false, false, labelsUpdate("site-a", roleLabels("inference")), subscriptions},
+		{"subscriptions before the placed models", true, true, true, labelsUpdate("site-a", noRole), subscriptions},
+		{"all three on a role change", true, false, true, labelsUpdate("site-a", noRole), subscriptions},
+		{"all three on removal", true, false, true, labelsUpdate("site-a", removeLabels("combined")), subscriptions},
+		{"the last ingress cluster before the placed models", false, false, true, labelsUpdate("site-a", noRole), lastIngress},
+		{"the last ingress cluster before the placed models on removal", false, false, true, labelsUpdate("site-a", removeLabels("combined")), lastIngress},
+		{"the placed models alone", false, false, true, labelsUpdate("site-a", roleLabels("ingress")), models},
+		{"the placed models alone on removal", false, true, true, labelsUpdate("site-a", removeLabels("combined")), models},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			writer := newRoleCatalog()
+			if tc.models {
+				placeModels(t, writer, map[string][]string{"model-a": {"site-a"}})
+			}
+			if tc.subscriptions {
+				createSubscriptions(t, writer, "sub-a")
+			}
+			// site-b keeps the grid from being empty without site-a.
+			other := "inference"
+			if tc.otherIngress {
+				other = "ingress"
+			}
+			server, err := NewClustersServer().SetDynamicClient(newManagedClusterClient(gridCluster("site-a", "combined"), gridCluster("site-b", other))).SetCatalog(writer).Build()
+			if err != nil {
+				t.Fatalf("Build() error = %v", err)
+			}
+			_, err = server.Update(ctx, tc.request)
+			assertConnectCode(t, err, connect.CodeFailedPrecondition)
+			assertConnectMessage(t, err, tc.want)
+		})
+	}
+}
+
+// Removing a cluster and adding it back with another role no longer gets a
+// placed model off it: the removal is refused like the role change, and the
+// cluster stays in the grid with its role.
+func TestUpdateClusterRemoveCannotSidestepPlacedModels(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	writer := newRoleCatalog()
+	placeModels(t, writer, map[string][]string{"model-a": {"site-a"}})
+	server, err := NewClustersServer().SetDynamicClient(newManagedClusterClient(gridCluster("site-a", "inference"), gridCluster("site-b", "ingress"))).SetCatalog(writer).Build()
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+	_, err = server.Update(ctx, labelsUpdate("site-a", roleLabels("ingress")))
+	assertConnectCode(t, err, connect.CodeFailedPrecondition)
+	_, err = server.Update(ctx, labelsUpdate("site-a", removeLabels("inference")))
+	assertConnectCode(t, err, connect.CodeFailedPrecondition)
+	got, err := server.Get(ctx, &aigridv1.ClustersGetRequest{Id: "site-a"})
+	if err != nil {
+		t.Fatalf("Get() error = %v", err)
+	}
+	if !got.GetObject().GetStatus().GetAiGridMember() {
+		t.Fatal("site-a left the grid; the removal must be refused")
+	}
+	if role := got.GetObject().GetMetadata().GetLabels()["ai-grid/role"]; role != "inference" {
+		t.Fatalf("role = %q, want inference", role)
+	}
+}
+
+// countingCatalog counts FreshHead calls.
+type countingCatalog struct {
+	gitops.Writer
+	fresh int
+}
+
+func (c *countingCatalog) FreshHead(ctx context.Context) (gitops.Snapshot, error) {
+	c.fresh++
+	return c.Writer.FreshHead(ctx)
+}
+
+// An update that needs both the subscriptions and the placed models reads
+// the catalog once: one fetch, one snapshot for both rules.
+func TestUpdateClusterRoleReadsTheCatalogOnce(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	catalog := &countingCatalog{Writer: newRoleCatalog()}
+	placeModels(t, catalog.Writer, map[string][]string{"model-b": {"site-b"}})
+	server, err := NewClustersServer().SetDynamicClient(newManagedClusterClient(gridCluster("site-a", "combined"), gridCluster("site-b", "combined"))).SetCatalog(catalog).Build()
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+	if _, err := server.Update(ctx, labelsUpdate("site-a", removeLabels("combined"))); err != nil {
+		t.Fatalf("Update() error = %v", err)
+	}
+	if catalog.fresh != 1 {
+		t.Fatalf("FreshHead calls = %d, want 1", catalog.fresh)
+	}
+}
+
+// The placed models and the subscriptions come from the catalog as the remote
+// has it now, not from a snapshot the read window (AI_GRID_GIT_READ_MAX_AGE)
+// serves: a model placed, or a subscription created, by another backend a
+// moment ago, on a Git repository both use, refuses the change. Without the
+// catalog, and with a backend started without a repository, there is
+// nothing placed and no subscription; a repository not cloned yet can't be
 // read, so the change is Unavailable rather than allowed unchecked.
+//
+// site-a serves inference, site-b and site-c ingress: removing site-b reads
+// only the subscriptions, and changing site-a's role or removing it only the
+// placed models.
 func TestUpdateClusterRoleReadsTheCatalog(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	clusters := func() *ClustersServerBuilder {
-		return NewClustersServer().SetDynamicClient(newManagedClusterClient(gridCluster("site-a", "inference"), gridCluster("site-b", "ingress")))
+		return NewClustersServer().SetDynamicClient(newManagedClusterClient(
+			gridCluster("site-a", "inference"), gridCluster("site-b", "ingress"), gridCluster("site-c", "ingress"),
+		))
+	}
+	// open clones url with a read window that serves the clone's head for
+	// the whole test.
+	open := func(t *testing.T, url string) *gitops.RepoWriter {
+		t.Helper()
+		w, err := gitops.NewRepoWriter(ctx, gitops.RepoConfig{
+			URL: url, Branch: "main", AuthorName: "ai-grid-provider-backend", AuthorEmail: "backend@example.com",
+			ReadMaxAge: time.Hour,
+		})
+		if err != nil {
+			t.Fatalf("NewRepoWriter() error = %v", err)
+		}
+		return w
 	}
 
 	t.Run("a model another writer placed within the read window", func(t *testing.T) {
 		t.Parallel()
 		url := "file://" + newBareCatalog(t)
-		open := func() *gitops.RepoWriter {
-			t.Helper()
-			w, err := gitops.NewRepoWriter(ctx, gitops.RepoConfig{
-				URL: url, Branch: "main", AuthorName: "ai-grid-provider-backend", AuthorEmail: "backend@example.com",
-				// Head serves the clone's snapshot for the whole test.
-				ReadMaxAge: time.Hour,
-			})
-			if err != nil {
-				t.Fatalf("NewRepoWriter() error = %v", err)
-			}
-			return w
-		}
-		ours, other := open(), open()
+		ours, other := open(t, url), open(t, url)
 		server, err := clusters().SetCatalog(ours).Build()
 		if err != nil {
 			t.Fatalf("Build() error = %v", err)
@@ -458,7 +823,44 @@ func TestUpdateClusterRoleReadsTheCatalog(t *testing.T) {
 		}
 		_, err = server.Update(ctx, labelsUpdate("site-a", roleLabels("ingress")))
 		assertConnectCode(t, err, connect.CodeFailedPrecondition)
+		_, err = server.Update(ctx, labelsUpdate("site-a", removeLabels("inference")))
+		assertConnectCode(t, err, connect.CodeFailedPrecondition)
 	})
+
+	t.Run("a subscription another writer created within the read window", func(t *testing.T) {
+		t.Parallel()
+		url := "file://" + newBareCatalog(t)
+		ours, other := open(t, url), open(t, url)
+		server, err := clusters().SetCatalog(ours).Build()
+		if err != nil {
+			t.Fatalf("Build() error = %v", err)
+		}
+		placeModels(t, other, map[string][]string{"sim-model": {"site-a"}})
+		createSubscriptions(t, other, "sub-a")
+		if head, err := ours.Head(ctx); err != nil {
+			t.Fatalf("Head() error = %v", err)
+		} else if files, err := head.List(subscriptionsGitDir); err != nil || len(files) != 0 {
+			t.Fatalf("Head() within the read window lists subscriptions %v (err = %v); the test needs a lagging head", files, err)
+		}
+		_, err = server.Update(ctx, labelsUpdate("site-b", removeLabels("ingress")))
+		assertConnectCode(t, err, connect.CodeFailedPrecondition)
+		_, err = server.Update(ctx, labelsUpdate("site-b", roleLabels("inference")))
+		assertConnectCode(t, err, connect.CodeFailedPrecondition)
+	})
+
+	// Nothing refuses: site-a changes role and leaves, and so does site-b.
+	unchecked := func(t *testing.T, server *ClustersServer) {
+		t.Helper()
+		for _, update := range []*aigridv1.ClustersUpdateRequest{
+			labelsUpdate("site-a", roleLabels("ingress")),
+			labelsUpdate("site-a", removeLabels("ingress")),
+			labelsUpdate("site-b", removeLabels("ingress")),
+		} {
+			if _, err := server.Update(ctx, update); err != nil {
+				t.Fatalf("Update(%s, %v) error = %v", update.GetObject().GetId(), update.GetObject().GetMetadata().GetLabels(), err)
+			}
+		}
+	}
 
 	t.Run("no catalog", func(t *testing.T) {
 		t.Parallel()
@@ -466,9 +868,7 @@ func TestUpdateClusterRoleReadsTheCatalog(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Build() error = %v", err)
 		}
-		if _, err := server.Update(ctx, labelsUpdate("site-a", roleLabels("ingress"))); err != nil {
-			t.Fatalf("Update() error = %v", err)
-		}
+		unchecked(t, server)
 	})
 
 	t.Run("no repository configured", func(t *testing.T) {
@@ -477,22 +877,44 @@ func TestUpdateClusterRoleReadsTheCatalog(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Build() error = %v", err)
 		}
-		if _, err := server.Update(ctx, labelsUpdate("site-a", roleLabels("ingress"))); err != nil {
-			t.Fatalf("Update() error = %v", err)
-		}
+		unchecked(t, server)
 	})
+
+	// Every update that reads the catalog is Unavailable, and the cluster
+	// keeps its labels.
+	unavailable := func(t *testing.T, server *ClustersServer) {
+		t.Helper()
+		before := map[string]map[string]string{}
+		for _, id := range []string{"site-a", "site-b"} {
+			got, err := server.Get(ctx, &aigridv1.ClustersGetRequest{Id: id})
+			if err != nil {
+				t.Fatalf("Get() error = %v", err)
+			}
+			before[id] = got.GetObject().GetMetadata().GetLabels()
+		}
+		for _, update := range []*aigridv1.ClustersUpdateRequest{
+			labelsUpdate("site-a", roleLabels("ingress")),
+			labelsUpdate("site-a", removeLabels("inference")),
+			labelsUpdate("site-b", removeLabels("ingress")),
+			labelsUpdate("site-b", roleLabels("inference")),
+		} {
+			id := update.GetObject().GetId()
+			_, err := server.Update(ctx, update)
+			assertConnectCode(t, err, connect.CodeUnavailable)
+			got, err := server.Get(ctx, &aigridv1.ClustersGetRequest{Id: id})
+			if err != nil {
+				t.Fatalf("Get() error = %v", err)
+			}
+			if labels := got.GetObject().GetMetadata().GetLabels(); !maps.Equal(labels, before[id]) {
+				t.Fatalf("%s labels after a refused Update = %v, want %v", id, labels, before[id])
+			}
+		}
+	}
 
 	t.Run("the remote can't be fetched after the clone", func(t *testing.T) {
 		t.Parallel()
 		bare := newBareCatalog(t)
-		writer, err := gitops.NewRepoWriter(ctx, gitops.RepoConfig{
-			URL: "file://" + bare, Branch: "main", AuthorName: "ai-grid-provider-backend", AuthorEmail: "backend@example.com",
-			// A read within the window would serve the clone's head.
-			ReadMaxAge: time.Hour,
-		})
-		if err != nil {
-			t.Fatalf("NewRepoWriter() error = %v", err)
-		}
+		writer := open(t, "file://"+bare)
 		if err := os.RemoveAll(bare); err != nil {
 			t.Fatal(err)
 		}
@@ -500,15 +922,7 @@ func TestUpdateClusterRoleReadsTheCatalog(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Build() error = %v", err)
 		}
-		_, err = server.Update(ctx, labelsUpdate("site-a", roleLabels("ingress")))
-		assertConnectCode(t, err, connect.CodeUnavailable)
-		got, err := server.Get(ctx, &aigridv1.ClustersGetRequest{Id: "site-a"})
-		if err != nil {
-			t.Fatalf("Get() error = %v", err)
-		}
-		if role := got.GetObject().GetMetadata().GetLabels()["ai-grid/role"]; role != "inference" {
-			t.Fatalf("role after a refused Update = %q, want inference", role)
-		}
+		unavailable(t, server)
 	})
 
 	t.Run("repository not cloned yet", func(t *testing.T) {
@@ -520,11 +934,13 @@ func TestUpdateClusterRoleReadsTheCatalog(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Build() error = %v", err)
 		}
-		_, err = server.Update(ctx, labelsUpdate("site-a", roleLabels("ingress")))
-		assertConnectCode(t, err, connect.CodeUnavailable)
-		// A change that doesn't stop the cluster serving inference doesn't
-		// read the catalog.
+		unavailable(t, server)
+		// A change that stops the cluster serving neither inference nor
+		// ingress doesn't read the catalog.
 		if _, err := server.Update(ctx, labelsUpdate("site-a", roleLabels("combined"))); err != nil {
+			t.Fatalf("Update() to combined error = %v", err)
+		}
+		if _, err := server.Update(ctx, labelsUpdate("site-b", roleLabels("combined"))); err != nil {
 			t.Fatalf("Update() to combined error = %v", err)
 		}
 	})

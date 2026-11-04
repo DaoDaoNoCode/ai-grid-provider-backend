@@ -927,8 +927,11 @@ func TestRealModelsPlacementClustersOnFakeHub(t *testing.T) {
 // catalog: a grid cluster's role changes as the console sends it (the labels
 // it read, the role changed), and the changes that would strand a placed
 // model or leave the grid without an ingress cluster are refused and leave
-// the hub as it was. The stock fixtures' grid clusters have no role, which
-// Update accepts.
+// the hub as it was. Removing a cluster from the grid is refused while a
+// subscription exists (an ingress cluster), while it is the last ingress
+// cluster of a grid that keeps members, and while models are placed on it,
+// with the real Subscriptions server's catalog too. The stock fixtures' grid
+// clusters have no role, which Update accepts.
 func TestRealClustersServerRoleChangesOnFakeHub(t *testing.T) {
 	h, srv := startHub(t)
 	cfg := &rest.Config{Host: srv.URL, BearerToken: h.ServiceAccountToken(), QPS: 1000, Burst: 1000}
@@ -1012,6 +1015,79 @@ func TestRealClustersServerRoleChangesOnFakeHub(t *testing.T) {
 	if got := role("site-paris-1"); got != "inference" {
 		t.Fatalf("site-paris-1 role = %q, want inference", got)
 	}
+
+	// Removing a cluster from the grid, as the console does: the labels it
+	// read without ai-grid/enabled. site-madrid-1 serves ingress,
+	// site-paris-1 inference with granite-3b, site-ashburn-1 nothing.
+	subscriptions, err := servers.NewSubscriptionsServer().SetLogger(slog.New(slog.DiscardHandler)).SetWriter(catalog).Build()
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+	if _, err := subscriptions.Create(ctx, &aigridv1.SubscriptionsCreateRequest{Object: &aigridv1.Subscription{
+		Id: "team-a",
+		Spec: &aigridv1.SubscriptionSpec{
+			Organization: &aigridv1.SubscriptionOrganization{Id: "org-a"},
+			Owner:        &aigridv1.SubscriptionOwner{Groups: []string{"team-a"}},
+			ModelRefs:    []*aigridv1.SubscriptionModelRef{{Name: "granite-3b", Unlimited: true}},
+		},
+	}}); err != nil {
+		t.Fatalf("Subscriptions Create() error = %v", err)
+	}
+	remove := func(id string) error {
+		t.Helper()
+		got, err := clusters.Get(ctx, &aigridv1.ClustersGetRequest{Id: id})
+		if err != nil {
+			t.Fatalf("Get(%s) error = %v", id, err)
+		}
+		labels := maps.Clone(got.GetObject().GetMetadata().GetLabels())
+		delete(labels, "ai-grid/enabled")
+		_, err = clusters.Update(ctx, &aigridv1.ClustersUpdateRequest{
+			Object:     &aigridv1.ManagedCluster{Id: id, Metadata: &aigridv1.Metadata{Labels: labels, Version: got.GetObject().GetMetadata().GetVersion()}},
+			UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"metadata.labels"}},
+			Lock:       true,
+		})
+		return err
+	}
+	member := func(id string) bool {
+		t.Helper()
+		got, err := clusters.Get(ctx, &aigridv1.ClustersGetRequest{Id: id})
+		if err != nil {
+			t.Fatalf("Get(%s) error = %v", id, err)
+		}
+		return got.GetObject().GetStatus().GetAiGridMember()
+	}
+	refused := func(id, why string) {
+		t.Helper()
+		if err := remove(id); connect.CodeOf(err) != connect.CodeFailedPrecondition {
+			t.Fatalf("removing %s (%s): error = %v, want FailedPrecondition", id, why, err)
+		}
+		if !member(id) {
+			t.Fatalf("%s left the grid on a refused removal", id)
+		}
+	}
+	removed := func(id string) {
+		t.Helper()
+		if err := remove(id); err != nil {
+			t.Fatalf("removing %s: %v", id, err)
+		}
+		if member(id) {
+			t.Fatalf("%s is still in the grid", id)
+		}
+	}
+
+	refused("site-madrid-1", "team-a's keys would be revoked")
+	refused("site-paris-1", "granite-3b is placed on it")
+	if _, err := subscriptions.Delete(ctx, &aigridv1.SubscriptionsDeleteRequest{Id: "team-a"}); err != nil {
+		t.Fatalf("Subscriptions Delete() error = %v", err)
+	}
+	refused("site-madrid-1", "the last ingress cluster, site-paris-1 stays")
+	removed("site-ashburn-1")
+	if _, err := models.Delete(ctx, &aigridv1.ModelsDeleteRequest{Id: "granite-3b"}); err != nil {
+		t.Fatalf("Models Delete() error = %v", err)
+	}
+	removed("site-paris-1")
+	// The grid's last cluster may leave.
+	removed("site-madrid-1")
 }
 
 // The backend's own ACM Search client against the fake Search: List and Get

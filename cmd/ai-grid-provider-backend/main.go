@@ -75,8 +75,8 @@ func main() {
 	// Models and Subscriptions are committed to the AI_GRID_GIT_URL
 	// repository, and Argo CD delivers them. The status of what came up on
 	// the spokes is read back from inform-only ACM Policies on this hub.
-	// Clusters reads it for the models placed on a cluster whose role
-	// changes.
+	// Clusters reads it for the subscriptions and the models placed on a
+	// cluster before its role changes or it leaves the grid.
 	writer, err := newGitWriter()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "git writer: %v\n", err)
