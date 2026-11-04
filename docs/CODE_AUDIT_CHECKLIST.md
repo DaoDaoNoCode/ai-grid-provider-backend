@@ -89,7 +89,7 @@ Source: [Security audit](4b55d055-730f-480a-8f6a-cc82d8e5cc7d)
 - [ ] Decision: TODO | DO | SKIP
 - Severity: Medium
 - Location: `deploy/openshift/rbac.yaml`; `internal/acmsearch/client.go`
-- Finding: SA may `get` Search’s all-managed-data virtual resource. Client code queries only GPU nodes and refuses redirects / caps body size, but RBAC is not narrowed.
+- Finding: SA may `get` Search’s all-managed-data virtual resource. Client code queries only GPU nodes and one cluster's MaaSSubscriptions, and refuses redirects / caps body size, but RBAC is not narrowed.
 - Recommendation: Prefer per-namespace/clusterview Search permissions when AuthZ is per-user; until then keep Search URL https-only and never follow redirects (already implemented).
 - Notes / user comments:
   -

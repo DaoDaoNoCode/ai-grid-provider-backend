@@ -14,6 +14,7 @@ import (
 	gitconfig "github.com/go-git/go-git/v5/config"
 	"github.com/go-git/go-git/v5/plumbing/object"
 	aigridv1 "github.com/osac-project/ai-grid-provider-backend/gen/ai_grid/v1"
+	"github.com/osac-project/ai-grid-provider-backend/internal/acmsearch"
 	"github.com/osac-project/ai-grid-provider-backend/internal/gitops"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -649,17 +650,20 @@ func TestUpdateClusterRemoveAndSubscriptionMessages(t *testing.T) {
 	createSubscriptions(t, writer, "sub-a")
 	_, err = server.Update(ctx, labelsUpdate("site-a", removeLabels("ingress")))
 	assertConnectCode(t, err, connect.CodeFailedPrecondition)
-	assertConnectMessage(t, err, `Cluster "site-a" serves ingress, and 1 subscription exists (sub-a). When a cluster stops serving ingress, the API keys of every subscription are revoked on all clusters. Delete the subscription first, or keep the cluster in AI Grid.`)
+	assertConnectMessage(t, err, `Cluster "site-a" serves ingress for 1 subscription (sub-a). Removing it from AI Grid deletes its copy of that subscription, and its API keys are then revoked on every cluster. Delete the subscription first, or keep the cluster in AI Grid.`)
 
 	createSubscriptions(t, writer, "sub-b", "sub-c")
 	_, err = server.Update(ctx, labelsUpdate("site-a", roleLabels("inference")))
 	assertConnectCode(t, err, connect.CodeFailedPrecondition)
-	assertConnectMessage(t, err, `Cluster "site-a" serves ingress, and 3 subscriptions exist (sub-a, sub-b, sub-c). When a cluster stops serving ingress, the API keys of every subscription are revoked on all clusters. Delete the subscriptions first, or keep the ingress or combined role.`)
+	assertConnectMessage(t, err, `Cluster "site-a" serves ingress for 3 subscriptions (sub-a, sub-b, sub-c). Changing its role turns MaaS off there, which can revoke every API key in AI Grid. Delete the subscriptions first, or keep the ingress or combined role.`)
 
 	createSubscriptions(t, writer, "sub-d", "sub-e", "sub-f", "sub-g")
 	_, err = server.Update(ctx, labelsUpdate("site-d", roleLabels("inference")))
 	assertConnectCode(t, err, connect.CodeFailedPrecondition)
-	assertConnectMessage(t, err, `Cluster "site-d" serves ingress, and 7 subscriptions exist (sub-a, sub-b, sub-c, sub-d, sub-e and 2 more). When a cluster stops serving ingress, the API keys of every subscription are revoked on all clusters. Delete the subscriptions first, or keep the ingress or combined role.`)
+	assertConnectMessage(t, err, `Cluster "site-d" serves ingress for 7 subscriptions (sub-a, sub-b, sub-c, sub-d, sub-e and 2 more). Changing its role turns MaaS off there, which can revoke every API key in AI Grid. Delete the subscriptions first, or keep the ingress or combined role.`)
+	_, err = server.Update(ctx, labelsUpdate("site-d", removeLabels("ingress")))
+	assertConnectCode(t, err, connect.CodeFailedPrecondition)
+	assertConnectMessage(t, err, `Cluster "site-d" serves ingress for 7 subscriptions (sub-a, sub-b, sub-c, sub-d, sub-e and 2 more). Removing it from AI Grid deletes its copies of those subscriptions, and their API keys are then revoked on every cluster. Delete the subscriptions first, or keep the cluster in AI Grid.`)
 }
 
 // When several rules refuse one update, the first in checkRoleChange's
@@ -669,7 +673,7 @@ func TestUpdateClusterRoleRuleOrder(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	const (
-		subscriptions = `Cluster "site-a" serves ingress, and 1 subscription exists (sub-a). When a cluster stops serving ingress, the API keys of every subscription are revoked on all clusters.`
+		subscriptions = `Cluster "site-a" serves ingress for 1 subscription (sub-a). `
 		lastIngress   = `Cluster "site-a" is the only AI Grid cluster that serves ingress, and users reach models through ingress clusters. Give another cluster the ingress or combined role first.`
 		models        = `Cluster "site-a" has 1 model placed on it (model-a). Move it to another cluster before`
 	)
@@ -1024,4 +1028,167 @@ func TestUpdateClusterRoleListDenied(t *testing.T) {
 	if role := got.GetObject().GetMetadata().GetLabels()["ai-grid/role"]; role != "ingress" {
 		t.Fatalf("role after a refused Update = %q, want ingress", role)
 	}
+}
+
+// fakeSubscriptionSearch is ACM Search as the role checks query it: the
+// MaaSSubscriptions it indexes on each cluster, or err for every query.
+type fakeSubscriptionSearch struct {
+	subscriptions map[string][]string // cluster: subscription names
+	err           error
+}
+
+func (f *fakeSubscriptionSearch) Resources(_ context.Context, kind, apigroup, cluster string) ([]acmsearch.Resource, error) {
+	if f.err != nil {
+		return nil, f.err
+	}
+	if kind != "MaaSSubscription" || apigroup != "maas.opendatahub.io" {
+		return nil, nil
+	}
+	var out []acmsearch.Resource
+	for _, name := range f.subscriptions[cluster] {
+		out = append(out, acmsearch.Resource{Cluster: cluster, Namespace: "models-as-a-service", Name: name})
+	}
+	return out, nil
+}
+
+// The subscriptions that hold a cluster in ingress are the MaaSSubscriptions
+// ACM Search indexes on it, not only the catalog's: the gitops repository
+// delivers each organization's own (tenant-<org-id>-users) to every ingress
+// cluster, and they lose their keys the same way. When Search has none on
+// the cluster, the catalog's still refuse (a subscription committed but not
+// delivered yet, or a cluster whose collector isn't reporting). Search
+// failing is Unavailable, as for a catalog that can't be read.
+func TestUpdateClusterRoleLiveSubscriptions(t *testing.T) {
+	t.Parallel()
+	const tenantSub = "tenant-42c3e46f-2477-44d7-a85b-d3b43f6b31fa-users"
+	for _, tc := range []struct {
+		name    string
+		search  *fakeSubscriptionSearch
+		catalog []string // subscriptions in the catalog
+		request *aigridv1.ClustersUpdateRequest
+		want    connect.Code
+		message string
+	}{
+		{
+			name:    "removal with an organization's subscription on the cluster and an empty catalog",
+			search:  &fakeSubscriptionSearch{subscriptions: map[string][]string{"site-a": {tenantSub}}},
+			request: labelsUpdate("site-a", removeLabels("combined")),
+			want:    connect.CodeFailedPrecondition,
+			message: `Cluster "site-a" serves ingress for 1 subscription (` + tenantSub + `). Removing it from AI Grid deletes its copy of that subscription, and its API keys are then revoked on every cluster. Delete the subscription first, or keep the cluster in AI Grid.`,
+		},
+		{
+			name:    "role change with an organization's subscription on the cluster and an empty catalog",
+			search:  &fakeSubscriptionSearch{subscriptions: map[string][]string{"site-a": {tenantSub}}},
+			request: labelsUpdate("site-a", roleLabels("inference")),
+			want:    connect.CodeFailedPrecondition,
+			message: `Cluster "site-a" serves ingress for 1 subscription (` + tenantSub + `). Changing its role turns MaaS off there, which can revoke every API key in AI Grid. Delete the subscription first, or keep the ingress or combined role.`,
+		},
+		{
+			name:    "the role removed with an organization's subscription on the cluster",
+			search:  &fakeSubscriptionSearch{subscriptions: map[string][]string{"site-a": {tenantSub}}},
+			request: labelsUpdate("site-a", map[string]string{"ai-grid/enabled": "true", "location": "paris"}),
+			want:    connect.CodeFailedPrecondition,
+			message: `Cluster "site-a" serves ingress for 1 subscription (` + tenantSub + `). Removing its role deletes its copy of that subscription, and its API keys are then revoked on every cluster. Delete the subscription first, or keep the ingress or combined role.`,
+		},
+		{
+			name: "Search's subscriptions are named, not the catalog's",
+			search: &fakeSubscriptionSearch{subscriptions: map[string][]string{
+				"site-a": {"sub-c", tenantSub, "sub-a", "sub-b", "sub-d", "sub-e"},
+			}},
+			catalog: []string{"sub-z"},
+			request: labelsUpdate("site-a", roleLabels("inference")),
+			want:    connect.CodeFailedPrecondition,
+			message: `Cluster "site-a" serves ingress for 6 subscriptions (sub-a, sub-b, sub-c, sub-d, sub-e and 1 more). Changing its role turns MaaS off there, which can revoke every API key in AI Grid. Delete the subscriptions first, or keep the ingress or combined role.`,
+		},
+		{
+			name:    "Search unavailable",
+			search:  &fakeSubscriptionSearch{err: &acmsearch.StatusError{Code: 503, Status: "503 Service Unavailable"}},
+			request: labelsUpdate("site-a", removeLabels("combined")),
+			want:    connect.CodeUnavailable,
+		},
+		{
+			name:    "Search unavailable on a role change, the catalog empty",
+			search:  &fakeSubscriptionSearch{err: errors.New("dial tcp: connection refused")},
+			request: labelsUpdate("site-a", roleLabels("inference")),
+			want:    connect.CodeUnavailable,
+		},
+		{
+			name:    "Search has none, the catalog has one",
+			search:  &fakeSubscriptionSearch{},
+			catalog: []string{"sub-a"},
+			request: labelsUpdate("site-a", removeLabels("combined")),
+			want:    connect.CodeFailedPrecondition,
+			message: `Cluster "site-a" serves ingress for 1 subscription (sub-a). Removing it from AI Grid deletes its copy of that subscription, and its API keys are then revoked on every cluster. Delete the subscription first, or keep the cluster in AI Grid.`,
+		},
+		{
+			name:    "subscriptions on another cluster only",
+			search:  &fakeSubscriptionSearch{subscriptions: map[string][]string{"site-b": {tenantSub}}},
+			request: labelsUpdate("site-a", roleLabels("inference")),
+		},
+		{
+			name:    "no subscription anywhere, removal",
+			search:  &fakeSubscriptionSearch{},
+			request: labelsUpdate("site-a", removeLabels("combined")),
+		},
+		{
+			name:    "no subscription anywhere, role change",
+			search:  &fakeSubscriptionSearch{},
+			request: labelsUpdate("site-a", roleLabels("inference")),
+		},
+		{
+			name:    "Search isn't asked when the cluster keeps ingress",
+			search:  &fakeSubscriptionSearch{err: errors.New("must not be called")},
+			request: labelsUpdate("site-a", roleLabels("ingress")),
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			ctx := context.Background()
+			writer := newRoleCatalog()
+			createSubscriptions(t, writer, tc.catalog...)
+			// site-b serves ingress, so neither the last ingress rule nor
+			// the grid's last member applies.
+			server, err := NewClustersServer().
+				SetDynamicClient(newManagedClusterClient(gridCluster("site-a", "combined"), gridCluster("site-b", "combined"))).
+				SetCatalog(writer).SetSubscriptionSearch(tc.search).Build()
+			if err != nil {
+				t.Fatalf("Build() error = %v", err)
+			}
+			got, err := server.Update(ctx, tc.request)
+			if tc.want == 0 {
+				if err != nil {
+					t.Fatalf("Update() error = %v", err)
+				}
+				if labels := tc.request.GetObject().GetMetadata().GetLabels(); !maps.Equal(got.GetObject().GetMetadata().GetLabels(), labels) {
+					t.Fatalf("labels = %v, want %v", got.GetObject().GetMetadata().GetLabels(), labels)
+				}
+				return
+			}
+			assertConnectCode(t, err, tc.want)
+			if tc.message != "" {
+				assertConnectMessage(t, err, tc.message)
+			}
+			after, err := server.Get(ctx, &aigridv1.ClustersGetRequest{Id: "site-a"})
+			if err != nil {
+				t.Fatalf("Get() error = %v", err)
+			}
+			if labels := after.GetObject().GetMetadata().GetLabels(); !maps.Equal(labels, roleLabels("combined")) {
+				t.Fatalf("labels after a refused Update = %v, want %v", labels, roleLabels("combined"))
+			}
+		})
+	}
+}
+
+// Without a catalog (a backend started without AI_GRID_GIT_URL), Search's
+// subscriptions still refuse: they don't come from the catalog.
+func TestUpdateClusterRoleLiveSubscriptionsWithoutCatalog(t *testing.T) {
+	t.Parallel()
+	server, err := NewClustersServer().
+		SetDynamicClient(newManagedClusterClient(gridCluster("site-a", "ingress"), gridCluster("site-b", "ingress"))).
+		SetSubscriptionSearch(&fakeSubscriptionSearch{subscriptions: map[string][]string{"site-a": {"tenant-org-users"}}}).Build()
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+	_, err = server.Update(context.Background(), labelsUpdate("site-a", roleLabels("inference")))
+	assertConnectCode(t, err, connect.CodeFailedPrecondition)
 }

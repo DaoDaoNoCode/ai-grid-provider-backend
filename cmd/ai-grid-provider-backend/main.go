@@ -40,7 +40,7 @@ func main() {
 	httpAddress := flag.String("http-listen-address", ":8081", "REST gateway and Swagger UI listen address")
 	kubeconfig := flag.String("kubeconfig", "", "path to kubeconfig; empty uses in-cluster service-account credentials")
 	var search searchSettings
-	flag.StringVar(&search.url, "search-api-url", acmsearch.DefaultURL, "ACM Search GraphQL endpoint, https only; \"off\" turns cluster GPUs off (a hub without Search, such as Kind)")
+	flag.StringVar(&search.url, "search-api-url", acmsearch.DefaultURL, "ACM Search GraphQL endpoint, https only; \"off\" turns Search off (a hub without it, such as Kind): no cluster GPUs, and only the catalog's subscriptions hold a cluster in ingress")
 	flag.StringVar(&search.caFile, "search-ca-file", "", "CA of ACM Search's serving certificate; empty uses the pod's service CA when present, else the system roots")
 	flag.BoolVar(&search.insecureSkipVerify, "search-insecure-skip-verify", false, "skip ACM Search's certificate check; only for a port-forward, so refused unless --search-api-url is a loopback address")
 	flag.Parse()
@@ -66,10 +66,16 @@ func main() {
 		fmt.Fprintf(os.Stderr, "create Kubernetes core client: %v\n", err)
 		os.Exit(1)
 	}
-	gpuInventory, err := newGPUInventory(restConfig, search)
+	searchClient, err := newSearchClient(restConfig, search)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "ACM Search client: %v\n", err)
 		os.Exit(1)
+	}
+	// A nil inventory is a valid one (no GPUs); a nil client must not reach
+	// SetSubscriptionSearch, where it would be a non-nil interface.
+	var gpuInventory *servers.GPUInventory
+	if searchClient != nil {
+		gpuInventory = servers.NewGPUInventory(searchClient, servers.DefaultGPUInventoryTTL, slog.Default())
 	}
 
 	logger := slog.Default()
@@ -88,13 +94,16 @@ func main() {
 		fmt.Fprintf(os.Stderr, "git writer: %v\n", err)
 		os.Exit(1)
 	}
-	clustersServer, err := servers.NewClustersServer().
+	clustersBuilder := servers.NewClustersServer().
 		SetLogger(logger).
 		SetCatalog(writer).
 		SetDynamicClient(kubeClient).
 		SetReadyPolicy(getEnv("AI_GRID_READY_POLICY", servers.DefaultReadyPolicy)).
-		SetGPUInventory(gpuInventory).
-		Build()
+		SetGPUInventory(gpuInventory)
+	if searchClient != nil {
+		clustersBuilder.SetSubscriptionSearch(searchClient)
+	}
+	clustersServer, err := clustersBuilder.Build()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "build Clusters server: %v\n", err)
 		os.Exit(1)
@@ -355,7 +364,7 @@ func newRestConfig(kubeconfig string) (*rest.Config, error) {
 // Search API's serving certificate, in every pod.
 const serviceCAFile = "/var/run/secrets/kubernetes.io/serviceaccount/service-ca.crt"
 
-// searchSettings are the ACM Search flags newGPUInventory reads.
+// searchSettings are the ACM Search flags newSearchClient reads.
 type searchSettings struct {
 	url                string
 	caFile             string
@@ -371,27 +380,31 @@ func isLoopback(host string) bool {
 	return ip != nil && ip.IsLoopback()
 }
 
-// newGPUInventory builds the ACM Search client the Clusters API reads GPUs
-// from. It calls Search with the backend's own credential, the one the
+// newSearchClient builds the ACM Search client the Clusters API reads GPUs
+// from, and the MaaSSubscriptions on a cluster before it stops serving
+// ingress. It calls Search with the backend's own credential, the one the
 // Kubernetes client uses (the ServiceAccount's token in a pod, re-read from
 // its file when it rotates; out of one, the kubeconfig's token, token file,
 // exec plugin or auth provider, through client-go's own wrappers). Search
 // authenticates a bearer token, so a kubeconfig with only a client
-// certificate leaves Search calls anonymous: clusters then carry no GPUs,
-// and a warning says why.
+// certificate leaves Search calls anonymous: clusters then carry no GPUs, a
+// change that takes a cluster out of ingress is Unavailable, and a warning
+// says why.
 //
 //   - --search-api-url: the GraphQL endpoint (acmsearch.DefaultURL), https
-//     only; "off" turns GPUs off, for a hub without ACM Search such as Kind.
+//     only; "off" turns Search off, for a hub without it such as Kind:
+//     clusters carry no GPUs, and only the catalog's subscriptions hold a
+//     cluster in ingress.
 //   - --search-ca-file: the CA of Search's serving certificate; the service CA
 //     when the file exists, else the system roots.
 //   - --search-insecure-skip-verify: no certificate check, for a local run
 //     against a port-forwarded Search only, so refused unless
 //     --search-api-url is a loopback address: without the check, whoever
 //     answers at any other address would receive the credential.
-func newGPUInventory(config *rest.Config, s searchSettings) (*servers.GPUInventory, error) {
+func newSearchClient(config *rest.Config, s searchSettings) (*acmsearch.Client, error) {
 	url := s.url
 	if url == "off" {
-		slog.Info("cluster GPUs off: --search-api-url=off")
+		slog.Info("ACM Search off (--search-api-url=off): clusters carry no GPUs, and only the catalog's subscriptions hold a cluster in ingress")
 		return nil, nil
 	}
 	// The credential goes with every query, so never over plain HTTP.
@@ -435,13 +448,12 @@ func newGPUInventory(config *rest.Config, s searchSettings) (*servers.GPUInvento
 		return nil, fmt.Errorf("search credential: %w", err)
 	}
 	if !authConfig.HasTokenAuth() && !authConfig.HasBasicAuth() && authConfig.WrapTransport == nil {
-		slog.Warn("no bearer credential for ACM Search: its queries are anonymous, so clusters carry no GPUs; use a kubeconfig with a token, or the in-cluster ServiceAccount")
+		slog.Warn("no bearer credential for ACM Search: its queries are anonymous, so clusters carry no GPUs and a change that takes a cluster out of ingress is Unavailable; use a kubeconfig with a token, or the in-cluster ServiceAccount")
 	}
 	rt, err := transport.HTTPWrappersForConfig(authConfig, base)
 	if err != nil {
 		return nil, fmt.Errorf("search credential: %w", err)
 	}
-	client := acmsearch.New(url, &http.Client{Transport: rt, Timeout: 15 * time.Second})
-	slog.Info("cluster GPUs from ACM Search", "url", url)
-	return servers.NewGPUInventory(client, servers.DefaultGPUInventoryTTL, slog.Default()), nil
+	slog.Info("cluster GPUs and subscriptions from ACM Search", "url", url)
+	return acmsearch.New(url, &http.Client{Transport: rt, Timeout: 15 * time.Second}), nil
 }

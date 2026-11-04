@@ -942,8 +942,10 @@ func TestRealModelsPlacementClustersOnFakeHub(t *testing.T) {
 // the hub as it was. Removing a cluster from the grid is refused while a
 // subscription exists (an ingress cluster), while it is the last ingress
 // cluster of a grid that keeps members, and while models are placed on it,
-// with the real Subscriptions server's catalog too. The stock fixtures' grid
-// clusters have no role, which Update accepts.
+// with the real Subscriptions server's catalog too. The Clusters server asks
+// the fake Search, through the backend's own client, for the MaaSSubscriptions
+// on the cluster; it indexes none, so the catalog's subscriptions decide. The
+// stock fixtures' grid clusters have no role, which Update accepts.
 func TestRealClustersServerRoleChangesOnFakeHub(t *testing.T) {
 	h, srv := startHub(t)
 	cfg := &rest.Config{Host: srv.URL, BearerToken: h.ServiceAccountToken(), QPS: 1000, Burst: 1000}
@@ -953,7 +955,13 @@ func TestRealClustersServerRoleChangesOnFakeHub(t *testing.T) {
 	}
 	ctx := context.Background()
 	catalog := gitops.NewMemoryWriter(nil)
-	clusters, err := servers.NewClustersServer().SetLogger(slog.New(slog.DiscardHandler)).SetDynamicClient(client).SetCatalog(catalog).Build()
+	search := acmsearch.New(srv.URL+hub.SearchPath, &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		r = r.Clone(r.Context())
+		r.Header.Set("Authorization", "Bearer "+h.ServiceAccountToken())
+		return http.DefaultTransport.RoundTrip(r)
+	})})
+	clusters, err := servers.NewClustersServer().SetLogger(slog.New(slog.DiscardHandler)).SetDynamicClient(client).SetCatalog(catalog).
+		SetSubscriptionSearch(search).Build()
 	if err != nil {
 		t.Fatalf("Build() error = %v", err)
 	}

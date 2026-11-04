@@ -1155,22 +1155,30 @@ as its own deadline. The backend keeps only the GPU labels it reads from each
 node, and refuses an answer larger than 16 MiB. It calls Search with its
 own credential: the ServiceAccount token in a pod, the kubeconfig's token, exec
 plugin or auth provider out of one. A kubeconfig with only a client certificate
-leaves Search calls anonymous, so clusters carry no `gpus` (the backend warns at
+leaves Search calls anonymous, so clusters carry no `gpus` and a change that
+takes a cluster out of ingress is `Unavailable` (the backend warns at
 startup). Settings:
 
 | Variable | Default | Meaning |
 | --- | --- | --- |
-| `--search-api-url` | `https://search-search-api.open-cluster-management.svc:4010/searchapi/graphql` | Search's GraphQL endpoint, https only; `off` turns GPUs off (the Kind deployment does). Redirects are never followed, so the credential can't be sent elsewhere |
+| `--search-api-url` | `https://search-search-api.open-cluster-management.svc:4010/searchapi/graphql` | Search's GraphQL endpoint, https only; `off` turns Search off (the Kind deployment does): no GPUs, and only the catalog's subscriptions hold a cluster in ingress. Redirects are never followed, so the credential can't be sent elsewhere |
 | `--search-ca-file` | the pod's service CA (`/var/run/secrets/kubernetes.io/serviceaccount/service-ca.crt`), else the system roots | CA of Search's serving certificate |
 | `--search-insecure-skip-verify` | off | Skips the certificate check; only for a local run against a port-forwarded Search, so the backend refuses to start with it unless `--search-api-url` is a loopback address (`127.0.0.1`, `::1` or `localhost`) |
 
 The ClusterRole grants `get` on `searches/allManagedData`
 (`search.open-cluster-management.io`), which Search reads as "may see every
-managed cluster's resources": broader than the GPU nodes the backend asks for
-(see the comment in `deploy/openshift/rbac.yaml`). When Search is missing, slow or refuses the
+managed cluster's resources": broader than the GPU nodes and the
+MaaSSubscriptions the backend asks for (see the comment in
+`deploy/openshift/rbac.yaml`). When Search is missing, slow or refuses the
 token, the backend keeps serving the last answer for up to five minutes, then
 clusters carry no `gpus`; the call still succeeds, and the backend logs a
 warning once per minute.
+
+Clusters `Update` also asks Search for the MaaSSubscriptions on a cluster
+before the cluster stops serving ingress, by a role change or by leaving the
+grid ([docs/UI_API_REFERENCE.md](docs/UI_API_REFERENCE.md), "Roles"). That
+query isn't cached, and when it fails the update is refused with
+`Unavailable`: unlike a missing GPU, a missed subscription can cost API keys.
 
 Locally against a hub (`make run`), port-forward Search and point the backend at it:
 

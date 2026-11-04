@@ -133,7 +133,8 @@ spec:
         - name: ai-grid-provider-backend
           image: localhost/ai-grid-provider-backend:dev
           imagePullPolicy: IfNotPresent
-          # Kind runs no ACM Search, so clusters carry no GPUs (status.gpus).
+          # Kind runs no ACM Search, so clusters carry no GPUs (status.gpus), and
+          # only the catalog's subscriptions hold a cluster in ingress.
           args:
             - --search-api-url=off
           env:

@@ -73,6 +73,20 @@ func TestSearchAnswersLikeSearchV2(t *testing.T) {
 		t.Fatalf("item = %v", item)
 	}
 
+	// The role checks' query for a cluster's MaaSSubscriptions finds none:
+	// the fake indexes Nodes only, and a Node has no apigroup, whichever
+	// filter comes first.
+	for _, filters := range []string{
+		`[{"property":"kind","values":["MaaSSubscription"]},{"property":"apigroup","values":["maas.opendatahub.io"]},{"property":"cluster","values":["site-a"]}]`,
+		`[{"property":"apigroup","values":["maas.opendatahub.io"]},{"property":"cluster","values":["site-a"]}]`,
+	} {
+		query := `{"query":"q","variables":{"input":[{"filters":` + filters + `,"limit":-1}]}}`
+		code, body = th.do(t, http.MethodPost, SearchPath, testToken, "application/json", query)
+		if errs, _ := body["errors"].([]any); code != http.StatusOK || len(errs) != 0 || len(searchItems(t, body)) != 0 {
+			t.Fatalf("subscriptions query %s: %d %v", filters, code, body)
+		}
+	}
+
 	// A malformed label filter is Search's GraphQL error.
 	bad := `{"query":"q","variables":{"input":[{"filters":[{"property":"label","values":["no-equals"]}]}]}}`
 	_, body = th.do(t, http.MethodPost, SearchPath, testToken, "application/json", bad)

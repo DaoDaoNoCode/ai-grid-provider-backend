@@ -263,3 +263,74 @@ func TestGPUNodesStopsWhenTheContextEnds(t *testing.T) {
 		t.Fatal("the query outlived its context")
 	}
 }
+
+// Resources asks for one kind of one API group on one cluster, and reads
+// each item's cluster, namespace and name. The first item is the shape
+// hf299's search-v2 answered for a MaaSSubscription (read-only query,
+// 2026-11-04).
+func TestResourcesQueryAndAnswer(t *testing.T) {
+	t.Parallel()
+	var got graphQLRequest
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		if err := json.Unmarshal(body, &got); err != nil {
+			t.Errorf("request body: %v", err)
+		}
+		_, _ = w.Write([]byte(`{"data":{"searchResult":[{"items":[
+			{"_uid":"site-a/a5cd","apigroup":"maas.opendatahub.io","apiversion":"v1alpha1","cluster":"site-a",
+			 "created":"2026-11-04T17:58:00Z","kind":"MaaSSubscription","kind_plural":"maassubscriptions",
+			 "name":"tenant-42c3e46f-users","namespace":"models-as-a-service"},
+			{"cluster":"site-a","name":"e2e-sub","namespace":"models-as-a-service"},
+			{"cluster":"site-a","name":["not","a","string"]},
+			{"cluster":"","name":"no-cluster"}
+		]}]}}`))
+	}))
+	defer srv.Close()
+
+	items, err := New(srv.URL, srv.Client()).Resources(context.Background(), "MaaSSubscription", "maas.opendatahub.io", "site-a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	in := got.Variables.Input
+	if len(in) != 1 || in[0].Limit != -1 || len(in[0].Filters) != 3 ||
+		in[0].Filters[0].Property != "kind" || in[0].Filters[0].Values[0] != "MaaSSubscription" ||
+		in[0].Filters[1].Property != "apigroup" || in[0].Filters[1].Values[0] != "maas.opendatahub.io" ||
+		in[0].Filters[2].Property != "cluster" || in[0].Filters[2].Values[0] != "site-a" {
+		t.Fatalf("query input = %+v", in)
+	}
+	if !strings.Contains(got.Query, "searchResult: search(input: $input)") {
+		t.Fatalf("query = %q", got.Query)
+	}
+	want := []Resource{
+		{Cluster: "site-a", Namespace: "models-as-a-service", Name: "e2e-sub"},
+		{Cluster: "site-a", Namespace: "models-as-a-service", Name: "tenant-42c3e46f-users"},
+	}
+	if len(items) != len(want) || items[0] != want[0] || items[1] != want[1] {
+		t.Fatalf("items = %+v, want %+v (sorted; an item without a cluster or a string name is skipped)", items, want)
+	}
+}
+
+// Resources fails as GPUNodes does: an HTTP status other than 200, GraphQL
+// errors and an answer that isn't JSON are errors, never an empty list.
+func TestResourcesErrors(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name   string
+		status int
+		body   string
+	}{
+		{"unavailable", http.StatusServiceUnavailable, `no healthy upstream`},
+		{"GraphQL error", http.StatusOK, `{"errors":[{"message":"boom"}]}`},
+		{"not JSON", http.StatusOK, `<html>`},
+	} {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(tc.status)
+			_, _ = w.Write([]byte(tc.body))
+		}))
+		items, err := New(srv.URL, srv.Client()).Resources(context.Background(), "MaaSSubscription", "maas.opendatahub.io", "site-a")
+		srv.Close()
+		if err == nil || items != nil {
+			t.Errorf("%s: items = %v, error = %v; want an error", tc.name, items, err)
+		}
+	}
+}
