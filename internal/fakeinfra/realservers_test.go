@@ -646,7 +646,7 @@ func TestRealClustersServerProvisioning(t *testing.T) {
 
 // startCatalogServers starts the fake hub and builds the real Models and
 // Subscriptions servers on it, as make dev-fake does: status from the hub's
-// status Policies, commits to an in-memory repository, which is returned.
+// catalog Applications, commits to an in-memory repository, which is returned.
 func startCatalogServers(t *testing.T) (*servers.ModelsServer, *servers.SubscriptionsServer, *gitops.MemoryWriter) {
 	t.Helper()
 	return startCatalogServersFrom(t, fixturesDir)
@@ -661,7 +661,7 @@ func startCatalogServersFrom(t *testing.T, dir string) (*servers.ModelsServer, *
 	if err != nil {
 		t.Fatalf("dynamic.NewForConfig() error = %v", err)
 	}
-	status := servers.NewCatalogStatusReader(client, "")
+	status := servers.NewCatalogStatusReader(client, servers.CatalogApps{})
 	writer := gitops.NewMemoryWriter(nil)
 	models, err := servers.NewModelsServer().SetLogger(slog.New(slog.DiscardHandler)).
 		SetWriter(writer).SetCatalogStatus(status).SetDynamicClient(client).Build()
@@ -677,8 +677,8 @@ func startCatalogServersFrom(t *testing.T, dir string) (*servers.ModelsServer, *
 }
 
 // The real Models and Subscriptions servers, committing to an in-memory
-// repository, read status from the fake hub's status Policies
-// (fixtures/default/policies.json), as in make dev-fake.
+// repository, read status from the fake hub's catalog Applications
+// (fixtures/default/applications.json), as in make dev-fake.
 func TestRealCatalogStatusOnFakeHub(t *testing.T) {
 	models, subscriptions, _ := startCatalogServers(t)
 	ctx := context.Background()
@@ -702,12 +702,18 @@ func TestRealCatalogStatusOnFakeHub(t *testing.T) {
 	// ready on the ingress site-ashburn-1: partially available (P13).
 	st := created.GetObject().GetStatus()
 	if st.GetPhase() != aigridv1.ModelPhase_MODEL_PHASE_PARTIALLY_AVAILABLE || st.GetReason() != "PartiallyAvailable" ||
-		st.GetMessage() != "Not ready on site-madrid-1; ready on site-ashburn-1, site-paris-1" {
+		st.GetMessage() != "Not ready on site-madrid-1; ready on site-paris-1; published on site-ashburn-1" {
 		t.Fatalf("model status = %v, %q, %q", st.GetPhase(), st.GetReason(), st.GetMessage())
 	}
 	wantClusters := []*aigridv1.ModelClusterStatus{
-		{Cluster: "site-madrid-1", Phase: aigridv1.ModelPhase_MODEL_PHASE_PENDING, Reason: "NotReady", Message: "LLMInferenceService not ready"},
-		{Cluster: "site-paris-1", Phase: aigridv1.ModelPhase_MODEL_PHASE_READY, Reason: "Ready", Message: "LLMInferenceService ready"},
+		{Cluster: "site-madrid-1", Phase: aigridv1.ModelPhase_MODEL_PHASE_PENDING, Reason: "NotReady", Message: "LLMInferenceService not ready",
+			Deployment: aigridv1.ModelDeploymentState_MODEL_DEPLOYMENT_STATE_STARTING, DeploymentMessage: "Waiting for the main workload",
+			Sync: aigridv1.ModelSyncState_MODEL_SYNC_STATE_SYNCED, State: aigridv1.ModelState_MODEL_STATE_STARTING,
+			ViewUrl: "https://console-openshift-console.apps.site-madrid-1.example.com/k8s/ns/ai-grid-internal-models/serving.kserve.io~v1alpha2~LLMInferenceService/granite-3b", ViewTarget: aigridv1.ModelViewTarget_MODEL_VIEW_TARGET_OPENSHIFT_CONSOLE},
+		{Cluster: "site-paris-1", Phase: aigridv1.ModelPhase_MODEL_PHASE_READY, Reason: "Ready", Message: "LLMInferenceService ready",
+			Deployment: aigridv1.ModelDeploymentState_MODEL_DEPLOYMENT_STATE_RUNNING,
+			Sync:       aigridv1.ModelSyncState_MODEL_SYNC_STATE_SYNCED, State: aigridv1.ModelState_MODEL_STATE_READY,
+			ViewUrl: "https://console-openshift-console.apps.site-paris-1.example.com/k8s/ns/ai-grid-internal-models/serving.kserve.io~v1alpha2~LLMInferenceService/granite-3b", ViewTarget: aigridv1.ModelViewTarget_MODEL_VIEW_TARGET_OPENSHIFT_CONSOLE},
 	}
 	if !slices.EqualFunc(st.GetClusters(), wantClusters, func(a, b *aigridv1.ModelClusterStatus) bool { return proto.Equal(a, b) }) {
 		t.Fatalf("model status.clusters = %v, want %v", st.GetClusters(), wantClusters)
@@ -740,8 +746,8 @@ func TestRealCatalogStatusOnFakeHub(t *testing.T) {
 	}
 }
 
-// The real Models server on fixtures/poc, as in make dev-fake-poc: its status
-// Policies report granite-3b as fixtures/default does, on the PoC's sites, so
+// The real Models server on fixtures/poc, as in make dev-fake-poc: its catalog
+// Applications report granite-3b as fixtures/default does, on the PoC's sites, so
 // a model placed on site1 and site2 is partially available.
 func TestRealModelsPartiallyAvailableOnPocFakeHub(t *testing.T) {
 	models, _, _ := startCatalogServersFrom(t, filepath.Join("..", "..", "fixtures", "poc"))
@@ -760,12 +766,18 @@ func TestRealModelsPartiallyAvailableOnPocFakeHub(t *testing.T) {
 		t.Fatalf("Models Create() error = %v", err)
 	}
 	st := created.GetObject().GetStatus()
-	if st.GetPhase() != aigridv1.ModelPhase_MODEL_PHASE_PARTIALLY_AVAILABLE || st.GetMessage() != "Not ready on site2; ready on site1, site3" {
+	if st.GetPhase() != aigridv1.ModelPhase_MODEL_PHASE_PARTIALLY_AVAILABLE || st.GetMessage() != "Not ready on site2; ready on site1; published on site3" {
 		t.Fatalf("model status = %v, %q", st.GetPhase(), st.GetMessage())
 	}
 	wantClusters := []*aigridv1.ModelClusterStatus{
-		{Cluster: "site1", Phase: aigridv1.ModelPhase_MODEL_PHASE_READY, Reason: "Ready", Message: "LLMInferenceService ready"},
-		{Cluster: "site2", Phase: aigridv1.ModelPhase_MODEL_PHASE_PENDING, Reason: "NotReady", Message: "LLMInferenceService not ready"},
+		{Cluster: "site1", Phase: aigridv1.ModelPhase_MODEL_PHASE_READY, Reason: "Ready", Message: "LLMInferenceService ready",
+			Deployment: aigridv1.ModelDeploymentState_MODEL_DEPLOYMENT_STATE_RUNNING,
+			Sync:       aigridv1.ModelSyncState_MODEL_SYNC_STATE_SYNCED, State: aigridv1.ModelState_MODEL_STATE_READY,
+			ViewUrl: "https://console-openshift-console.apps.site1.example.com/k8s/ns/ai-grid-internal-models/serving.kserve.io~v1alpha2~LLMInferenceService/granite-3b", ViewTarget: aigridv1.ModelViewTarget_MODEL_VIEW_TARGET_OPENSHIFT_CONSOLE},
+		{Cluster: "site2", Phase: aigridv1.ModelPhase_MODEL_PHASE_PENDING, Reason: "NotReady", Message: "LLMInferenceService not ready",
+			Deployment: aigridv1.ModelDeploymentState_MODEL_DEPLOYMENT_STATE_STARTING, DeploymentMessage: "Waiting for the main workload",
+			Sync: aigridv1.ModelSyncState_MODEL_SYNC_STATE_SYNCED, State: aigridv1.ModelState_MODEL_STATE_STARTING,
+			ViewUrl: "https://console-openshift-console.apps.site2.example.com/k8s/ns/ai-grid-internal-models/serving.kserve.io~v1alpha2~LLMInferenceService/granite-3b", ViewTarget: aigridv1.ModelViewTarget_MODEL_VIEW_TARGET_OPENSHIFT_CONSOLE},
 	}
 	if !slices.EqualFunc(st.GetClusters(), wantClusters, func(a, b *aigridv1.ModelClusterStatus) bool { return proto.Equal(a, b) }) {
 		t.Fatalf("model status.clusters = %v, want %v", st.GetClusters(), wantClusters)
@@ -864,7 +876,7 @@ func TestRealModelsPlacementClustersOnFakeHub(t *testing.T) {
 		}
 	}
 	models, err := servers.NewModelsServer().SetLogger(slog.New(slog.DiscardHandler)).
-		SetWriter(gitops.NewMemoryWriter(nil)).SetCatalogStatus(servers.NewCatalogStatusReader(client, "")).
+		SetWriter(gitops.NewMemoryWriter(nil)).SetCatalogStatus(servers.NewCatalogStatusReader(client, servers.CatalogApps{})).
 		SetDynamicClient(client).Build()
 	if err != nil {
 		t.Fatalf("Build() error = %v", err)

@@ -27,11 +27,11 @@ import (
 	"k8s.io/client-go/dynamic"
 )
 
-// catalogStatusReader is the Policy-status surface Models and Subscriptions
+// catalogStatusReader is the Application-status surface Models and Subscriptions
 // need (DIP; mirror Tenants' organizationClient). Production wires
 // *CatalogStatusReader.
 type catalogStatusReader interface {
-	Read(ctx context.Context, policy, check string) (ObjectReports, error)
+	Read(ctx context.Context, set CatalogSet, kind string) (ObjectReports, error)
 }
 
 // ModelsServerBuilder configures a ModelsServer.

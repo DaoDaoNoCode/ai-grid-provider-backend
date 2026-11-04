@@ -250,13 +250,17 @@ message ModelStatus {
   ModelPhase phase = 3;
 
   // Reason of the condition that decided phase. In git mode: SavedToGit
-  // while no cluster has reported, else Ready, PartiallyAvailable or
-  // NotReady with the phase.
+  // while no cluster has reported, else Ready, PartiallyAvailable, Failed,
+  // Stopped or NotReady with the phase (see ModelPhase).
   string reason = 4;
 
   // Message of the condition that decided phase. In git mode, while a
-  // cluster has reported: where the model is ready, for example "Not ready
-  // on site-a; ready on site-b; no report from site-c".
+  // cluster has reported: where the model is ready, for example "Failed on
+  // site-a; not ready on site-b; ready on site-c; no report from site-d;
+  // published on hub", then Argo CD's message for each failed object. An
+  // ingress-only cluster, where the model doesn't run, is named apart by
+  // whether MaaS publishes the model there: "published on", "not published
+  // on" or "failed to publish on".
   string message = 5;
 
   // Placement status when placement is set.
@@ -272,11 +276,183 @@ message ModelStatus {
 
   // The model on each cluster its placement names (the clusters in
   // placement.selected_clusters), one entry per cluster in cluster-name
-  // order, from what the hub's status Policies report. Empty while no
+  // order, from what the hub's catalog Argo CD Applications report. Empty while no
   // cluster has reported (reason SavedToGit). Ingress clusters the model
   // isn't placed on, which publish it but don't run it, have no entry; their
   // reports count in `phase` and `message`. Output only.
   repeated ModelClusterStatus clusters = 9;
+
+  // The model's deployment, summed over its placed clusters
+  // (`clusters[].deployment` and `sync`): FAILED when one reports it failed
+  // or its sync failed; STARTING when one is starting or hasn't reported;
+  // STOPPED when every one is stopped; RUNNING when every one runs it or is
+  // stopped, and at least one runs it; UNSPECIFIED while none has reported
+  // a deployment. A placed cluster stopped on purpose doesn't make the model
+  // STARTING. It says
+  // nothing about MaaS: see `maas`. It can differ from `phase`: a model
+  // failed on one cluster and running on another is FAILED here and
+  // PARTIALLY_AVAILABLE there. Output only.
+  ModelDeploymentState deployment = 10 [(buf.validate.field).enum.defined_only = true];
+
+  // The model in MaaS, for a list's Availability column, summed over the
+  // ingress clusters (`ingress`), worst first: FAILED;
+  // AWAITING_SUBSCRIPTION_AND_BACKEND; CONFIGURING_ROUTING (also while one
+  // hasn't reported); AWAITING_SUBSCRIPTION; AVAILABLE. AVAILABLE and
+  // CONFIGURING_ROUTING become UNAVAILABLE when no placed cluster serves the
+  // model (no `clusters[].deployment` is RUNNING). A failed sync doesn't
+  // stop a previous revision that is still running. UNSPECIFIED while none has reported. Each
+  // `ingress` entry keeps MaaS's own message. Output only.
+  ModelMaasState maas = 11 [(buf.validate.field).enum.defined_only = true];
+
+  // The model on each ingress cluster, one entry per cluster in cluster-name
+  // order: the ones with a catalog ingress Application and the ones labelled
+  // ai-grid/enabled "true" and ai-grid/role ingress or combined. A combined
+  // cluster has an entry here and in `clusters`. Empty while no cluster has
+  // reported (reason SavedToGit). Output only.
+  repeated ModelIngressStatus ingress = 12;
+
+  // The model's rollout in one word, Git sync and deployment together, for
+  // a list's Status column (`clusters[].state` summed): SAVED_TO_GIT while no
+  // cluster has reported; READY when every placed cluster is READY;
+  // PARTIALLY_READY when some are and some aren't; else FAILED when one is
+  // failed; STOPPED when all are stopped (or every reporting one is);
+  // STARTING when one is starting; SYNCING when one hasn't applied Git's
+  // change yet; SYNCED when every one has but none reports a deployment yet.
+  // `phase` stays the MaaS-inclusive answer. Output only.
+  ModelState state = 13 [(buf.validate.field).enum.defined_only = true];
+}
+
+// What one placed cluster reports about the model's LLMInferenceService.
+enum ModelDeploymentState {
+  // No report: the LLMInferenceService isn't on the cluster yet, or the
+  // cluster doesn't list it. ModelClusterStatus.sync says whether Argo CD
+  // has applied it.
+  MODEL_DEPLOYMENT_STATE_UNSPECIFIED = 0;
+  // On the cluster but not serving yet: progressing, or KServe reports a
+  // step that is still under way, such as a Deployment below its minimum
+  // availability. That step has no deadline: a pod that keeps crashing,
+  // can't pull its image or finds no GPU leaves the same message, so it also
+  // shows here, with KServe's message, until it is fixed.
+  MODEL_DEPLOYMENT_STATE_STARTING = 1;
+  // Ready=True: serving. While ModelClusterStatus.sync isn't SYNCED, this
+  // is the previous revision.
+  MODEL_DEPLOYMENT_STATE_RUNNING = 2;
+  // KServe reports it not ready for another reason.
+  MODEL_DEPLOYMENT_STATE_FAILED = 3;
+  // KServe reports it stopped ("Service is stopped"): the
+  // LLMInferenceService carries the serving.kserve.io/stop annotation, so
+  // it runs no pods.
+  MODEL_DEPLOYMENT_STATE_STOPPED = 4;
+}
+
+// A model's rollout, Git sync and deployment together (ModelStatus.state,
+// ModelClusterStatus.state).
+enum ModelState {
+  // No report.
+  MODEL_STATE_UNSPECIFIED = 0;
+  // Committed to Git; no cluster has reported it yet.
+  MODEL_STATE_SAVED_TO_GIT = 1;
+  // Argo CD hasn't applied Git's change yet, or is retrying it: the model
+  // isn't on the cluster yet, or it is stopped there and out of sync (a
+  // start on its way). A running cluster out of sync stays READY: its
+  // previous revision serves, and an edit in flight can't be told from
+  // lasting drift, so a stop shows READY until Argo CD applies it.
+  MODEL_STATE_SYNCING = 2;
+  // Applied; KServe hasn't reported the deployment yet.
+  MODEL_STATE_SYNCED = 3;
+  // On the cluster, not serving yet (ModelDeploymentState STARTING).
+  MODEL_STATE_STARTING = 4;
+  // Serving.
+  MODEL_STATE_READY = 5;
+  // Serving on some placed clusters, not all. Model only.
+  MODEL_STATE_PARTIALLY_READY = 6;
+  // KServe reports it failed, or Argo CD couldn't sync it.
+  MODEL_STATE_FAILED = 7;
+  // Stopped (serving.kserve.io/stop). KServe reports no stopping step: one
+  // reconcile marks the service stopped and deletes its workloads, so there
+  // is no STOPPING.
+  MODEL_STATE_STOPPED = 8;
+}
+
+// Whether Argo CD has applied what Git holds for the model on one cluster.
+enum ModelSyncState {
+  // No report: the cluster has no Application in the catalog's models
+  // ApplicationSet, or the backend can't read the Applications.
+  MODEL_SYNC_STATE_UNSPECIFIED = 0;
+  // The live LLMInferenceService matches Git.
+  MODEL_SYNC_STATE_SYNCED = 1;
+  // Not applied yet: the cluster's Application doesn't list it yet, it is
+  // OutOfSync or Missing, or Argo CD is retrying its sync (sync_message
+  // says why).
+  MODEL_SYNC_STATE_OUT_OF_SYNC = 2;
+  // Argo CD's sync to the revision it wants failed and it stopped retrying
+  // (sync_message says why).
+  MODEL_SYNC_STATE_FAILED = 3;
+}
+
+// What one ingress cluster reports about the model's MaaSModelRef and
+// ExternalModel.
+enum ModelMaasState {
+  // No report: the cluster doesn't list both of them yet.
+  MODEL_MAAS_STATE_UNSPECIFIED = 0;
+  // MaaS is still setting up the route: Argo CD hasn't synced them or they
+  // are progressing, or the MaaSModelRef says "Governed but backend is not
+  // ready", "Waiting for tenant resolution: ..." or "Waiting for HTTPRoute
+  // to be created". For an ExternalModel, MaaS's "backend" is its HTTPRoute
+  // accepted by the gateway, not the model's pods.
+  MODEL_MAAS_STATE_CONFIGURING_ROUTING = 1;
+  // Published and governed: MaaSModelRef Ready ("Governed and
+  // runtime-healthy"), so tenants with a subscription can call it.
+  MODEL_MAAS_STATE_AVAILABLE = 2;
+  // Routed, but no active MaaSSubscription and MaaSAuthPolicy pair covers
+  // it, so no tenant can call it yet ("Awaiting governance pairing").
+  MODEL_MAAS_STATE_AWAITING_SUBSCRIPTION = 3;
+  // MaaS or the AI gateway reports it failed, or Argo CD couldn't sync it.
+  MODEL_MAAS_STATE_FAILED = 4;
+  // No subscription covers it and its route isn't ready either ("Awaiting
+  // governance pairing and backend readiness").
+  MODEL_MAAS_STATE_AWAITING_SUBSCRIPTION_AND_BACKEND = 5;
+  // No placed cluster serves it, while MaaS publishes it or is still
+  // routing it: MaaS checks only the route, so it can't see the model's pods
+  // are down. Summary only (ModelStatus.maas), from the placed clusters'
+  // live deployment states.
+  MODEL_MAAS_STATE_UNAVAILABLE = 6;
+}
+
+// Where a cluster's View link goes (ModelClusterStatus.view_url).
+enum ModelViewTarget {
+  // No link: no https console URL claim, and no annotation on an ingress or
+  // combined cluster.
+  MODEL_VIEW_TARGET_UNSPECIFIED = 0;
+  // OpenShift AI's model deployments for the models namespace, at
+  // https://rh-ai.<apps domain>/ai-hub/models/deployments/internal/<namespace>,
+  // on clusters with role ingress or combined (the reference removes the
+  // dashboard on inference clusters).
+  MODEL_VIEW_TARGET_OPENSHIFT_AI = 1;
+  // The LLMInferenceService in the OpenShift console: on clusters without
+  // the OpenShift AI dashboard, and on an ingress or combined cluster whose
+  // console host isn't console-openshift-console.<apps domain> and that has
+  // no ai-grid/openshift-ai-url annotation.
+  MODEL_VIEW_TARGET_OPENSHIFT_CONSOLE = 2;
+}
+
+// The model in MaaS on one ingress cluster. Output only.
+message ModelIngressStatus {
+  // ManagedCluster name.
+  string cluster = 1 [(buf.validate.field).string = {
+    min_len: 1
+    max_len: 63
+    pattern: "^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$"
+  }];
+
+  // What the cluster reports.
+  ModelMaasState state = 2 [(buf.validate.field).enum = {
+    defined_only: true
+    not_in: [6]
+  }];
+
+  // MaaS's or Argo CD's message, for example "Awaiting governance pairing".
+  string message = 3;
 }
 
 // Derived model phase.
@@ -286,22 +462,34 @@ message ModelStatus {
 // order of precedence:
 //
 //   - READY (reason Ready): every ingress cluster reports the model's
-//     MaaSModelRef ready, and every placed cluster is READY in `clusters`.
+//     MaaSModelRef and ExternalModel ready, and every placed cluster is
+//     READY in `clusters`.
 //   - PARTIALLY_AVAILABLE (reason PartiallyAvailable): every ingress cluster
-//     reports the MaaSModelRef ready, at least one placed cluster is READY
-//     and at least one is not.
+//     reports them ready, at least one placed cluster is READY and at least
+//     one is not.
+//   - FAILED (reason Failed): a cluster reports one of the model's objects
+//     failed: Argo CD health Degraded, or its sync failed. An
+//     LLMInferenceService KServe reports stopped is Degraded but not failed.
+//   - PENDING (reason Stopped): every placed cluster reports it stopped
+//     (`deployment` STOPPED) and has applied Git's change (`sync` SYNCED).
 //   - PENDING (reason NotReady): otherwise, including while an ingress
 //     cluster reports the MaaSModelRef not ready or hasn't reported it.
 //
-// The ingress clusters are those the catalog status Policy lists and those
+// A MaaSModelRef that waits only for a subscription (MaaS
+// GovernanceAttached False, RuntimeReady True) counts as ready here: the
+// model runs and is published, so it isn't PENDING. `maas` says
+// AWAITING_SUBSCRIPTION, and `state` and `maas` keep the two sides apart for
+// a list that shows both, such as "Ready" and "Awaiting subscription". KServe's and
+// MaaS's Ready=False messages for steps still under way, such as a
+// Deployment below its minimum availability, are pending, not failed.
+//
+// The ingress clusters are those with a catalog ingress Application and those
 // labelled ai-grid/enabled "true" and ai-grid/role ingress or combined; each
 // must report. READY and PARTIALLY_AVAILABLE need at least one: with none,
 // nothing shows the model published, so it is PENDING, and the message ends
 // "no ingress cluster has reported the MaaSModelRef".
 //
-// Git mode never reports FAILED: the status Policies can't tell a model
-// that failed from one that is still starting. The order is the one the
-// console's Models page uses (READY, PARTIALLY_AVAILABLE, FAILED, then the
+// The order is the one the console's Models page uses (READY, PARTIALLY_AVAILABLE, FAILED, then the
 // PENDING cases; proposal P13).
 enum ModelPhase {
   MODEL_PHASE_UNSPECIFIED = 0;
@@ -310,16 +498,21 @@ enum ModelPhase {
   MODEL_PHASE_FAILED = 3;
   // Serving on some of the clusters its placement names but not all (see
   // above). Only a whole model has it; a cluster in ModelStatus.clusters is
-  // READY or PENDING.
+  // READY, FAILED or PENDING.
   MODEL_PHASE_PARTIALLY_AVAILABLE = 4;
 }
 
-// The model on one placed cluster. In git mode it comes from the hub's
-// status Policies: the cluster's models-ready report of the model's
-// LLMInferenceService (Ready=True), and, on a combined cluster, which is
-// also an ingress cluster, its model-refs-ready report of the model's
-// MaaSModelRef (phase Ready). Output only.
+// The model on one placed cluster. In git mode it comes from the health the
+// hub's catalog Argo CD Applications record for the cluster's
+// LLMInferenceService and, on a combined cluster, which is also an ingress
+// cluster, for its MaaSModelRef and ExternalModel. Output only.
 message ModelClusterStatus {
+  option (buf.validate.message).cel = {
+    id: "model_cluster_status.view_link_paired"
+    message: "view_url must be set exactly when view_target is specified"
+    expression: "(this.view_url == '') == (this.view_target == 0)"
+  };
+
   // ManagedCluster name, one of placement.selected_clusters.
   string cluster = 1 [(buf.validate.field).string = {
     min_len: 1
@@ -327,9 +520,9 @@ message ModelClusterStatus {
     pattern: "^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$"
   }];
 
-  // READY when every report from the cluster says ready; PENDING when one
-  // says not ready (or not found) or one is missing. Git mode never sets
-  // FAILED; PARTIALLY_AVAILABLE is only a whole model's phase.
+  // READY when every report from the cluster says ready; FAILED when one
+  // says failed; PENDING when one says not ready or one is missing.
+  // PARTIALLY_AVAILABLE is only a whole model's phase.
   ModelPhase phase = 2 [(buf.validate.field).enum = {
     defined_only: true
     not_in: [
@@ -338,13 +531,61 @@ message ModelClusterStatus {
     ]
   }];
 
-  // Ready, NotReady (a report says not ready or not found) or NoReport (the
+  // Ready, Failed, NotReady (a report says not ready), Stopped (the
+  // LLMInferenceService is stopped, `deployment` STOPPED) or NoReport (the
   // cluster hasn't reported the object yet).
   string reason = 3 [(buf.validate.field).string.min_len = 1];
 
   // What the cluster reported, for example "LLMInferenceService not ready"
-  // or "LLMInferenceService ready; no MaaSModelRef report".
+  // or "LLMInferenceService ready; no MaaSModelRef report; no ExternalModel
+  // report".
   string message = 4;
+
+  // What the cluster reports about the model's LLMInferenceService.
+  ModelDeploymentState deployment = 5 [(buf.validate.field).enum.defined_only = true];
+
+  // KServe's message about the deployment, for example "Deployment does
+  // not have minimum availability.". Empty when it is running or hasn't
+  // reported.
+  string deployment_message = 6;
+
+  // Whether Argo CD has applied the model's LLMInferenceService on the
+  // cluster as Git has it.
+  ModelSyncState sync = 7 [(buf.validate.field).enum.defined_only = true];
+
+  // Argo CD's sync operation message while the sync failed or is being
+  // retried, for example an AppProject refusing the kind.
+  string sync_message = 8;
+
+  // Git sync and deployment on this cluster in one word: the deployment's
+  // state (READY, STARTING, FAILED, STOPPED) once the
+  // LLMInferenceService is on the cluster; FAILED when its sync failed;
+  // SYNCING while Argo CD hasn't applied it; SYNCED when it has but KServe
+  // hasn't reported yet; UNSPECIFIED with no report.
+  ModelState state = 9 [(buf.validate.field).enum = {
+    defined_only: true
+    not_in: [6]
+  }];
+
+  // Where to see the model on this cluster: OpenShift AI's model
+  // deployments page, or the LLMInferenceService in the OpenShift console
+  // (view_target). Built from the ManagedCluster's
+  // consoleurl.cluster.open-cluster-management.io claim, the apps domain
+  // after "console-openshift-console.", or from the cluster's
+  // ai-grid/openshift-ai-url annotation when the dashboard's host differs.
+  // Only an https URL with a host and no user info is used from the claim
+  // or the annotation. Empty when there is neither (view_target
+  // UNSPECIFIED).
+  string view_url = 10 [(buf.validate.field) = {
+    ignore: IGNORE_IF_ZERO_VALUE
+    string: {
+      uri: true
+      pattern: "^https://[^/?#@]+([/?#].*)?$"
+    }
+  }];
+
+  // Whether view_url opens OpenShift AI or the OpenShift console.
+  ModelViewTarget view_target = 11 [(buf.validate.field).enum.defined_only = true];
 }
 
 // Placement observed state.

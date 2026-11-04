@@ -74,7 +74,7 @@ func main() {
 	}
 	// Models and Subscriptions are committed to the AI_GRID_GIT_URL
 	// repository, and Argo CD delivers them. The status of what came up on
-	// the spokes is read back from inform-only ACM Policies on this hub.
+	// the spokes is read back from the catalog's Argo CD Applications on this hub.
 	// Clusters reads it for the subscriptions and the models placed on a
 	// cluster before its role changes or it leaves the grid.
 	writer, err := newGitWriter()
@@ -110,7 +110,12 @@ func main() {
 		fmt.Fprintf(os.Stderr, "build Tenants server: %v\n", err)
 		os.Exit(1)
 	}
-	status := servers.NewCatalogStatusReader(kubeClient, getEnv("AI_GRID_POLICY_NAMESPACE", servers.DefaultPolicyNamespace))
+	status := servers.NewCatalogStatusReader(kubeClient, servers.CatalogApps{
+		Namespace:     getEnv("AI_GRID_CATALOG_APP_NAMESPACE", servers.DefaultCatalogAppNamespace),
+		Models:        getEnv("AI_GRID_CATALOG_MODELS_APPSET", servers.DefaultCatalogModelsAppSet),
+		Ingress:       getEnv("AI_GRID_CATALOG_INGRESS_APPSET", servers.DefaultCatalogIngressAppSet),
+		Subscriptions: getEnv("AI_GRID_CATALOG_SUBSCRIPTIONS_APPSET", servers.DefaultCatalogSubscriptionsAppSet),
+	}).SetLogger(logger)
 	subscriptionNamespace := getEnv("AI_GRID_SUBSCRIPTION_NAMESPACE", "models-as-a-service")
 	modelsServer, err := servers.NewModelsServer().
 		SetLogger(logger).
@@ -311,9 +316,9 @@ func gitReadMaxAge() (time.Duration, error) {
 
 // The hub client's own rate limit. client-go's default, 5 requests a second
 // with bursts of 10, is meant for controllers; one model read here asks the
-// hub for several objects (the models' and the catalog's status Policies, the
-// clusters), so a page that opens a few reads at once waited on it: on the
-// demo hub in 2026-11, a Policy read sat 1.08 s in "client-side throttling".
+// hub for catalog Applications and clusters, so a page that opens a few
+// reads at once can wait on it. When status came from Policies, a read on the
+// demo hub in 2026-11 sat 1.08 s in "client-side throttling".
 // The API server's priority and fairness still protects the hub.
 const (
 	hubClientQPS   = 50

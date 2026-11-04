@@ -662,13 +662,14 @@ ManagedCluster on the hub, or the call is `InvalidArgument` naming it, with a
 cluster the model is already on is not checked again, so a model on a cluster
 that has left the hub can still be changed or moved off it.
 `:listPlacementClusters` lists the clusters a model can run on. Status comes
-from the hub's status Policies, or reason
+from the hub's catalog Argo CD Applications, or reason
 `SavedToGit` with no phase when no cluster has reported. Once one has,
 `status.phase` is `MODEL_PHASE_READY`, `MODEL_PHASE_PARTIALLY_AVAILABLE`
 (ready on some placed clusters, not all, and published on every ingress
-cluster) or `MODEL_PHASE_PENDING`; READY and PARTIALLY_AVAILABLE need at least
+cluster), `MODEL_PHASE_FAILED` (a cluster reports it failed) or
+`MODEL_PHASE_PENDING`; READY and PARTIALLY_AVAILABLE need at least
 one ingress cluster's report, and a cluster labelled `ai-grid/role` `ingress` or
-`combined` must report even before the catalog Policy lists it; in that order of precedence (the comment on
+`combined` must report even before it has an ingress Application; in that order of precedence (the comment on
 `ModelPhase`), and `status.clusters` gives each placed cluster's own status
 (below). `spec.main.requests` and `limits` take Kubernetes quantities with
 Kubernetes' container rules: non-negative, whole numbers for extended
@@ -751,19 +752,82 @@ Once a cluster reports, the status also has the model on each placed cluster
 "status": {
   "phase": "MODEL_PHASE_PARTIALLY_AVAILABLE",
   "reason": "PartiallyAvailable",
-  "message": "Not ready on site-a; ready on site-b",
+  "message": "Not ready on site-a; ready on site-b; published on hub",
+  "deployment": "MODEL_DEPLOYMENT_STATE_STARTING",
+  "maas": "MODEL_MAAS_STATE_AWAITING_SUBSCRIPTION",
+  "state": "MODEL_STATE_PARTIALLY_READY",
   "clusters": [
-    {"cluster": "site-a", "phase": "MODEL_PHASE_PENDING", "reason": "NotReady", "message": "LLMInferenceService not ready"},
-    {"cluster": "site-b", "phase": "MODEL_PHASE_READY", "reason": "Ready", "message": "LLMInferenceService ready"}
+    {"cluster": "site-a", "phase": "MODEL_PHASE_PENDING", "reason": "NotReady", "message": "LLMInferenceService not ready",
+     "deployment": "MODEL_DEPLOYMENT_STATE_STARTING", "deploymentMessage": "Deployment does not have minimum availability.",
+     "sync": "MODEL_SYNC_STATE_SYNCED", "state": "MODEL_STATE_STARTING",
+     "viewUrl": "https://console-openshift-console.apps.site-a.example.com/k8s/ns/ai-grid-internal-models/serving.kserve.io~v1alpha2~LLMInferenceService/granite",
+     "viewTarget": "MODEL_VIEW_TARGET_OPENSHIFT_CONSOLE"},
+    {"cluster": "site-b", "phase": "MODEL_PHASE_READY", "reason": "Ready", "message": "LLMInferenceService ready",
+     "deployment": "MODEL_DEPLOYMENT_STATE_RUNNING", "sync": "MODEL_SYNC_STATE_SYNCED", "state": "MODEL_STATE_READY",
+     "viewUrl": "https://rh-ai.apps.site-b.example.com/ai-hub/models/deployments/internal/ai-grid-internal-models",
+     "viewTarget": "MODEL_VIEW_TARGET_OPENSHIFT_AI"}
+  ],
+  "ingress": [
+    {"cluster": "hub", "state": "MODEL_MAAS_STATE_AWAITING_SUBSCRIPTION", "message": "Awaiting governance pairing"}
   ]
 }
 ```
 
-A cluster's `phase` is `MODEL_PHASE_READY` or `MODEL_PHASE_PENDING`; its
-`reason` is `Ready`, `NotReady` or `NoReport` (no report yet); on a combined
-cluster the `MaaSModelRef` report counts too, and the message names both, such
-as `LLMInferenceService ready; MaaSModelRef not ready`. Ingress clusters the
-model isn't placed on have no entry. `status.rollout` is never set.
+A cluster's `phase` is `MODEL_PHASE_READY`, `MODEL_PHASE_FAILED` or
+`MODEL_PHASE_PENDING`; its `reason` is `Ready`, `Failed`, `NotReady` or
+`NoReport` (no report yet); on a combined cluster the `MaaSModelRef` and
+`ExternalModel` reports count too, and the message names them all, such as
+`LLMInferenceService ready; MaaSModelRef not ready; ExternalModel ready`.
+Ingress clusters the model isn't placed on have no entry in `clusters`.
+`status.rollout` is never set.
+
+The two statuses keep the model's deployment apart from MaaS, so a list can
+show both, such as "Ready" and "Awaiting subscription":
+
+- `deployment` on each `clusters` entry, from the `LLMInferenceService`'s
+  health alone: `RUNNING`, `STARTING` (with KServe's message, such as
+  `Deployment does not have minimum availability.`), `STOPPED` (KServe's
+  `Service is stopped`, from the `serving.kserve.io/stop` annotation),
+  `FAILED` (with the message), or `UNSPECIFIED` while it isn't on the
+  cluster.
+- `sync` on each `clusters` entry: `SYNCED`, `OUT_OF_SYNC` (not applied yet,
+  or Argo CD is retrying; `syncMessage` says why), `FAILED` (the sync failed
+  and the retries ran out; `syncMessage` says why), or `UNSPECIFIED` when the
+  cluster has no Application. An edit not applied yet is `OUT_OF_SYNC` while
+  the previous revision is still `RUNNING`.
+- `status.deployment` is `FAILED` when one placed cluster fails or its sync
+  failed, `STARTING` when one is starting or hasn't reported, `STOPPED` when
+  every one is stopped, and `RUNNING` when every one runs it or is stopped,
+  with at least one running. A model stopped everywhere is `PENDING`, reason
+  `Stopped`, once every cluster has synced; a cluster where it is stopped has
+  reason `Stopped`.
+- `ingress`: one entry per ingress cluster (combined ones included), with
+  `state` `AVAILABLE`, `AWAITING_SUBSCRIPTION` (routed, but no subscription
+  covers it, so no tenant can call it), `AWAITING_SUBSCRIPTION_AND_BACKEND`,
+  `CONFIGURING_ROUTING`, `FAILED`, or `UNSPECIFIED` with no report, and
+  MaaS's message. `status.maas` is the worst of them, in the order `FAILED`,
+  `AWAITING_SUBSCRIPTION_AND_BACKEND`, `CONFIGURING_ROUTING` (also while one
+  hasn't reported), `AWAITING_SUBSCRIPTION`, `AVAILABLE`; `AVAILABLE` and
+  `CONFIGURING_ROUTING` read `UNAVAILABLE` while no placed cluster serves the
+  model.
+- `state` (model and each `clusters` entry): Git sync and deployment in one
+  word, for a Status column: `SAVED_TO_GIT`, `SYNCING`, `SYNCED`,
+  `STARTING`, `READY`, `PARTIALLY_READY` (model only), `FAILED`, `STOPPED`.
+- `view_url` and `view_target` on each `clusters` entry: OpenShift AI's model
+  deployments on an ingress or combined cluster, else the
+  `LLMInferenceService` in the OpenShift console; empty without an https
+  console URL claim (or, on an ingress or combined cluster, the
+  `ai-grid/openshift-ai-url` annotation). The contract validates a non-empty
+  link as an HTTPS URI with a host and no user info, paired with a specified
+  target; an empty link requires the `UNSPECIFIED` target. The summary
+  `deployment`, `maas`, and `state` fields accept only defined enum values.
+
+A model waiting only for a subscription is `MODEL_PHASE_READY` (or
+`PARTIALLY_AVAILABLE`) with `status.maas` `MODEL_MAAS_STATE_AWAITING_SUBSCRIPTION`,
+not `PENDING`. `STARTING` has no deadline: a pod that keeps crashing, can't
+pull its image or finds no GPU also shows as `STARTING`, because Argo CD keeps
+only KServe's `Ready` message, which then still says the Deployment is below
+its minimum availability.
 
 `selected_clusters` holds cluster names, the values `spec.placement` takes.
 `locations` holds the distinct values of those clusters' `location` label;
@@ -825,11 +889,11 @@ these return the full gRPC response wrapper:
 - `GET /subscriptions` list remains `{ size, total, items }`
 
 `authPolicies` on Get (and `authPolicy` on Create) is the subscription's
-managed policy, with `phase` `Active` or `Pending` and a `Ready` condition
-saying where it is active, from the hub's status Policies, or no phase and no
-conditions when no cluster has reported. `modelRegistrations`
-has one entry per model ref, with phase `Ready` or `Pending` from the hub's
-status Policies, or reason `SavedToGit` and no phase when no cluster has
+managed policy, with `phase` `Active`, `Degraded` or `Pending` and a `Ready`
+condition saying where it is ready, from the hub's catalog Applications, or
+no phase and no conditions when no cluster has reported. `modelRegistrations`
+has one entry per model ref, with phase `Ready`, `Failed` or `Pending` from the hub's
+catalog Applications, or reason `SavedToGit` and no phase when no cluster has
 reported.
 
 **Go client note:** `client.GetSubscription` returns only the Subscription
@@ -889,7 +953,7 @@ Subscription ids must leave room for the `-policy` suffix (max 56 chars).
 
 | Field | Type | Notes |
 | --- | --- | --- |
-| `phase` | string | `Active` or `Pending` from the hub's status Policies; empty when no ingress cluster has reported |
+| `phase` | string | `Active`, `Pending` or `Degraded` from the hub's catalog Applications; empty when no cluster has reported |
 | `conditions[]` | Condition | Not read back; empty |
 | `model_ref_statuses[]` | ResourceRefStatus | Not read back; empty |
 | `token_rate_limit_statuses[]` | object | Not read back; empty |
