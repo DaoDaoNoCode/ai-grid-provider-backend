@@ -16,7 +16,11 @@ import (
 	aigridv1 "github.com/osac-project/ai-grid-provider-backend/gen/ai_grid/v1"
 	"github.com/osac-project/ai-grid-provider-backend/internal/gitops"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+	k8stesting "k8s.io/client-go/testing"
 )
 
 // gridCluster is a ManagedCluster in the grid with role; an empty role
@@ -469,6 +473,35 @@ func TestUpdateClusterRoleReadsTheCatalog(t *testing.T) {
 		}
 	})
 
+	t.Run("the remote can't be fetched after the clone", func(t *testing.T) {
+		t.Parallel()
+		bare := newBareCatalog(t)
+		writer, err := gitops.NewRepoWriter(ctx, gitops.RepoConfig{
+			URL: "file://" + bare, Branch: "main", AuthorName: "ai-grid-provider-backend", AuthorEmail: "backend@example.com",
+			// A read within the window would serve the clone's head.
+			ReadMaxAge: time.Hour,
+		})
+		if err != nil {
+			t.Fatalf("NewRepoWriter() error = %v", err)
+		}
+		if err := os.RemoveAll(bare); err != nil {
+			t.Fatal(err)
+		}
+		server, err := clusters().SetCatalog(writer).Build()
+		if err != nil {
+			t.Fatalf("Build() error = %v", err)
+		}
+		_, err = server.Update(ctx, labelsUpdate("site-a", roleLabels("ingress")))
+		assertConnectCode(t, err, connect.CodeUnavailable)
+		got, err := server.Get(ctx, &aigridv1.ClustersGetRequest{Id: "site-a"})
+		if err != nil {
+			t.Fatalf("Get() error = %v", err)
+		}
+		if role := got.GetObject().GetMetadata().GetLabels()["ai-grid/role"]; role != "inference" {
+			t.Fatalf("role after a refused Update = %q, want inference", role)
+		}
+	})
+
 	t.Run("repository not cloned yet", func(t *testing.T) {
 		t.Parallel()
 		writer := gitops.StartBackgroundWriter(ctx, func(context.Context) (gitops.Writer, error) {
@@ -526,4 +559,44 @@ func newBareCatalog(t *testing.T) string {
 		t.Fatalf("seed push: %v", err)
 	}
 	return bare
+}
+
+// Another ingress cluster that is being deleted is about to leave the grid,
+// so it doesn't let the last other one stop serving ingress.
+func TestUpdateClusterRoleIgnoresADeletingIngressCluster(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	deleting := managedCluster("site-b", roleLabels("ingress"), true)
+	deleting.SetDeletionTimestamp(&metav1.Time{Time: time.Now()})
+	deleting.SetFinalizers([]string{"cluster.open-cluster-management.io/api-resource-cleanup"})
+	server, err := NewClustersServer().SetDynamicClient(newManagedClusterClient(gridCluster("site-a", "ingress"), deleting)).Build()
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+	_, err = server.Update(ctx, labelsUpdate("site-a", roleLabels("inference")))
+	assertConnectCode(t, err, connect.CodeFailedPrecondition)
+}
+
+// A caller the hub won't let list ManagedClusters gets PermissionDenied, as
+// for the other ManagedCluster calls, and the cluster keeps its role.
+func TestUpdateClusterRoleListDenied(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	client := newManagedClusterClient(gridCluster("site-a", "ingress"), gridCluster("site-b", "ingress"))
+	client.PrependReactor("list", "managedclusters", func(k8stesting.Action) (bool, runtime.Object, error) {
+		return true, nil, apierrors.NewForbidden(schema.GroupResource{Group: "cluster.open-cluster-management.io", Resource: "managedclusters"}, "", errors.New("no list"))
+	})
+	server, err := NewClustersServer().SetDynamicClient(client).Build()
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+	_, err = server.Update(ctx, labelsUpdate("site-a", roleLabels("inference")))
+	assertConnectCode(t, err, connect.CodePermissionDenied)
+	got, err := server.Get(ctx, &aigridv1.ClustersGetRequest{Id: "site-a"})
+	if err != nil {
+		t.Fatalf("Get() error = %v", err)
+	}
+	if role := got.GetObject().GetMetadata().GetLabels()["ai-grid/role"]; role != "ingress" {
+		t.Fatalf("role after a refused Update = %q, want ingress", role)
+	}
 }

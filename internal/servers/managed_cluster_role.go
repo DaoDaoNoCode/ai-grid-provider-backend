@@ -10,6 +10,7 @@ import (
 
 	connect "connectrpc.com/connect/v2"
 	"github.com/osac-project/ai-grid-provider-backend/internal/gitops"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
@@ -112,15 +113,22 @@ func (s *ClustersServer) checkRoleChange(ctx context.Context, id string, current
 }
 
 // checkOtherIngress refuses when no grid cluster other than id serves
-// ingress.
+// ingress. A cluster being deleted doesn't count: it is about to leave the
+// grid.
 func (s *ClustersServer) checkOtherIngress(ctx context.Context, id string) error {
 	list, err := s.client.Resource(managedClustersResource).List(ctx, metav1.ListOptions{})
 	if err != nil {
-		return connect.Errorf(connect.CodeInternal, "list ManagedCluster resources: %v", err).WithCause(err)
+		code := connect.CodeInternal
+		if apierrors.IsForbidden(err) || apierrors.IsUnauthorized(err) {
+			code = connect.CodePermissionDenied
+		}
+		return connect.Errorf(code, "list ManagedCluster resources: %v", err).WithCause(err)
 	}
 	for i := range list.Items {
-		labels := list.Items[i].GetLabels()
-		if list.Items[i].GetName() != id && isAIGridMember(labels) && servesIngress(labels[labelAIGridRole]) {
+		item := &list.Items[i]
+		labels := item.GetLabels()
+		if item.GetName() != id && item.GetDeletionTimestamp() == nil &&
+			isAIGridMember(labels) && servesIngress(labels[labelAIGridRole]) {
 			return nil
 		}
 	}

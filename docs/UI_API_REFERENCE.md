@@ -77,7 +77,7 @@ realm** — not a per-tenant identifier.
 | `deletion_timestamp` | string (RFC 3339) | Set while deleting |
 | `creator` | string | Reserved; often empty today |
 | `tenant` | string | Reserved; often empty today |
-| `version` | int32 | Optimistic lock field; **not enforced yet** |
+| `version` | int32 | Optimistic lock field; each resource's update section says how it is checked (Clusters: [PATCH](#patch-apiv1clustersid)) |
 
 ### List query parameters (Clusters + Tenants + Models + Subscriptions)
 
