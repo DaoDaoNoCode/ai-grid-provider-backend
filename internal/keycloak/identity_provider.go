@@ -16,8 +16,9 @@ const (
 	identityProviderRolesMapperName   = "AI Grid roles"
 )
 
-// IdentityProvider is a realm-level identity provider instance. TrustEmail marks the email
-// the IdP asserts as verified; without it a brokered user's token says email_verified=false.
+// IdentityProvider is a realm-level identity provider instance. TrustEmail is Keycloak's
+// trustEmail: with it on, Keycloak takes a brokered user's email_verified from the IdP instead
+// of setting it to false.
 type IdentityProvider struct {
 	Alias       string            `json:"alias"`
 	DisplayName string            `json:"displayName,omitempty"`

@@ -776,8 +776,12 @@ func (s *TenantsServer) setupIdentityProvider(ctx context.Context, org keycloak.
 	if alias == "" {
 		alias = org.Name
 	}
-	// TrustEmail only marks the emails of users this IdP creates as verified. It doesn't link
-	// accounts: the realm's default first broker login flow (Keycloak 26) links a login to an
+	// With TrustEmail on, Keycloak (26.8) sets a brokered user's email_verified from this IdP's
+	// email_verified claim when the claim is present. When it's absent, Keycloak marks the email
+	// verified for a new user or a changed email. With TrustEmail off, email_verified is false and
+	// the MaaS Portal's oauth2-proxy refuses the token. The IdP's sync mode is FORCE
+	// (oidcConfigForKeycloak), so this applies on every login, not only the first.
+	// It doesn't link accounts: the realm's default first broker login flow (Keycloak 26) links a login to an
 	// existing user with the same email only after that user clicks an emailed link or
 	// re-enters their password, so a tenant IdP can't take over another account by email.
 	kcIdP := keycloak.IdentityProvider{
@@ -785,7 +789,7 @@ func (s *TenantsServer) setupIdentityProvider(ctx context.Context, org keycloak.
 		DisplayName: idp.GetTitle(),
 		ProviderID:  "oidc",
 		Enabled:     idp.GetEnabled(),
-		TrustEmail:  true, // the MaaS Portal's oauth2-proxy refuses email_verified=false
+		TrustEmail:  true,
 		Config:      oidcConfigForKeycloak(idp.GetConfig(), secret),
 	}
 	if err := s.tenants.CreateIdentityProvider(ctx, kcIdP); err != nil {
