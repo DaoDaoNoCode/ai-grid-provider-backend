@@ -69,7 +69,30 @@ derives, so no client has to:
 
 - `status.ai_grid_member`: the `ai-grid/enabled` label is exactly `"true"`,
   the selector the hub's AI Grid Placements match. A cluster joins or leaves
-  the grid through `Clusters/Update` by setting or removing that label.
+  the grid through `Clusters/Update` by setting or removing that label;
+  leaving is checked with the role, below.
+- The `ai-grid/role` label is not derived, but `Clusters/Update` checks it:
+  `ingress`, `inference` or `combined` picks what the hub installs on a
+  member (ai-grid-cloud/ai-grid-cluster-gitops,
+  `apps/ai-grid-spokes/manifests/02-placements.yaml` and
+  `apps/rhoai/roles/<role>.yaml`), and a role change makes GitOps install
+  what the new role has and prune what only the old one had. A role the
+  update sets or changes must be one of the three (`InvalidArgument`); no
+  role is allowed. Then, for a member whose role changes or that leaves the
+  grid, these are `FailedPrecondition`, the first that applies answering:
+  it stops serving ingress (`ingress` or `combined` to a role without
+  ingress, or leaving) while the Git catalog has any subscription, because
+  Argo CD then deletes its copies of every subscription and maas-controller
+  revokes their API keys in the shared maas-db, on all clusters; it stops
+  serving ingress while it is the grid's last ingress cluster and the grid
+  keeps a member; it stops serving inference (`inference` or `combined` to
+  a role without inference), or leaves whatever its role, while the catalog
+  places models on it. The catalog is read once, on the remote's head, not
+  the read cache; without `AI_GRID_GIT_URL` there is no subscription or
+  placed model, and a repository not cloned yet answers `Unavailable`. The
+  checks and the label write aren't atomic, so a subscription created or a
+  model placed between them isn't refused. Joining the grid isn't checked.
+  See [`docs/UI_API_REFERENCE.md`](docs/UI_API_REFERENCE.md), "Roles".
 - `status.state` and `status.state_message`: the lifecycle state the ACM
   console shows (`READY`, `OFFLINE`, `UNKNOWN`, `PENDING_IMPORT`, `IMPORTING`,
   `IMPORT_FAILED`, `NOT_ACCEPTED`, `DETACHING`; `UNSPECIFIED` before the hub
@@ -161,9 +184,10 @@ status from the hub's Argo CD Applications ([Status](#status-from-the-spokes)).
 
 | Setting | Meaning |
 |---|---|
-| `AI_GRID_GIT_URL` | Repository URL, without credentials. Without it the backend still starts: Models' and Subscriptions' list, get, create, update and delete answer `FailedPrecondition`, naming this setting, and `Models/ListPlacementClusters` and `Models/ListLocations` (which read the cluster) and the other APIs serve as usual. Setting `AI_GRID_GIT_TOKEN_FILE` without it is an error at startup. The backend clones it in the background and retries a failed clone, waiting up to a minute between attempts; until a clone succeeds, Models and Subscriptions answer `Unavailable` and the other APIs serve as usual. A `file://` URL or local path is served in-process, so the image needs no `git`. |
+| `AI_GRID_GIT_URL` | Repository URL, without credentials. Without it the backend still starts: Models' and Subscriptions' list, get, create, update and delete answer `FailedPrecondition`, naming this setting, and `Models/ListPlacementClusters` and `Models/ListLocations` (which read the cluster) and the other APIs serve as usual. Setting `AI_GRID_GIT_TOKEN_FILE` without it is an error at startup. The backend clones it in the background and retries a failed clone, waiting up to a minute between attempts; until a clone succeeds, Models and Subscriptions answer `Unavailable`, and so does a `Clusters/Update` that stops a grid cluster serving ingress or inference, or removes it from the grid (it reads the subscriptions or the models placed on it, [Cluster membership](#cluster-membership-state-and-location)); the other APIs serve as usual. A `file://` URL or local path is served in-process, so the image needs no `git`. |
 | `AI_GRID_GIT_BRANCH` | Branch to commit to. Default `main`. It must have at least one commit. |
 | `AI_GRID_GIT_TOKEN_FILE` | File holding a GitHub personal access token with `contents: write` on that repository only, for example a mounted Secret. Sent as HTTPS basic auth, so `AI_GRID_GIT_URL` must be `https://` when it is set; never logged. |
+| `AI_GRID_GIT_READ_MAX_AGE` | How old the last fetch or push of the branch may be for a read to use its head, and for a write to commit on it without fetching, as a Go duration. Default `10s`; `0` fetches before every read and every write. A commit pushed by anyone else shows in reads within about this long (below); a value that doesn't parse, or a negative one, is an error at startup. |
 | `AI_GRID_MODELS_NAMESPACE` | Namespace of each model's `LLMInferenceService` on the inference spokes. Default `ai-grid-internal-models`. An override must name a namespace that's already enabled for grid routing on every inference spoke: labelled `grid.opendatahub.io/allowed: "true"`, allowed by the inference Gateway's `allowedRoutes`, and with NetworkPolicies that let the grid reach the model and its scheduler's metrics. The backend writes one NetworkPolicy per model that admits the grid namespace; the namespace and its other policies come from the environment. |
 | `AI_GRID_SUBSCRIPTION_NAMESPACE` | Namespace of the subscriptions, their policies and the models' catalog entries on the ingress spokes. Default `models-as-a-service`. |
 | `AI_GRID_CATALOG_APP_NAMESPACE` | Hub namespace of the catalog's Argo CD ApplicationSets and Applications, which status is read from. Default `openshift-gitops`. |
@@ -197,6 +221,10 @@ For both models and subscriptions:
   `resource_version` is checked the same way; zero skips the check. A deleted
   and re-created id starts again at version 1, so a client still holding
   version 1 of the old object can update or delete the new one.
+- A write's commit checks every file the write was decided on against the
+  branch head: the files it writes, the indexes it read and left as they
+  were, and the files its checks read. A commit conflicts when any of them
+  changed since the read.
 - A write whose commit conflicts, because another write reached the branch
   first, is made again from the start on the new head, up to 5 times in all,
   like client-go's `retry.RetryOnConflict`. Two writes to different objects
@@ -205,6 +233,31 @@ For both models and subscriptions:
   is `Aborted`, an id created meanwhile is `AlreadyExists`, and a write
   without a version applies to the latest object. Only a write that still
   conflicts on the 5th try answers `Aborted`.
+- Reads (`List`, `Get`, and the checks a write makes before it commits) come
+  from the backend's clone of the branch, fetched at most once every
+  `AI_GRID_GIT_READ_MAX_AGE` (default 10 seconds): a fetch can take seconds
+  even when nothing changed (from the demo hub, about 3 seconds from
+  GitHub). Reads that arrive while a fetch runs wait for that one fetch. The
+  backend's own writes show in the next read at once; a commit pushed by
+  anyone else, a hand edit or another replica, shows within about
+  `AI_GRID_GIT_READ_MAX_AGE`, plus the time one fetch takes. Until then
+  `List` and `Get` answer from the older state: an object created elsewhere
+  is missing (`Get` answers `NotFound`), one deleted elsewhere is still
+  there, and one changed elsewhere has its older version.
+- A write doesn't answer a refusal from such a state. When what its read
+  showed refuses it (`NotFound`, `AlreadyExists`, `Aborted` for a version,
+  or `FailedPrecondition`, such as a model a subscription names that isn't
+  there) and that read came from the window rather than a fetch, it fetches
+  and decides once more, and answers that. A refusal costs one fetch more
+  than before; a write that goes through costs none.
+- A write commits on the head its read saw, without fetching, while that
+  head is younger than `AI_GRID_GIT_READ_MAX_AGE`, and pushes. A stale read
+  still can't overwrite a newer commit, or undo a reset of the branch: the
+  push lands only while the branch is still at the commit's parent, so when
+  anyone else has pushed since, or the branch was reset to an older commit,
+  the push is refused, and the write is made again on a freshly fetched
+  head, as above. Otherwise, and always with `0`, the write fetches first
+  and checks its change against the fetched head.
 - The files belong to the backend. An update rewrites them from the stored
   object and the request, so a hand edit to a catalog file is lost on the
   next write to that object.
@@ -741,6 +794,7 @@ like the console deployed there, for the console's `make dev`:
 oc login https://api.<hub>:6443 ...
 make run-hub              # gRPC/Connect 127.0.0.1:9090, REST 127.0.0.1:9092
 make run-hub KEYCLOAK=hub # also the deployed console's Keycloak (Organizations)
+make run-hub CATALOG=local # Models and Subscriptions in make run's local catalog
 ```
 
 It uses the current kubeconfig context as it is (`KUBECONFIG_PATH` picks
@@ -757,7 +811,10 @@ plain Git and namespace settings (`AI_GRID_GIT_URL`, `AI_GRID_GIT_BRANCH`,
 the Deployment labelled `app.kubernetes.io/name=ai-grid-provider-console`.
 Without exactly one such Deployment it keeps `make run`'s defaults. It never
 reads the Git token, so Models and Subscriptions read the console's catalog,
-and writes to it fail with the backend's error. `KEYCLOAK=hub` reads the console's Keycloak Secret into the
+and writes to it fail with the backend's error. `CATALOG=local` keeps
+`make run`'s local catalog (`DEV_CATALOG`) instead of the console's Git URL
+and branch: deploying a model then writes its files there, against the hub's
+real clusters, and the hub's catalog and clusters don't change. `KEYCLOAK=hub` reads the console's Keycloak Secret into the
 backend's environment only; without it Tenants use `make run`'s
 `KEYCLOAK_URL`. The API acts as you: adding or removing clusters, and with
 `KEYCLOAK=hub` organization changes, are real. Ctrl-C stops the API and the
@@ -987,21 +1044,21 @@ Earlier versions created two public Routes, and `oc apply` doesn't prune, so
 
 Default image: [`ghcr.io/ai-grid-cloud/ai-grid-provider-backend`](https://github.com/ai-grid-cloud/ai-grid-provider-backend/pkgs/container/ai-grid-provider-backend).
 
-CI (`.github/workflows/ci.yaml`) runs the Check job on pull requests and on
-pushes to `main` and `v*` tags (build, lint, unit tests, generated-file
-verify). After Check passes, pushes, tags and manual runs publish the image to
-ghcr.io: `sha-<full sha>` every time (pin deployments to it), `latest` on
-`main`, and semver from `v*` tags. It pushes with `GITHUB_TOKEN`; no repository
-secrets are needed.
+CI (`.github/workflows/ci.yaml`) runs the Check job on every branch push and
+every pull request (build, lint, unit tests, `make check-generated`).
+After Check passes, **image build/publish runs only on push/merge to `main`**,
+on `v*` tags, and on manual `workflow_dispatch` (Docker Buildx) — never on
+other branches or PRs. Local `make image` stays Podman-first. Published tags:
+`sha-<full sha>` every time (pin deployments to it), `latest` on `main`, and
+semver from `v*` tags. It pushes with `GITHUB_TOKEN`; no repository secrets
+are needed.
 A new ghcr package starts private: when CI first publishes a new image, an
 organization owner sets the package's visibility to Public, or clusters need a
 pull secret.
 
-Pull requests also get an image: `publish-image.yml` builds it without
-credentials, `publish-pr-image.yml` pushes it as `pr-<number>` (never `sha-*`,
-`latest` or semver), `cleanup-pr-image.yml` deletes it when the PR closes, and
-`prune-images.yml` removes `pr-*` and untagged versions older than 30 days
-every Monday.
+PR preview image workflows are disabled. `cleanup-pr-image.yml` may still delete
+leftover `pr-*` tags when a PR closes; `prune-images.yml` removes stale `pr-*`
+and untagged versions older than 30 days every Monday.
 
 Publish locally (login required once: `podman login ghcr.io`):
 

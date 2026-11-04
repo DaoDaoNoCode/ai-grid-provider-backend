@@ -13,6 +13,7 @@ import (
 	connect "connectrpc.com/connect/v2"
 	aigridv1 "github.com/osac-project/ai-grid-provider-backend/gen/ai_grid/v1"
 	"github.com/osac-project/ai-grid-provider-backend/internal/gitops"
+	"github.com/osac-project/ai-grid-provider-backend/internal/names"
 	"google.golang.org/protobuf/proto"
 	apivalidation "k8s.io/apimachinery/pkg/api/validation"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -65,7 +66,7 @@ func (s *SubscriptionsServer) gitList(ctx context.Context) ([]*aigridv1.Subscrip
 		if err != nil {
 			return nil, err
 		}
-		catalog.join(doc.sub)
+		catalog.join(ctx, doc.sub)
 		items = append(items, withSubscriptionPhase(doc.sub, active))
 	}
 	return items, nil
@@ -92,14 +93,14 @@ func (s *SubscriptionsServer) modelCatalog(head gitops.Snapshot) *modelCatalog {
 // The join only decorates refs, so a broken entry is logged, not returned:
 // it must not fail the subscriptions that name the model, or keep them from
 // being edited.
-func (c *modelCatalog) modelRef(id string) *unstructured.Unstructured {
+func (c *modelCatalog) modelRef(ctx context.Context, id string) *unstructured.Unstructured {
 	if entry, ok := c.entries[id]; ok {
 		return entry
 	}
 	c.entries[id] = nil
 	// Only a model id names a catalog entry; a ref in a file edited by hand
 	// could hold anything, such as a path.
-	if !modelNameRE.MatchString(id) {
+	if !names.ValidDNSLabel(id) {
 		return nil
 	}
 	p := path.Join(modelCatalogGitDir(id), "model.yaml")
@@ -118,7 +119,7 @@ func (c *modelCatalog) modelRef(id string) *unstructured.Unstructured {
 			return c.entries[id]
 		}
 	}
-	c.logger.Warn("read model catalog entry; its subscription refs are left without model_id", "model", id, "file", p, "error", err)
+	c.logger.WarnContext(ctx, "read model catalog entry; its subscription refs are left without model_id", "model", id, "file", p, "error", err)
 	return nil
 }
 
@@ -127,10 +128,10 @@ func (c *modelCatalog) modelRef(id string) *unstructured.Unstructured {
 // entry gets model_id, the model's id, and display_name and description from
 // that MaaSModelRef's annotations, which renderModelCatalog copies from the
 // model's. Any other ref gets none of them, whatever the caller sent.
-func (c *modelCatalog) join(sub *aigridv1.Subscription) {
+func (c *modelCatalog) join(ctx context.Context, sub *aigridv1.Subscription) {
 	for _, ref := range sub.GetSpec().GetModelRefs() {
 		ref.ModelId, ref.DisplayName, ref.Description = "", "", ""
-		entry := c.modelRef(ref.GetName())
+		entry := c.modelRef(ctx, ref.GetName())
 		namespace := ref.GetNamespace()
 		if namespace == "" {
 			namespace = c.namespace
@@ -154,7 +155,7 @@ func (s *SubscriptionsServer) gitGet(ctx context.Context, id string) (*aigridv1.
 	if err != nil {
 		return nil, err
 	}
-	s.modelCatalog(head).join(doc.sub)
+	s.modelCatalog(head).join(ctx, doc.sub)
 	resp := &aigridv1.SubscriptionsGetResponse{
 		Object:             withSubscriptionPhase(doc.sub, s.readReports(ctx, kindMaaSSubscription)),
 		ModelRegistrations: gitModelRegistrations(doc.sub, s.namespace, s.readIngressReports(ctx, kindMaaSModelRef)),
@@ -313,10 +314,17 @@ func (s *SubscriptionsServer) gitCreate(ctx context.Context, object *aigridv1.Su
 	if _, err := qualifiedOwnerGroups(object.GetSpec()); err != nil {
 		return nil, err
 	}
-	head, err := s.writer.Head(ctx)
-	if err != nil {
-		return nil, subscriptionGitError("create", id, err)
-	}
+	var resp *aigridv1.SubscriptionsCreateResponse
+	err := decideOnHead(ctx, s.writer, func(err error) error { return subscriptionGitError("create", id, err) }, func(head gitops.Snapshot) (err error) {
+		resp, err = s.gitCreateOn(ctx, head, proto.CloneOf(object))
+		return err
+	})
+	return resp, err
+}
+
+// gitCreateOn decides and commits the create of object on head.
+func (s *SubscriptionsServer) gitCreateOn(ctx context.Context, head gitops.Snapshot, object *aigridv1.Subscription) (*aigridv1.SubscriptionsCreateResponse, error) {
+	id := subscriptionID(object)
 	if _, err := head.Read(subscriptionGitPath(id)); err == nil {
 		return nil, connect.Errorf(connect.CodeAlreadyExists, "Subscription %q already exists", id)
 	} else if !errors.Is(err, gitops.ErrNotFound) {
@@ -331,7 +339,7 @@ func (s *SubscriptionsServer) gitCreate(ctx context.Context, object *aigridv1.Su
 		return nil, err
 	}
 	// The commit changes no catalog entry, so the snapshot read still holds.
-	s.modelCatalog(head).join(doc.sub)
+	s.modelCatalog(head).join(ctx, doc.sub)
 	return &aigridv1.SubscriptionsCreateResponse{
 		Object:     withSubscriptionPhase(doc.sub, s.readReports(ctx, kindMaaSSubscription)),
 		AuthPolicy: withAuthPolicyStatus(doc.policy, s.readReports(ctx, kindMaaSAuthPolicy)),
@@ -343,16 +351,24 @@ func (s *SubscriptionsServer) gitUpdate(ctx context.Context, req *aigridv1.Subsc
 	id := subscriptionID(object)
 	version := object.GetMetadata().GetVersion()
 	if req.GetLock() && version == 0 {
-		return nil, connect.NewError(connect.CodeInvalidArgument, "lock requires metadata.version")
+		return nil, connect.Errorf(connect.CodeInvalidArgument, "lock requires metadata.version")
 	}
 	paths, err := subscriptionUpdatePaths(req.GetUpdateMask(), object)
 	if err != nil {
 		return nil, err
 	}
-	head, err := s.writer.Head(ctx)
-	if err != nil {
-		return nil, subscriptionGitError("update", id, err)
-	}
+	var resp *aigridv1.SubscriptionsUpdateResponse
+	err = decideOnHead(ctx, s.writer, func(err error) error { return subscriptionGitError("update", id, err) }, func(head gitops.Snapshot) (err error) {
+		resp, err = s.gitUpdateOn(ctx, head, proto.CloneOf(object), version, paths)
+		return err
+	})
+	return resp, err
+}
+
+// gitUpdateOn decides and commits an update of object, at version (0 for
+// none), to the subscription as head has it.
+func (s *SubscriptionsServer) gitUpdateOn(ctx context.Context, head gitops.Snapshot, object *aigridv1.Subscription, version int32, paths subUpdatePaths) (*aigridv1.SubscriptionsUpdateResponse, error) {
+	id := subscriptionID(object)
 	current, err := readSubscriptionDoc(head, id)
 	if err != nil {
 		return nil, err
@@ -364,7 +380,7 @@ func (s *SubscriptionsServer) gitUpdate(ctx context.Context, req *aigridv1.Subsc
 	// A mask that names nothing the file stores changes nothing and commits
 	// nothing.
 	if !paths.labels && !paths.annotations && !paths.anySpec() {
-		s.modelCatalog(head).join(current.sub)
+		s.modelCatalog(head).join(ctx, current.sub)
 		return &aigridv1.SubscriptionsUpdateResponse{Object: withSubscriptionPhase(current.sub, s.readReports(ctx, kindMaaSSubscription))}, nil
 	}
 
@@ -393,7 +409,7 @@ func (s *SubscriptionsServer) gitUpdate(ctx context.Context, req *aigridv1.Subsc
 		return nil, err
 	}
 	// As in gitCreate.
-	s.modelCatalog(head).join(doc.sub)
+	s.modelCatalog(head).join(ctx, doc.sub)
 	return &aigridv1.SubscriptionsUpdateResponse{Object: withSubscriptionPhase(doc.sub, s.readReports(ctx, kindMaaSSubscription))}, nil
 }
 
@@ -402,10 +418,14 @@ func (s *SubscriptionsServer) gitUpdate(ctx context.Context, req *aigridv1.Subsc
 // commit is made on the revision read, so a concurrent write to the file
 // makes it conflict, and Delete's rerun checks the version again.
 func (s *SubscriptionsServer) gitDelete(ctx context.Context, id string, version int32) error {
-	head, err := s.writer.Head(ctx)
-	if err != nil {
-		return subscriptionGitError("delete", id, err)
-	}
+	return decideOnHead(ctx, s.writer, func(err error) error { return subscriptionGitError("delete", id, err) }, func(head gitops.Snapshot) error {
+		return s.gitDeleteOn(ctx, head, id, version)
+	})
+}
+
+// gitDeleteOn decides and commits the delete of subscription id, at version
+// (0 for none), as head has it.
+func (s *SubscriptionsServer) gitDeleteOn(ctx context.Context, head gitops.Snapshot, id string, version int32) error {
 	current, err := readSubscriptionDoc(head, id)
 	if err != nil {
 		return err
@@ -515,9 +535,9 @@ func validateGitMetadata(meta *aigridv1.Metadata) error {
 func qualifiedOwnerGroups(spec *aigridv1.SubscriptionSpec) ([]string, error) {
 	org := spec.GetOrganization().GetId()
 	if org == "" {
-		return nil, connect.NewError(connect.CodeInvalidArgument, "spec.organization.id is required")
+		return nil, connect.Errorf(connect.CodeInvalidArgument, "spec.organization.id is required")
 	}
-	if !subscriptionNameRE.MatchString(org) {
+	if !names.ValidDNSLabel(org) {
 		return nil, connect.Errorf(connect.CodeInvalidArgument, "spec.organization.id %q is not a valid organization id", org)
 	}
 	groups := spec.GetOwner().GetGroups()
@@ -663,15 +683,5 @@ func unmarshalYAMLDocs(data []byte) ([]*unstructured.Unstructured, error) {
 }
 
 func subscriptionGitError(op, id string, err error) error {
-	switch {
-	case errors.Is(err, gitops.ErrNotFound):
-		return connect.Errorf(connect.CodeNotFound, "Subscription %q not found", id).WithCause(err)
-	case errors.Is(err, gitops.ErrConflict):
-		return staleSubscriptionError(op, id).WithCause(err)
-	case errors.Is(err, gitops.ErrNotConfigured):
-		// Not one subscription's problem, so the message names the API, not the id.
-		return connect.Errorf(connect.CodeFailedPrecondition, "Subscriptions: %v", err).WithCause(err)
-	default:
-		return connect.Errorf(connect.CodeUnavailable, "%s Subscription %q: git: %v", op, id, err).WithCause(err)
-	}
+	return mapGitopsError("Subscription", "Subscriptions", op, id, err, staleSubscriptionError)
 }

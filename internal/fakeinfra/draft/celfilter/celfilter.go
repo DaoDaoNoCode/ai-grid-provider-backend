@@ -19,6 +19,11 @@
 // Only the fakes import this package (here the draft fake; in the console,
 // its backendtest); the BFF forwards a client's filter unchanged and never
 // evaluates one.
+//
+// Draft-only: errors map to gRPC status codes. Do not import
+// internal/celfilter from here (or the reverse); production handlers use that
+// package and Connect codes. Share pure eval only by copying or a future
+// shared helper — never cross-import these two packages.
 package celfilter
 
 import (

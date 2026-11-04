@@ -69,6 +69,13 @@ type Server struct {
 	mu     sync.Mutex
 	orgs   map[string]*organization
 	tokens map[string]time.Time
+
+	// readStarted, when non-nil, is signaled (non-blocking, once per call)
+	// the moment the admin wrapper begins reading a request body. A test
+	// hook so TestStalledBodyDoesNotBlockOthers knows the stalled request
+	// is already blocked in its body read before it fires the requests
+	// that must not wait on it.
+	readStarted chan struct{}
 }
 
 // organization is the stored model of an Organization.
@@ -221,6 +228,12 @@ func (s *Server) token(w http.ResponseWriter, r *http.Request) {
 // stalls in its body holds up nobody else.
 func (s *Server) admin(next func(http.ResponseWriter, *http.Request)) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		if s.readStarted != nil {
+			select {
+			case s.readStarted <- struct{}{}:
+			default:
+			}
+		}
 		body, err := io.ReadAll(io.LimitReader(r.Body, maxBodyBytes+1))
 		if err != nil {
 			writeError(w, http.StatusBadRequest, "HTTP 400 Bad Request")

@@ -18,7 +18,7 @@ import (
 
 // newBareRepo returns the URL of a local bare repository whose main branch
 // has one commit holding files.
-func newBareRepo(t *testing.T, files map[string]string) string {
+func newBareRepo(t testing.TB, files map[string]string) string {
 	t.Helper()
 	root := t.TempDir()
 	bare := filepath.Join(root, "remote.git")
@@ -232,8 +232,9 @@ func TestNewRepoWriterRequiresConfig(t *testing.T) {
 		"no branch": {URL: "file:///nowhere", AuthorName: "a", AuthorEmail: "a@example.com"},
 		"no author": {URL: "file:///nowhere", Branch: "main"},
 		// A token goes only over https, never in the clear.
-		"token over http": {URL: "http://127.0.0.1:1/catalog.git", Branch: "main", Token: "t", AuthorName: "a", AuthorEmail: "a@example.com"},
-		"token over file": {URL: "file:///nowhere", Branch: "main", Token: "t", AuthorName: "a", AuthorEmail: "a@example.com"},
+		"token over http":       {URL: "http://127.0.0.1:1/catalog.git", Branch: "main", Token: "t", AuthorName: "a", AuthorEmail: "a@example.com"},
+		"token over file":       {URL: "file:///nowhere", Branch: "main", Token: "t", AuthorName: "a", AuthorEmail: "a@example.com"},
+		"negative read max age": {URL: "file:///nowhere", Branch: "main", AuthorName: "a", AuthorEmail: "a@example.com", ReadMaxAge: -time.Second},
 	} {
 		if err := cfg.Validate(); err == nil {
 			t.Errorf("%s: Validate() succeeded", name)
@@ -276,12 +277,29 @@ func TestRepoWriterFileURLWithoutGitBinary(t *testing.T) {
 
 // TestRepoWriterConcurrentReadsAndCommits reads snapshots while other requests
 // fetch and commit. Run it under -race: a snapshot read must not race with the
-// writes to the in-memory clone.
+// writes to the in-memory clone. It runs with every read fetching, with reads
+// sharing fetches that are almost always stale, and with reads that never
+// fetch, so snapshots are read during shared fetches and during commits.
 func TestRepoWriterConcurrentReadsAndCommits(t *testing.T) {
 	t.Parallel()
+	for _, maxAge := range []time.Duration{0, time.Nanosecond, time.Hour} {
+		t.Run("max-age="+maxAge.String(), func(t *testing.T) {
+			t.Parallel()
+			testRepoWriterConcurrentReadsAndCommits(t, maxAge)
+		})
+	}
+}
+
+func testRepoWriterConcurrentReadsAndCommits(t *testing.T, maxAge time.Duration) {
 	ctx := context.Background()
 	url := newBareRepo(t, map[string]string{"catalog/subscriptions/a.yaml": "a"})
-	w := newTestRepoWriter(t, url)
+	w, err := NewRepoWriter(ctx, RepoConfig{
+		URL: url, Branch: "main", AuthorName: "ai-grid-provider-backend", AuthorEmail: "backend@example.com",
+		ReadMaxAge: maxAge,
+	})
+	if err != nil {
+		t.Fatalf("NewRepoWriter() error = %v", err)
+	}
 
 	errs := make(chan error, 64)
 	var wg sync.WaitGroup

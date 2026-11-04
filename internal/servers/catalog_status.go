@@ -212,7 +212,7 @@ func (r *CatalogStatusReader) Read(ctx context.Context, set CatalogSet, kind str
 		// Once per process: every model then shows saved to Git, which is
 		// easy to miss when the RBAC or Argo CD is what's missing.
 		if r.warned.CompareAndSwap(false, true) {
-			r.logger.Warn("can't list the catalog's Argo CD Applications; models and subscriptions report no status",
+			r.logger.WarnContext(ctx, "can't list the catalog's Argo CD Applications; models and subscriptions report no status",
 				"namespace", r.apps.Namespace, "error", err)
 		}
 		return nil, nil
@@ -457,10 +457,13 @@ func worse(a, b ObjectState) bool {
 // readReports reads one kind's reports for a git-mode request. Status is read
 // on every request, with no cache. A failed read is logged and reports
 // nothing, so the request still answers from Git.
-func readReports(ctx context.Context, logger *slog.Logger, status *CatalogStatusReader, set CatalogSet, kind string) ObjectReports {
+func readReports(ctx context.Context, logger *slog.Logger, status catalogStatusReader, set CatalogSet, kind string) ObjectReports {
+	if status == nil {
+		return nil
+	}
 	reports, err := status.Read(ctx, set, kind)
 	if err != nil {
-		logger.Warn("read catalog status", "kind", kind, "error", err)
+		logger.WarnContext(ctx, "read catalog status", "kind", kind, "error", err)
 		return nil
 	}
 	return reports

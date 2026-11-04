@@ -14,6 +14,9 @@
 #     console's ai-grid-backend container (the Deployment labelled
 #     app.kubernetes.io/name=ai-grid-provider-console), never its Git token:
 #     Git writes fail with the backend's own error;
+#   - with CATALOG=local, keeps make run's local catalog (DEV_CATALOG)
+#     instead of the console's Git URL and branch, so Models and
+#     Subscriptions writes land there and the hub's catalog is never touched;
 #   - with KEYCLOAK=hub, reads that console's Keycloak Secret straight into
 #     the backend's environment, never printing it; otherwise KEYCLOAK_URL is
 #     make run's default.
@@ -29,6 +32,7 @@ KUBECONFIG_PATH="${KUBECONFIG_PATH:-${KUBECONFIG:-$HOME/.kube/config}}"
 export KUBECONFIG="$KUBECONFIG_PATH"
 KEYCLOAK_URL="${KEYCLOAK_URL:-http://127.0.0.1:8180}"
 KEYCLOAK="${KEYCLOAK:-}"
+CATALOG="${CATALOG:-}"
 BACKEND_BIN="${BACKEND_BIN:-bin/ai-grid-provider-backend}"
 DEV_CATALOG="${DEV_CATALOG:-bin/dev-catalog.git}"
 RUN_ARGS="${RUN_ARGS:-}"
@@ -48,6 +52,15 @@ case "$KEYCLOAK" in
   "" | hub) ;;
   *) die "KEYCLOAK=$KEYCLOAK: the only value is hub" ;;
 esac
+case "$CATALOG" in
+  "" | local) ;;
+  *) die "CATALOG=$CATALOG: the only value is local" ;;
+esac
+# CATALOG=local: neither the deployed console's Git URL and branch nor ones
+# already in the environment, so writes can only land in DEV_CATALOG.
+if [[ "$CATALOG" == local ]]; then
+  unset AI_GRID_GIT_URL AI_GRID_GIT_BRANCH
+fi
 
 # 127.0.0.1:9090, localhost:9090 or [::1]:9090; not :9090 or 0.0.0.0:9090.
 loopback() {
@@ -97,6 +110,9 @@ if [[ -n "$console_name" ]]; then
     name="${line%%=*}"
     value="${line#*=}"
     for wanted in "${COPY_ENV[@]}"; do
+      if [[ "$CATALOG" == local && ( "$name" == AI_GRID_GIT_URL || "$name" == AI_GRID_GIT_BRANCH ) ]]; then
+        continue
+      fi
       if [[ "$name" == "$wanted" && -n "$value" ]]; then
         export "$name=$value"
         say "  $name=$value"

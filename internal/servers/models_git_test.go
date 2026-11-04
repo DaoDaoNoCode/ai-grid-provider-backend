@@ -759,8 +759,8 @@ func TestModelsGitUnconfigured(t *testing.T) {
 	srv := mustGitModelsServer(t, gitops.Unconfigured{})
 	_, err := srv.List(ctx, &aigridv1.ModelsListRequest{})
 	assertConnectCode(t, err, connect.CodeFailedPrecondition)
-	if err == nil || !strings.Contains(err.Error(), "AI_GRID_GIT_URL") {
-		t.Errorf("List() error = %v, want it to name AI_GRID_GIT_URL", err)
+	if !errors.Is(err, gitops.ErrNotConfigured) {
+		t.Errorf("List() error = %v, want errors.Is(..., gitops.ErrNotConfigured)", err)
 	}
 	_, err = srv.Create(ctx, &aigridv1.ModelsCreateRequest{Object: gitSampleModel("m1", "site-a")})
 	assertConnectCode(t, err, connect.CodeFailedPrecondition)

@@ -17,6 +17,7 @@ import (
 	"github.com/osac-project/ai-grid-provider-backend/gen/ai_grid/v1/aigridv1connect"
 	"github.com/osac-project/ai-grid-provider-backend/internal/celfilter"
 	"github.com/osac-project/ai-grid-provider-backend/internal/gitops"
+	"github.com/osac-project/ai-grid-provider-backend/internal/names"
 	"google.golang.org/genproto/googleapis/rpc/errdetails"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
@@ -26,12 +27,19 @@ import (
 	"k8s.io/client-go/dynamic"
 )
 
+// catalogStatusReader is the Application-status surface Models and Subscriptions
+// need (DIP; mirror Tenants' organizationClient). Production wires
+// *CatalogStatusReader.
+type catalogStatusReader interface {
+	Read(ctx context.Context, set CatalogSet, kind string) (ObjectReports, error)
+}
+
 // ModelsServerBuilder configures a ModelsServer.
 type ModelsServerBuilder struct {
 	logger                *slog.Logger
 	client                dynamic.Interface
 	writer                gitops.Writer
-	status                *CatalogStatusReader
+	status                catalogStatusReader
 	gridNamespace         string
 	namespace             string
 	subscriptionNamespace string
@@ -50,7 +58,7 @@ type ModelsServer struct {
 	logger                *slog.Logger
 	client                dynamic.Interface
 	writer                gitops.Writer
-	status                *CatalogStatusReader
+	status                catalogStatusReader
 	gridNamespace         string
 	namespace             string
 	subscriptionNamespace string
@@ -65,7 +73,7 @@ func NewModelsServer() *ModelsServerBuilder {
 	return &ModelsServerBuilder{}
 }
 
-// SetLogger sets the logger.
+// SetLogger sets the logger. Optional; slog.Default() when unset.
 func (b *ModelsServerBuilder) SetLogger(logger *slog.Logger) *ModelsServerBuilder {
 	b.logger = logger
 	return b
@@ -89,7 +97,7 @@ func (b *ModelsServerBuilder) SetDynamicClient(client dynamic.Interface) *Models
 
 // SetCatalogStatus sets where status is read from the spokes. Optional;
 // without it every model is saved to Git.
-func (b *ModelsServerBuilder) SetCatalogStatus(status *CatalogStatusReader) *ModelsServerBuilder {
+func (b *ModelsServerBuilder) SetCatalogStatus(status catalogStatusReader) *ModelsServerBuilder {
 	b.status = status
 	return b
 }
@@ -197,7 +205,7 @@ func (s *ModelsServer) Get(ctx context.Context, req *aigridv1.ModelsGetRequest) 
 func (s *ModelsServer) Create(ctx context.Context, req *aigridv1.ModelsCreateRequest) (*aigridv1.ModelsCreateResponse, error) {
 	object := req.GetObject()
 	if object == nil {
-		return nil, connect.NewError(connect.CodeInvalidArgument, "object is required")
+		return nil, connect.Errorf(connect.CodeInvalidArgument, "object is required")
 	}
 	id := modelID(object)
 	if err := validateModelID(id); err != nil {
@@ -236,7 +244,7 @@ func (s *ModelsServer) Create(ctx context.Context, req *aigridv1.ModelsCreateReq
 func (s *ModelsServer) Update(ctx context.Context, req *aigridv1.ModelsUpdateRequest) (*aigridv1.ModelsUpdateResponse, error) {
 	object := req.GetObject()
 	if object == nil {
-		return nil, connect.NewError(connect.CodeInvalidArgument, "object is required")
+		return nil, connect.Errorf(connect.CodeInvalidArgument, "object is required")
 	}
 	if err := validateModelID(modelID(object)); err != nil {
 		return nil, err
@@ -447,7 +455,7 @@ func (s *ModelsServer) enrichGitLocations(ctx context.Context, models ...*aigrid
 	}
 	list, err := s.client.Resource(managedClustersResource).List(ctx, metav1.ListOptions{})
 	if err != nil {
-		s.logger.Warn("list ManagedClusters for model locations", "error", err)
+		s.logger.WarnContext(ctx, "list ManagedClusters for model locations", "error", err)
 		return
 	}
 	byName := map[string]string{}
@@ -495,7 +503,7 @@ func (p modelUpdatePaths) anyLLM() bool {
 
 func parseModelUpdateMask(mask *fieldmaskpb.FieldMask) (modelUpdatePaths, error) {
 	if mask == nil || len(mask.GetPaths()) == 0 {
-		return modelUpdatePaths{}, connect.NewError(connect.CodeInvalidArgument, "update_mask is required")
+		return modelUpdatePaths{}, connect.Errorf(connect.CodeInvalidArgument, "update_mask is required")
 	}
 	var paths modelUpdatePaths
 	for _, path := range mask.GetPaths() {
@@ -582,7 +590,7 @@ func mergeModelUpdate(current, incoming *aigridv1.Model, paths modelUpdatePaths)
 		// Whole-main replace with a nil container would merge-patch
 		// {"name":"main"} onto the CR and wipe image/args/env/resources.
 		if in.GetMain() == nil {
-			return nil, connect.NewError(connect.CodeInvalidArgument, "spec.main is required when update_mask includes spec.main")
+			return nil, connect.Errorf(connect.CodeInvalidArgument, "spec.main is required when update_mask includes spec.main")
 		}
 		out.Spec.Main = in.GetMain()
 	} else if paths.mainImage || paths.mainEnv || paths.mainRequests || paths.mainLimits {
@@ -647,9 +655,9 @@ func mergeModelUpdate(current, incoming *aigridv1.Model, paths modelUpdatePaths)
 
 func validateModelID(id string) error {
 	if id == "" {
-		return connect.NewError(connect.CodeInvalidArgument, "id is required")
+		return connect.Errorf(connect.CodeInvalidArgument, "id is required")
 	}
-	if !modelNameRE.MatchString(id) {
+	if !names.ValidDNSLabel(id) {
 		return connect.Errorf(connect.CodeInvalidArgument, "id %q is not a valid RFC 1123 DNS label", id)
 	}
 	return nil
@@ -660,10 +668,10 @@ var baseRefRE = regexp.MustCompile(`^\S+$`)
 
 func validateModelSpec(spec *aigridv1.ModelSpec) error {
 	if spec == nil {
-		return connect.NewError(connect.CodeInvalidArgument, "spec is required")
+		return connect.Errorf(connect.CodeInvalidArgument, "spec is required")
 	}
 	if spec.GetModel() == nil || strings.TrimSpace(spec.GetModel().GetUri()) == "" {
-		return connect.NewError(connect.CodeInvalidArgument, "spec.model.uri is required")
+		return connect.Errorf(connect.CodeInvalidArgument, "spec.model.uri is required")
 	}
 	uri := spec.GetModel().GetUri()
 	if !modelURIHasAllowedScheme(uri) {
@@ -672,10 +680,10 @@ func validateModelSpec(spec *aigridv1.ModelSpec) error {
 	hasReplicas := spec.Replicas != nil
 	hasScaling := spec.GetScaling() != nil
 	if hasReplicas && hasScaling {
-		return connect.NewError(connect.CodeInvalidArgument, "replicas and scaling are mutually exclusive; use scaling for autoscaled deployments or replicas for static deployments")
+		return connect.Errorf(connect.CodeInvalidArgument, "replicas and scaling are mutually exclusive; use scaling for autoscaled deployments or replicas for static deployments")
 	}
 	if !hasReplicas && !hasScaling {
-		return connect.NewError(connect.CodeInvalidArgument, "spec.replicas or spec.scaling is required")
+		return connect.Errorf(connect.CodeInvalidArgument, "spec.replicas or spec.scaling is required")
 	}
 	if hasReplicas {
 		r := *spec.Replicas
@@ -686,20 +694,20 @@ func validateModelSpec(spec *aigridv1.ModelSpec) error {
 	if hasScaling {
 		sc := spec.GetScaling()
 		if sc.GetMaxReplicas() < 1 {
-			return connect.NewError(connect.CodeInvalidArgument, "spec.scaling.maxReplicas is required and must be at least 1")
+			return connect.Errorf(connect.CodeInvalidArgument, "spec.scaling.maxReplicas is required and must be at least 1")
 		}
 		min := sc.GetMinReplicas()
 		if min <= 0 {
 			min = 1
 		}
 		if min > sc.GetMaxReplicas() {
-			return connect.NewError(connect.CodeInvalidArgument, "minReplicas cannot exceed maxReplicas")
+			return connect.Errorf(connect.CodeInvalidArgument, "minReplicas cannot exceed maxReplicas")
 		}
 		if !sc.GetKeda() {
-			return connect.NewError(connect.CodeInvalidArgument, "either wva or keda must be specified when scaling is configured")
+			return connect.Errorf(connect.CodeInvalidArgument, "either wva or keda must be specified when scaling is configured")
 		}
 		if len(sc.GetTriggers()) == 0 {
-			return connect.NewError(connect.CodeInvalidArgument, "at least one trigger is required when using direct KEDA scaling")
+			return connect.Errorf(connect.CodeInvalidArgument, "at least one trigger is required when using direct KEDA scaling")
 		}
 	}
 	for i, ref := range spec.GetBaseRefs() {
@@ -710,14 +718,14 @@ func validateModelSpec(spec *aigridv1.ModelSpec) error {
 		}
 	}
 	if main := spec.GetMain(); main != nil {
-		// With base_refs the presets may provide the image (ModelContainer.image
-		// in model_type.proto); without them nothing does.
+		// An empty image leaves it to the presets: KServe's default one when
+		// base_refs is empty (ModelContainer.image in model_type.proto).
 		img := strings.TrimSpace(main.GetImage())
-		if img == "" && (main.GetImage() != "" || len(spec.GetBaseRefs()) == 0) {
-			return connect.NewError(connect.CodeInvalidArgument, "spec.main.image is required when spec.base_refs names no preset")
+		if img == "" && main.GetImage() != "" {
+			return connect.Errorf(connect.CodeInvalidArgument, "spec.main.image must not be blank; leave it empty to use the presets' image")
 		}
 		if strings.ContainsAny(img, " \t") {
-			return connect.NewError(connect.CodeInvalidArgument, "spec.main.image must not contain whitespace")
+			return connect.Errorf(connect.CodeInvalidArgument, "spec.main.image must not contain whitespace")
 		}
 		if err := validateModelResources(main); err != nil {
 			return err
@@ -739,11 +747,11 @@ func validateModelSpec(spec *aigridv1.ModelSpec) error {
 			}
 		}
 		if placement.NumberOfClusters != nil && *placement.NumberOfClusters < 0 {
-			return connect.NewError(connect.CodeInvalidArgument, "spec.placement.number_of_clusters must be non-negative")
+			return connect.Errorf(connect.CodeInvalidArgument, "spec.placement.number_of_clusters must be non-negative")
 		}
 	}
 	if rollout := spec.GetRollout(); rollout != nil && spec.GetPlacement() == nil {
-		return connect.NewError(connect.CodeInvalidArgument, "spec.rollout requires spec.placement")
+		return connect.Errorf(connect.CodeInvalidArgument, "spec.rollout requires spec.placement")
 	}
 	return nil
 }

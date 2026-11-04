@@ -32,12 +32,6 @@ message Model {
 
 // Desired state of a Model (trimmed LLMInferenceService.spec + ACM placement).
 message ModelSpec {
-  option (buf.validate.message).cel = {
-    id: "model_spec.main_image"
-    message: "spec.main.image is required when spec.base_refs names no preset"
-    expression: "!has(this.main) || this.main.image != '' || size(this.base_refs) > 0"
-  };
-
   // Where the artifact comes from and the name clients send.
   ModelSource model = 1;
 
@@ -56,8 +50,9 @@ message ModelSpec {
   // Router / gateway configuration.
   ModelRouter router = 5;
 
-  // Main container of the workload template. Its image may be empty only
-  // when base_refs names a preset (see ModelContainer.image).
+  // Main container of the workload template. Its image may be empty: the
+  // presets' image applies, KServe's default one without base_refs (see
+  // ModelContainer.image).
   ModelContainer main = 6;
 
   // Autoscaling. Mutually exclusive with replicas.
@@ -119,17 +114,15 @@ message ModelGatewayRef {
 
 // Main container resources and environment.
 message ModelContainer {
-  // Runtime image. Required when spec.base_refs is empty. With base_refs it
-  // may be empty, and the presets' image applies: KServe merges the
-  // LLMInferenceServiceConfigs named in baseRefs under the service's own
-  // spec, and an empty image in the service doesn't override theirs
-  // (combineBaseRefsConfig and mergeSpecs in
+  // Runtime image. Optional: empty, the image comes from the presets. KServe
+  // applies its default preset first (the llm-template, vLLM for NVIDIA
+  // GPUs), then the LLMInferenceServiceConfigs named in base_refs, then the
+  // service's own spec, and an empty image in the service doesn't override
+  // theirs (combineBaseRefsConfig and mergeSpecs in
   // pkg/controller/v1alpha2/llmisvc/config_merge.go,
-  // red-hat-data-services/kserve rhoai-3.6 at 40fa1a1). The backend can't
-  // see the presets on the clusters, so it can't check that one sets an
-  // image: if none does, Kubernetes refuses the workload on the cluster
-  // ("image: Required value"), the model never becomes ready there, and its
-  // status says so. A blank image, or one with a space or tab, is
+  // red-hat-data-services/kserve rhoai-3.6 at 71b7da3). So with no base_refs
+  // the cluster's default vLLM image for NVIDIA GPUs runs; an image set here
+  // replaces any preset's. A blank image, or one with a space or tab, is
   // InvalidArgument.
   string image = 1;
 

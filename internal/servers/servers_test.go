@@ -589,7 +589,7 @@ func TestListTenants(t *testing.T) {
 		wantIDs   map[string]string
 		wantNames []string
 		wantDom   map[string][]string
-		wantErr   string
+		wantCode  connect.Code
 	}{
 		{
 			name: "maps organizations to tenants",
@@ -615,9 +615,9 @@ func TestListTenants(t *testing.T) {
 			wantNames: []string{},
 		},
 		{
-			name:    "upstream error",
-			client:  &fakeOrganizationStore{listErr: errors.New("token rejected")},
-			wantErr: "token rejected",
+			name:     "upstream error",
+			client:   &fakeOrganizationStore{listErr: errors.New("token rejected")},
+			wantCode: connect.CodeInternal,
 		},
 	}
 
@@ -630,13 +630,8 @@ func TestListTenants(t *testing.T) {
 				t.Fatalf("Build() error = %v", err)
 			}
 			response, err := server.List(context.Background(), &aigridv1.TenantsListRequest{})
-			if tc.wantErr != "" {
-				if err == nil {
-					t.Fatal("List() error = nil, want error")
-				}
-				if !strings.Contains(err.Error(), tc.wantErr) {
-					t.Fatalf("List() error = %v, want substring %q", err, tc.wantErr)
-				}
+			if tc.wantCode != 0 {
+				assertConnectCode(t, err, tc.wantCode)
 				return
 			}
 			if err != nil {
@@ -1253,6 +1248,22 @@ func assertConnectCode(t *testing.T, err error, want connect.Code) {
 	}
 }
 
+// assertConnectMessage is the documented exception to code-only error
+// asserts: the console shows the backend's Connect message to admins
+// (describeError), so the few tests whose purpose is "the cause survives to
+// the wire" may match message text. errors.As failing is a test failure,
+// never a skip.
+func assertConnectMessage(t *testing.T, err error, want string) {
+	t.Helper()
+	var connectErr *connect.Error
+	if !errors.As(err, &connectErr) {
+		t.Fatalf("error = %v (%T), want *connect.Error with message containing %q", err, err, want)
+	}
+	if !strings.Contains(connectErr.Message(), want) {
+		t.Errorf("Connect message = %q, want it to contain %q", connectErr.Message(), want)
+	}
+}
+
 func assertStringSlicesEqual(t *testing.T, got, want []string) {
 	t.Helper()
 	if len(got) != len(want) {
@@ -1504,9 +1515,7 @@ func TestTenantVersion(t *testing.T) {
 		store := newFakeOrganizationStore(stamped("4"), keycloak.Organization{ID: "org-2", Name: "acme-renamed"})
 		_, err := mustTenantsServer(t, store).Update(ctx, update(4, true))
 		assertConnectCode(t, err, connect.CodeAlreadyExists)
-		if !strings.Contains(err.Error(), "already used by another organization") {
-			t.Fatalf("error = %v", err)
-		}
+		assertConnectMessage(t, err, "already used by another organization")
 	})
 
 	t.Run("a failed read-back answers with what was written", func(t *testing.T) {

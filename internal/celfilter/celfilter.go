@@ -8,6 +8,11 @@
 // indexing a map with a missing key is a `no such key` error, not false, so
 // a label term needs the `in` guard
 // (`"k" in this.metadata.labels && this.metadata.labels["k"] == "v"`).
+//
+// This is the production package for ai_grid.v1 handlers: compile/eval errors
+// map to Connect codes. Do not import internal/fakeinfra/draft/celfilter from
+// here (or the reverse); the draft package maps to gRPC status for the console
+// fake and stays isolated until that area moves to v1.
 package celfilter
 
 import (

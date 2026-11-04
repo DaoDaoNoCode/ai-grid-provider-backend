@@ -22,8 +22,8 @@ const ConflictAttempts = 5
 //
 // It returns write's last error: ErrConflict still, after the last attempt,
 // or when ctx is done. Any other error ends it at once. It doesn't wait
-// between attempts: each one fetches the branch again, and a conflict means
-// another write was committed, so the next attempt starts from that one.
+// between attempts: a conflict means another write was committed, and a lost
+// push drops the cached head, so the next attempt starts from a fetch.
 //
 // Each rerun is logged, and so is giving up, so that writes racing on the
 // repository show in the log although the caller sees none of the reruns.

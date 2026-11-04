@@ -12,6 +12,7 @@ import (
 	"github.com/osac-project/ai-grid-provider-backend/gen/ai_grid/v1/aigridv1connect"
 	"github.com/osac-project/ai-grid-provider-backend/internal/celfilter"
 	"github.com/osac-project/ai-grid-provider-backend/internal/gitops"
+	"github.com/osac-project/ai-grid-provider-backend/internal/names"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
 )
@@ -20,7 +21,7 @@ import (
 type SubscriptionsServerBuilder struct {
 	logger    *slog.Logger
 	writer    gitops.Writer
-	status    *CatalogStatusReader
+	status    catalogStatusReader
 	namespace string
 }
 
@@ -33,7 +34,7 @@ type SubscriptionsServer struct {
 	aigridv1connect.UnimplementedSubscriptionsHandler
 	logger    *slog.Logger
 	writer    gitops.Writer
-	status    *CatalogStatusReader
+	status    catalogStatusReader
 	namespace string
 }
 
@@ -44,7 +45,7 @@ func NewSubscriptionsServer() *SubscriptionsServerBuilder {
 	return &SubscriptionsServerBuilder{}
 }
 
-// SetLogger sets the logger. Optional; a default is used when unset.
+// SetLogger sets the logger. Optional; slog.Default() when unset.
 func (b *SubscriptionsServerBuilder) SetLogger(logger *slog.Logger) *SubscriptionsServerBuilder {
 	b.logger = logger
 	return b
@@ -60,7 +61,7 @@ func (b *SubscriptionsServerBuilder) SetWriter(writer gitops.Writer) *Subscripti
 // SetCatalogStatus sets where status is read from the spokes. Optional;
 // without it every subscription has no phase and every model ref is saved to
 // Git.
-func (b *SubscriptionsServerBuilder) SetCatalogStatus(status *CatalogStatusReader) *SubscriptionsServerBuilder {
+func (b *SubscriptionsServerBuilder) SetCatalogStatus(status catalogStatusReader) *SubscriptionsServerBuilder {
 	b.status = status
 	return b
 }
@@ -149,7 +150,7 @@ func (s *SubscriptionsServer) Get(ctx context.Context, req *aigridv1.Subscriptio
 func (s *SubscriptionsServer) Create(ctx context.Context, req *aigridv1.SubscriptionsCreateRequest) (*aigridv1.SubscriptionsCreateResponse, error) {
 	object := req.GetObject()
 	if object == nil {
-		return nil, connect.NewError(connect.CodeInvalidArgument, "object is required")
+		return nil, connect.Errorf(connect.CodeInvalidArgument, "object is required")
 	}
 	id := subscriptionID(object)
 	if err := validateSubscriptionID(id); err != nil {
@@ -174,7 +175,7 @@ func (s *SubscriptionsServer) Create(ctx context.Context, req *aigridv1.Subscrip
 func (s *SubscriptionsServer) Update(ctx context.Context, req *aigridv1.SubscriptionsUpdateRequest) (*aigridv1.SubscriptionsUpdateResponse, error) {
 	object := req.GetObject()
 	if object == nil {
-		return nil, connect.NewError(connect.CodeInvalidArgument, "object is required")
+		return nil, connect.Errorf(connect.CodeInvalidArgument, "object is required")
 	}
 	if err := validateSubscriptionID(subscriptionID(object)); err != nil {
 		return nil, err
@@ -357,9 +358,9 @@ func mergeSubscriptionUpdate(stored, incoming *aigridv1.Subscription, paths subU
 
 func validateSubscriptionID(id string) error {
 	if id == "" {
-		return connect.NewError(connect.CodeInvalidArgument, "id is required")
+		return connect.Errorf(connect.CodeInvalidArgument, "id is required")
 	}
-	if !subscriptionNameRE.MatchString(id) {
+	if !names.ValidDNSLabel(id) {
 		return connect.Errorf(connect.CodeInvalidArgument, "id %q is not a valid RFC 1123 DNS label", id)
 	}
 	if len(id) > maxSubscriptionIDLen {
@@ -370,27 +371,27 @@ func validateSubscriptionID(id string) error {
 
 func validateSubscriptionSpec(spec *aigridv1.SubscriptionSpec) error {
 	if spec == nil {
-		return connect.NewError(connect.CodeInvalidArgument, "spec is required")
+		return connect.Errorf(connect.CodeInvalidArgument, "spec is required")
 	}
 	owner := spec.GetOwner()
 	if owner == nil || (len(owner.GetGroups()) == 0 && len(owner.GetUsers()) == 0) {
-		return connect.NewError(connect.CodeInvalidArgument, "spec.owner must include at least one group or user")
+		return connect.Errorf(connect.CodeInvalidArgument, "spec.owner must include at least one group or user")
 	}
 	if org := spec.GetOrganization(); org != nil && strings.TrimSpace(org.GetId()) == "" {
-		return connect.NewError(connect.CodeInvalidArgument, "spec.organization.id must be non-empty when organization is set")
+		return connect.Errorf(connect.CodeInvalidArgument, "spec.organization.id must be non-empty when organization is set")
 	}
 	refs := spec.GetModelRefs()
 	if len(refs) == 0 {
-		return connect.NewError(connect.CodeInvalidArgument, "spec.model_refs must include at least one model")
+		return connect.Errorf(connect.CodeInvalidArgument, "spec.model_refs must include at least one model")
 	}
 	for i, ref := range refs {
 		if ref == nil || ref.GetName() == "" {
 			return connect.Errorf(connect.CodeInvalidArgument, "spec.model_refs[%d].name is required", i)
 		}
-		if !subscriptionNameRE.MatchString(ref.GetName()) {
+		if !names.ValidDNSLabel(ref.GetName()) {
 			return connect.Errorf(connect.CodeInvalidArgument, "spec.model_refs[%d].name %q is not a valid RFC 1123 DNS label", i, ref.GetName())
 		}
-		if ns := ref.GetNamespace(); ns != "" && !subscriptionNameRE.MatchString(ns) {
+		if ns := ref.GetNamespace(); ns != "" && !names.ValidDNSLabel(ns) {
 			return connect.Errorf(connect.CodeInvalidArgument, "spec.model_refs[%d].namespace %q is not a valid RFC 1123 DNS label", i, ns)
 		}
 		limits := ref.GetTokenRateLimits()
@@ -435,10 +436,10 @@ func validateOrganizationImmutable(current, next *aigridv1.SubscriptionSpec) err
 		nextID = next.GetOrganization().GetId()
 	}
 	if nextID == "" {
-		return connect.NewError(connect.CodeInvalidArgument, "spec.organization.id is immutable and cannot be removed")
+		return connect.Errorf(connect.CodeInvalidArgument, "spec.organization.id is immutable and cannot be removed")
 	}
 	if nextID != curID {
-		return connect.NewError(connect.CodeInvalidArgument, "spec.organization.id is immutable")
+		return connect.Errorf(connect.CodeInvalidArgument, "spec.organization.id is immutable")
 	}
 	return nil
 }

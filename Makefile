@@ -49,7 +49,11 @@ KEYCLOAK_PORT ?= 8180
 GRPC_ADDR ?= localhost:8080
 HTTP_ADDR ?= http://localhost:8081
 
-.PHONY: help all binary build-bin build test unit smoke smoke-openshift vet fmt-check lint verify generate check-generated \
+# Tooling pins (keep in step with .github/workflows/ci.yaml).
+GOLANGCI_LINT_VERSION ?= v2.12.2
+BUF_VERSION ?= 1.50.0
+
+.PHONY: help all binary build-bin build test unit smoke smoke-openshift vet fmt-check lint proto-lint verify check generate check-generated \
 	image container push build-and-push run run-hub \
 	keycloak-up keycloak-down keycloak-seed \
 	build-fake-infra dev-fake dev-fake-poc dev-fake-locations dev-catalog-reset dev-catalog-log \
@@ -118,12 +122,22 @@ fmt-check:
 		echo "gofmt is required for:"; echo "$$files"; exit 1; \
 	fi
 
-lint: fmt-check vet ## gofmt check, go vet; golangci-lint when installed
-	@if command -v golangci-lint >/dev/null 2>&1; then \
-		golangci-lint run; \
-	else \
-		echo "golangci-lint not installed; gofmt and go vet completed"; \
+lint: fmt-check vet ## gofmt, go vet, and golangci-lint (required; same as CI)
+	@if ! command -v golangci-lint >/dev/null 2>&1; then \
+		echo "golangci-lint is required (CI pin $(GOLANGCI_LINT_VERSION)). Install: https://golangci-lint.run/welcome/install/" >&2; \
+		echo "Or run: make prereqs" >&2; \
+		exit 1; \
 	fi
+	golangci-lint run
+
+proto-lint: ## buf lint proto/ (required by verify; buf breaking stays PR/CI only)
+	@if ! command -v $(BUF) >/dev/null 2>&1 && [[ "$(BUF)" == "buf" ]]; then \
+		echo "buf is required (CI pin $(BUF_VERSION)). Install: https://buf.build/docs/installation" >&2; \
+		echo "Or: make proto-lint BUF='go run github.com/bufbuild/buf/cmd/buf@v$(BUF_VERSION)'" >&2; \
+		echo "Or run: make prereqs" >&2; \
+		exit 1; \
+	fi
+	cd proto && $(BUF) lint
 
 # Regenerates protobuf, gRPC, Connect, and OpenAPI (OSAC-style buf pipeline) for ai_grid.v1,
 # then Go and gRPC only for the console's draft, ai_grid.draft.v1 (proto/buf.gen.draft.yaml,
@@ -159,7 +173,11 @@ check-generated: ## fail when the committed output differs from what proto/ gene
 	(cd proto && $(BUF) generate --template "$$tmp/buf.gen.draft.yaml") && \
 	diff -r "$$tmp/gen/ai_grid/draft/v1" gen/ai_grid/draft/v1
 
-verify: build unit lint ## Build binary + unit tests + lint
+# Aggregate local gate aligned with CI Check (golangci-lint, buf lint,
+# check-generated). buf breaking stays pull-request / base-branch only in CI
+# (needs the base ref; docs/API_CONTRACT.md).
+verify: build unit lint proto-lint check-generated ## CI-aligned gate: build, unit, lint, buf lint, check-generated
+check: verify ## Alias for verify
 
 ##@ Container image (ghcr.io)
 
@@ -206,12 +224,13 @@ run: ## Run the API locally (gRPC :8080, REST/Swagger :8081)
 # The backend on 127.0.0.1:9090 (gRPC/Connect) and :9092 (REST), where the
 # console's make dev expects it, against the hub of your oc login, with the
 # deployed console's Git and namespace settings and ACM Search port-forwarded;
-# KEYCLOAK=hub also uses that console's Keycloak. LISTEN_ADDRESS and
+# KEYCLOAK=hub also uses that console's Keycloak; CATALOG=local writes Models
+# and Subscriptions to the local catalog instead. LISTEN_ADDRESS and
 # HTTP_LISTEN_ADDRESS move it (loopback only). See hack/run-hub.sh.
 run-hub: build ## Run the API locally against the hub of your oc login, set up like the console deployed there
 	@LISTEN_ADDRESS="$(if $(filter file,$(origin LISTEN_ADDRESS)),127.0.0.1:9090,$(LISTEN_ADDRESS))" \
 		HTTP_LISTEN_ADDRESS="$(if $(filter file,$(origin HTTP_LISTEN_ADDRESS)),127.0.0.1:9092,$(HTTP_LISTEN_ADDRESS))" \
-		KUBECONFIG_PATH="$(KUBECONFIG_PATH)" KEYCLOAK_URL="$(KEYCLOAK_URL)" KEYCLOAK="$(KEYCLOAK)" \
+		KUBECONFIG_PATH="$(KUBECONFIG_PATH)" KEYCLOAK_URL="$(KEYCLOAK_URL)" KEYCLOAK="$(KEYCLOAK)" CATALOG="$(CATALOG)" \
 		BACKEND_BIN="$(BACKEND_BIN)" DEV_CATALOG="$(DEV_CATALOG)" RUN_ARGS="$(RUN_ARGS)" \
 		bash hack/run-hub.sh
 
@@ -246,7 +265,8 @@ keycloak-seed: ## Seed ai-grid realm + sample Organizations (tenant-a, tenant-b)
 
 ##@ Cluster / deploy
 
-prereqs: ## Check Podman, Kind, kubectl, grpcurl, Go, clusteradm
+prereqs: ## Check CI tooling pins (Go/buf/golangci) and Kind toolchain (Podman, kubectl, …)
+	bash hack/check-tooling.sh
 	bash hack/check-prereqs.sh
 
 kind-test: ## Full Kind integration test

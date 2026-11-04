@@ -1,18 +1,15 @@
-# CI: lint + unit tests (+ generated-file check). Pushes to main, v* tags and
-# manual runs then publish the container image to ghcr.io.
-#
-# pull_request: check job only (never publishes images).
-# push to main / v* tag / workflow_dispatch: check, then publish.
+# CI: lint + unit tests (+ generated-file check) on every branch push and every
+# pull request. Container images build and publish only after Check on
+# push/merge to main, v* tags, and workflow_dispatch (Docker Buildx) — never on
+# other branches or pull_request. Local image builds stay Podman-first
+# (`make image`).
 #
 # No stored secrets: GITHUB_TOKEN pushes to ghcr.io with packages:write.
 name: CI
 
 on:
   push:
-    branches: [main]
-    tags: ['v*']
   pull_request:
-    branches: [main]
     types: [opened, synchronize, reopened, labeled, unlabeled]
   workflow_dispatch:
 
@@ -101,10 +98,14 @@ jobs:
 
   # Last job: needs the checks, so a merge whose checks failed never ships.
   # sha-<full sha> is the tag to deploy; latest tracks main; semver comes
-  # from v* tags.
+  # from v* tags. Gate is positive (main / v* / dispatch) so Check can run on
+  # every other branch without publishing.
   publish:
     name: Publish image
-    if: github.event_name != 'pull_request'
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'push' &&
+        (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')))
     needs: [check]
     runs-on: ubuntu-latest
     permissions:

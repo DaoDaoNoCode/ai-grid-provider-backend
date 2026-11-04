@@ -1,54 +1,33 @@
 name: publish-pr-image
 
-# Second half of the PR image pipeline. publish-image builds the PR image
-# without credentials and uploads it as an OCI archive. This workflow runs in
-# the base repository's context (workflow_run), so it has a token that can
-# push even for fork PRs, and pushes the archive to ghcr.io as pr-<number>.
+# PR preview image push is disabled. Images publish only from ci.yaml on
+# push/merge to main (and intentional v* tags / workflow_dispatch), never on
+# pull_request. Local builds remain Podman-first (`make image`).
 #
-# Not gated on the triggering run's conclusion: a PR image is for trying a PR
-# out, which matters most when something fails. It only ever writes the
-# pr-<number> tag, never sha-*, latest or semver. If the build failed there is
-# no artifact and this run skips.
-#
-# Everything from the triggering run is untrusted, because it was built from
-# unreviewed PR code. So this workflow
-#   - never runs anything from the artifact: skopeo copies it as data,
-#   - only pushes the image name in ALLOWED_IMAGES, so a PR can't rename its
-#     artifact to overwrite another package, and
-#   - finds the PR number through the API from the head repository, branch
-#     and SHA in the workflow_run payload, not from anything the PR run wrote.
-#
-# workflow_run always runs this file as it is on the default branch, never a
-# PR's copy, so it starts working once it is merged.
+# The push script below is retained (job gated off) so hack/test-image-workflows.sh
+# can still exercise superseded-digest delete logic against the same package
+# name CI uses. Do not re-enable without an explicit maintainer decision.
 
 on:
-  workflow_run:
-    workflows: [publish-image]
-    types: [completed]
+  workflow_dispatch:
 
 permissions: {}
 
 concurrency:
-  # Shared with cleanup-pr-image (see there). Not cancel-in-progress, which
-  # would let a push cancel a running cleanup; a superseded run finds its SHA
-  # is no longer the PR's head and skips.
-  group: pr-image-${{ github.event.workflow_run.head_repository.full_name }}-${{ github.event.workflow_run.head_branch }}
+  group: pr-image-disabled
   cancel-in-progress: false
 
 env:
-  # The only image this workflow pushes. Keep in step with publish-image.
+  # The only image this workflow would push. Keep in step with ci.yaml.
   ALLOWED_IMAGES: ai-grid-provider-backend
 
 jobs:
   push:
-    if: >
-      github.event.workflow_run.event == 'pull_request' &&
-      github.event.workflow_run.conclusion != 'cancelled'
+    # Hard-disabled: PR image publish must not run.
+    if: false
     runs-on: ubuntu-latest
     permissions:
-      # Download artifacts from the triggering run.
       actions: read
-      # Find the PR for the head commit.
       pull-requests: read
       packages: write
     steps:
@@ -61,10 +40,6 @@ jobs:
           HEAD_OWNER: ${{ github.event.workflow_run.head_repository.owner.login }}
           HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
         run: |
-          # Look the PR up by head repository and branch, not by commit:
-          # commits/{sha}/pulls returns nothing for the head of a fork PR.
-          # The SHA filter drops runs whose PR has newer commits since; the
-          # newer run owns the pr-N tag.
           number=$(gh api --method GET "repos/${REPO}/pulls" \
             -f head="${HEAD_OWNER}:${HEAD_BRANCH}" -f state=open \
             --jq "[.[] | select(.head.sha == \"${HEAD_SHA}\")][0].number // empty")

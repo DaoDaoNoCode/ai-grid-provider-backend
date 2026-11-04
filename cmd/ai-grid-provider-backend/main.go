@@ -66,12 +66,25 @@ func main() {
 		os.Exit(1)
 	}
 
+	logger := slog.Default()
 	aiGridServer, err := servers.NewAiGridServer().Build()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "build AiGrid server: %v\n", err)
 		os.Exit(1)
 	}
+	// Models and Subscriptions are committed to the AI_GRID_GIT_URL
+	// repository, and Argo CD delivers them. The status of what came up on
+	// the spokes is read back from the catalog's Argo CD Applications on this hub.
+	// Clusters reads it for the subscriptions and the models placed on a
+	// cluster before its role changes or it leaves the grid.
+	writer, err := newGitWriter()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "git writer: %v\n", err)
+		os.Exit(1)
+	}
 	clustersServer, err := servers.NewClustersServer().
+		SetLogger(logger).
+		SetCatalog(writer).
 		SetDynamicClient(kubeClient).
 		SetReadyPolicy(getEnv("AI_GRID_READY_POLICY", servers.DefaultReadyPolicy)).
 		SetGPUInventory(gpuInventory).
@@ -81,6 +94,7 @@ func main() {
 		os.Exit(1)
 	}
 	tenantsServer, err := servers.NewTenantsServer().
+		SetLogger(logger).
 		SetOrganizationClient(keycloak.New(keycloak.Config{
 			BaseURL:    getEnv("KEYCLOAK_URL", "http://keycloak.ai-grid.svc:8080"),
 			AdminRealm: getEnv("KEYCLOAK_ADMIN_REALM", "master"),
@@ -96,22 +110,15 @@ func main() {
 		fmt.Fprintf(os.Stderr, "build Tenants server: %v\n", err)
 		os.Exit(1)
 	}
-	// Models and Subscriptions are committed to the AI_GRID_GIT_URL
-	// repository, and Argo CD delivers them. The status of what came up on
-	// the spokes is read back from the catalog's Argo CD Applications on this hub.
-	writer, err := newGitWriter()
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "git writer: %v\n", err)
-		os.Exit(1)
-	}
 	status := servers.NewCatalogStatusReader(kubeClient, servers.CatalogApps{
 		Namespace:     getEnv("AI_GRID_CATALOG_APP_NAMESPACE", servers.DefaultCatalogAppNamespace),
 		Models:        getEnv("AI_GRID_CATALOG_MODELS_APPSET", servers.DefaultCatalogModelsAppSet),
 		Ingress:       getEnv("AI_GRID_CATALOG_INGRESS_APPSET", servers.DefaultCatalogIngressAppSet),
 		Subscriptions: getEnv("AI_GRID_CATALOG_SUBSCRIPTIONS_APPSET", servers.DefaultCatalogSubscriptionsAppSet),
-	})
+	}).SetLogger(logger)
 	subscriptionNamespace := getEnv("AI_GRID_SUBSCRIPTION_NAMESPACE", "models-as-a-service")
 	modelsServer, err := servers.NewModelsServer().
+		SetLogger(logger).
 		SetWriter(writer).
 		SetCatalogStatus(status).
 		SetDynamicClient(kubeClient).
@@ -125,6 +132,7 @@ func main() {
 		os.Exit(1)
 	}
 	subscriptionsServer, err := servers.NewSubscriptionsServer().
+		SetLogger(logger).
 		SetWriter(writer).
 		SetCatalogStatus(status).
 		SetNamespace(subscriptionNamespace).
@@ -267,10 +275,15 @@ func newGitWriter() (gitops.Writer, error) {
 		}
 		cfg.Token = strings.TrimSpace(string(token))
 	}
+	readMaxAge, err := gitReadMaxAge()
+	if err != nil {
+		return nil, err
+	}
+	cfg.ReadMaxAge = readMaxAge
 	if err := cfg.Validate(); err != nil {
 		return nil, err
 	}
-	slog.Info("git write mode", "url", cfg.URL, "branch", cfg.Branch)
+	slog.Info("git write mode", "url", cfg.URL, "branch", cfg.Branch, "readMaxAge", cfg.ReadMaxAge.String())
 	return gitops.StartBackgroundWriter(context.Background(), func(ctx context.Context) (gitops.Writer, error) {
 		ctx, cancel := context.WithTimeout(ctx, time.Minute)
 		defer cancel()
@@ -278,18 +291,55 @@ func newGitWriter() (gitops.Writer, error) {
 	}, time.Second), nil
 }
 
+// defaultGitReadMaxAge is how old a fetch of the Git repository may be for a
+// Models or Subscriptions read, or a write's commit, to use its head.
+// Fetching can cost seconds against GitHub even when nothing changed, and the
+// console gives a call ten.
+const defaultGitReadMaxAge = 10 * time.Second
+
+// gitReadMaxAge reads AI_GRID_GIT_READ_MAX_AGE, a Go duration such as "10s",
+// default defaultGitReadMaxAge. Reads and writes fetch the repository only
+// when the last fetch or push is that old, so a commit pushed by anyone else
+// shows within about that long; the backend's own writes show at once. "0"
+// fetches before every read and every write.
+func gitReadMaxAge() (time.Duration, error) {
+	value := os.Getenv("AI_GRID_GIT_READ_MAX_AGE")
+	if value == "" {
+		return defaultGitReadMaxAge, nil
+	}
+	d, err := time.ParseDuration(value)
+	if err != nil || d < 0 {
+		return 0, fmt.Errorf("AI_GRID_GIT_READ_MAX_AGE %q must be a duration of 0 or more, such as 10s; 0 fetches on every read", value)
+	}
+	return d, nil
+}
+
+// The hub client's own rate limit. client-go's default, 5 requests a second
+// with bursts of 10, is meant for controllers; one model read here asks the
+// hub for several objects (the models' and the catalog's status Policies, the
+// clusters), so a page that opens a few reads at once waited on it: on the
+// demo hub in 2026-11, a Policy read sat 1.08 s in "client-side throttling".
+// The API server's priority and fairness still protects the hub.
+const (
+	hubClientQPS   = 50
+	hubClientBurst = 100
+)
+
 func newRestConfig(kubeconfig string) (*rest.Config, error) {
+	var config *rest.Config
+	var err error
 	if kubeconfig == "" {
-		config, err := rest.InClusterConfig()
+		config, err = rest.InClusterConfig()
 		if err != nil {
 			return nil, fmt.Errorf("load in-cluster Kubernetes config: %w", err)
 		}
-		return config, nil
+	} else {
+		config, err = clientcmd.BuildConfigFromFlags("", kubeconfig)
+		if err != nil {
+			return nil, fmt.Errorf("load kubeconfig: %w", err)
+		}
 	}
-	config, err := clientcmd.BuildConfigFromFlags("", kubeconfig)
-	if err != nil {
-		return nil, fmt.Errorf("load kubeconfig: %w", err)
-	}
+	config.QPS, config.Burst = hubClientQPS, hubClientBurst
 	return config, nil
 }
 
