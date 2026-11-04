@@ -25,7 +25,7 @@ func TestIdentityProviderRoutes(t *testing.T) {
 	orgID := firstOrgID(t, ts, token)
 
 	createBody, _ := json.Marshal(map[string]any{
-		"alias": "acme", "providerId": "oidc", "enabled": true,
+		"alias": "acme", "providerId": "oidc", "enabled": true, "trustEmail": true,
 		"config": map[string]string{"clientId": "c", "clientSecret": "secret-value"},
 	})
 	res := doAdmin(t, ts, token, http.MethodPost, "/admin/realms/ai-grid/identity-provider/instances", createBody)
@@ -42,6 +42,9 @@ func TestIdentityProviderRoutes(t *testing.T) {
 	cfg := got["config"].(map[string]any)
 	if cfg["clientSecret"] != "" {
 		t.Fatalf("get leaked client secret: %#v", cfg)
+	}
+	if got["trustEmail"] != true {
+		t.Fatalf("get trustEmail = %#v, want true", got["trustEmail"])
 	}
 
 	linkBody, _ := json.Marshal("acme")

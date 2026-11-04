@@ -14,6 +14,7 @@ type identityProvider struct {
 	DisplayName string            `json:"displayName,omitempty"`
 	ProviderID  string            `json:"providerId"`
 	Enabled     bool              `json:"enabled"`
+	TrustEmail  bool              `json:"trustEmail"`
 	Config      map[string]string `json:"config"`
 }
 
