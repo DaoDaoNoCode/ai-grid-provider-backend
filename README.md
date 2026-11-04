@@ -548,6 +548,12 @@ to the Organization and upserts four broker mappers (sync mode `FORCE`):
 `maas_groups` and `maas_roles` copy the tenant IdP's `groups` and `roles`
 claims on every login. The realm's client mappers turn these attributes into
 the flat `org_id`, `org_name`, `groups` and `roles` claims (ODH-ADR-MS-0007).
+The backend creates the IdP with `trustEmail` on, so Keycloak takes each user's
+`email_verified` from the tenant IdP, on every login. The tenant IdP must send
+`email_verified: true` for its users in the ID token, and also in the userinfo
+response when `config.user_info_url` is set: Keycloak reads an email in
+userinfo without `email_verified` as unverified. With `email_verified` false,
+the MaaS Portal's oauth2-proxy rejects the user's token.
 The IdP is immutable after Create. Client secrets are **not** stored
 in the API: put them in namespace `ai-grid-idp-secrets` (env
 `AI_GRID_IDP_SECRET_NAMESPACE`) as a Secret whose name is
@@ -560,6 +566,15 @@ identity-provider permission on every organization IdP call, so without the
 identity-provider roles a Create with `spec.identity_provider` gets 403.
 `manage-identity-providers` is realm-wide: it lets the backend edit any IdP in
 the realm, not only its organizations'.
+
+Tenants created by an earlier build have IdPs without `trustEmail`, and the
+backend doesn't update existing IdPs. To fix one, turn on **Trust email** on
+the IdP (its alias is the tenant's IdP alias, or the organization name) in the
+Keycloak admin console, under the realm's **Identity providers**. Or, with the
+Admin REST API, `GET` `/admin/realms/<realm>/identity-provider/instances/<alias>`,
+set `"trustEmail": true` in the response, and `PUT` it back to the same path; the
+masked `clientSecret` in the response keeps the stored secret. The change applies
+from each user's next login, as long as the IdP sends `email_verified`.
 
 ## Local architecture
 
