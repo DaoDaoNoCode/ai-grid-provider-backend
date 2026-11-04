@@ -316,9 +316,9 @@ func gitReadMaxAge() (time.Duration, error) {
 
 // The hub client's own rate limit. client-go's default, 5 requests a second
 // with bursts of 10, is meant for controllers; one model read here asks the
-// hub for several objects (the models' and the catalog's status Policies, the
-// clusters), so a page that opens a few reads at once waited on it: on the
-// demo hub in 2026-11, a Policy read sat 1.08 s in "client-side throttling".
+// hub for catalog Applications and clusters, so a page that opens a few
+// reads at once can wait on it. When status came from Policies, a read on the
+// demo hub in 2026-11 sat 1.08 s in "client-side throttling".
 // The API server's priority and fairness still protects the hub.
 const (
 	hubClientQPS   = 50
