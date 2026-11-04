@@ -65,6 +65,32 @@ subjects:
     name: ai-grid-provider-backend
     namespace: ai-grid
 ---
+# IdP client secrets live in ai-grid-idp-secrets, not the backend namespace.
+# get only: the backend never lists, watches, or writes Secrets.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: ai-grid-provider-backend-idp-secrets
+  namespace: ai-grid-idp-secrets
+rules:
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: ai-grid-provider-backend-idp-secrets
+  namespace: ai-grid-idp-secrets
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: ai-grid-provider-backend-idp-secrets
+subjects:
+  - kind: ServiceAccount
+    name: ai-grid-provider-backend
+    namespace: ai-grid
+---
 # Models and Subscriptions read their status from the health of the catalog's
 # Argo CD Applications in openshift-gitops (AI_GRID_CATALOG_APP_NAMESPACE).
 # Without this Role, models show as saved to Git and subscriptions with no

@@ -1355,6 +1355,28 @@
       },
       "description": "GuardrailAttachment attaches an AIGuardrail policy by name."
     },
+    "v1IdentityProvider": {
+      "type": "object",
+      "properties": {
+        "title": {
+          "type": "string",
+          "description": "Display title. At most 253 characters after trimming. Empty on Create\nnormalizes to the organization create-time name."
+        },
+        "description": {
+          "type": "string",
+          "description": "Free text. At most 4000 characters."
+        },
+        "enabled": {
+          "type": "boolean",
+          "description": "Unset means true. Always set on output. Must be true when set."
+        },
+        "config": {
+          "$ref": "#/definitions/v1OidcConfig",
+          "description": "Required OIDC client configuration."
+        }
+      },
+      "description": "An organization's OIDC identity provider (realm IdP linked to the Keycloak\nOrganization). Field numbers match the draft proposal."
+    },
     "v1ManagedCluster": {
       "type": "object",
       "properties": {
@@ -2313,6 +2335,50 @@
         }
       }
     },
+    "v1OidcConfig": {
+      "type": "object",
+      "properties": {
+        "client_id": {
+          "type": "string",
+          "description": "Required; at most 253 characters after trimming."
+        },
+        "client_secret_secret_name": {
+          "type": "string",
+          "description": "Name of the Secret holding the client secret (key client-secret): required,\na DNS subdomain name, at most 253 characters."
+        },
+        "issuer": {
+          "type": "string",
+          "description": "Required HTTP or HTTPS URLs, at most 2048 characters after trimming."
+        },
+        "authorization_url": {
+          "type": "string"
+        },
+        "token_url": {
+          "type": "string"
+        },
+        "default_scopes": {
+          "type": "string",
+          "description": "Space-separated scopes, at most 2048 characters after trimming.\nEmpty/unset normalizes to \"openid profile email\"."
+        },
+        "user_info_url": {
+          "type": "string",
+          "description": "Optional HTTP or HTTPS URLs; empty when unset."
+        },
+        "jwks_url": {
+          "type": "string",
+          "description": "HTTP or HTTPS URL. Required when validate_signature is true (the default):\nKeycloak rejects broker logins when signature checks are on and it has no JWKS.\nEmpty only when validate_signature is false."
+        },
+        "logout_url": {
+          "type": "string",
+          "description": "Optional HTTP or HTTPS URL; empty when unset."
+        },
+        "validate_signature": {
+          "type": "boolean",
+          "description": "Unset means true. Always set on output. When true, jwks_url is required."
+        }
+      },
+      "description": "OIDC client configuration for an IdentityProvider. Only the name of the\nSecret that holds the client secret is stored, never the secret itself."
+    },
     "v1ResourceRefStatus": {
       "type": "object",
       "properties": {
@@ -2638,6 +2704,10 @@
             "type": "string"
           },
           "description": "Email domains associated with this tenant (DNS hostnames, lowercase)."
+        },
+        "identity_provider": {
+          "$ref": "#/definitions/v1IdentityProvider",
+          "description": "Optional OIDC identity provider for this organization. Set only on Create;\nimmutable afterward (Update may repeat the same normalized value; add,\nchange, or remove returns InvalidArgument). The API stores only the\nSecret name in config.client_secret_secret_name, never the secret value."
         }
       }
     },

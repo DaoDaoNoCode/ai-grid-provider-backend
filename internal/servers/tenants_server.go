@@ -17,6 +17,7 @@ import (
 	"github.com/osac-project/ai-grid-provider-backend/gen/ai_grid/v1/aigridv1connect"
 	"github.com/osac-project/ai-grid-provider-backend/internal/keycloak"
 	"github.com/osac-project/ai-grid-provider-backend/internal/names"
+	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
@@ -39,7 +40,7 @@ var (
 	ipv6LooseRE = regexp.MustCompile(`^[0-9a-fA-F:]+$`)
 )
 
-// organizationClient is the Keycloak Organizations surface used by Tenants.
+// organizationClient is the Keycloak Organizations + IdP surface used by Tenants.
 // Tests inject fakes; production wires *keycloak.Client.
 type organizationClient interface {
 	ListOrganizations(ctx context.Context) ([]keycloak.Organization, error)
@@ -48,12 +49,18 @@ type organizationClient interface {
 	UpdateOrganization(ctx context.Context, org keycloak.Organization) (keycloak.Organization, error)
 	DeleteOrganization(ctx context.Context, id string) error
 	ListOrganizationMembers(ctx context.Context, orgID string) ([]keycloak.OrganizationMember, error)
+	CreateIdentityProvider(ctx context.Context, idp keycloak.IdentityProvider) error
+	DeleteIdentityProvider(ctx context.Context, alias string) error
+	LinkOrganizationIdentityProvider(ctx context.Context, orgID, alias string) error
+	ConfigureOrganizationIdentityProvider(ctx context.Context, orgID, alias string) error
+	UpsertIdentityProviderMapper(ctx context.Context, alias, organizationID, organizationName string) error
 }
 
 // TenantsServerBuilder configures a TenantsServer.
 type TenantsServerBuilder struct {
 	logger  *slog.Logger
 	tenants organizationClient
+	secrets SecretReader
 }
 
 // TenantsServer implements ai_grid.v1.Tenants.
@@ -61,6 +68,7 @@ type TenantsServer struct {
 	aigridv1connect.UnimplementedTenantsHandler
 	logger  *slog.Logger
 	tenants organizationClient
+	secrets SecretReader
 	now     func() time.Time
 
 	// writeLocks serializes writes per organization id. Update and Delete
@@ -111,6 +119,13 @@ func (b *TenantsServerBuilder) SetOrganizationClient(client organizationClient) 
 	return b
 }
 
+// SetSecretReader sets the reader for IdP client secrets. Required only when a
+// Create request includes an identity provider.
+func (b *TenantsServerBuilder) SetSecretReader(reader SecretReader) *TenantsServerBuilder {
+	b.secrets = reader
+	return b
+}
+
 // Build creates the TenantsServer.
 func (b *TenantsServerBuilder) Build() (*TenantsServer, error) {
 	if b.tenants == nil {
@@ -120,7 +135,7 @@ func (b *TenantsServerBuilder) Build() (*TenantsServer, error) {
 	if logger == nil {
 		logger = slog.Default()
 	}
-	server := &TenantsServer{logger: logger, tenants: b.tenants, now: time.Now}
+	server := &TenantsServer{logger: logger, tenants: b.tenants, secrets: b.secrets, now: time.Now}
 	for i := range server.writeLocks {
 		server.writeLocks[i] = make(chan struct{}, 1)
 	}
@@ -138,7 +153,7 @@ func (s *TenantsServer) List(ctx context.Context, req *aigridv1.TenantsListReque
 	}
 	items := make([]*aigridv1.Tenant, 0, len(organizations))
 	for _, organization := range organizations {
-		items = append(items, tenantFromOrganization(organization))
+		items = append(items, s.projectTenant(ctx, organization))
 	}
 	page, total := applyListWindow(items, req.Offset, req.Limit)
 	return &aigridv1.TenantsListResponse{
@@ -158,11 +173,36 @@ func (s *TenantsServer) Get(ctx context.Context, req *aigridv1.TenantsGetRequest
 	if err != nil {
 		return nil, mapTenantKeycloakError("get", id, err)
 	}
-	return &aigridv1.TenantsGetResponse{Object: tenantFromOrganization(organization)}, nil
+	return &aigridv1.TenantsGetResponse{Object: s.projectTenant(ctx, organization)}, nil
+}
+
+// projectTenant maps an organization to a Tenant. A stored identity provider
+// that does not decode is logged and left off the response, so one bad
+// attribute does not fail List or Get for every organization.
+func (s *TenantsServer) projectTenant(ctx context.Context, organization keycloak.Organization) *aigridv1.Tenant {
+	tenant, err := tenantFromOrganization(organization)
+	if err == nil {
+		return tenant
+	}
+	s.logger.WarnContext(ctx, "tenant identity provider attribute ignored", "id", organization.ID, "error", err)
+	stripped := organization
+	if stripped.Attributes != nil {
+		attrs := maps.Clone(stripped.Attributes)
+		delete(attrs, tenantIdentityProviderAttribute)
+		stripped.Attributes = attrs
+	}
+	tenant, err = tenantFromOrganization(stripped)
+	if err != nil {
+		// tenantFromOrganization only fails while decoding the attribute.
+		s.logger.ErrorContext(ctx, "tenant projection failed after dropping identity provider", "id", organization.ID, "error", err)
+		return &aigridv1.Tenant{Id: organization.ID}
+	}
+	return tenant
 }
 
 // Create creates a Keycloak Organization for the tenant.
 // metadata.name is required (RFC 1123). Keycloak assigns the organization id.
+// When spec.identity_provider is set, creates and links the realm IdP and mapper.
 func (s *TenantsServer) Create(ctx context.Context, req *aigridv1.TenantsCreateRequest) (*aigridv1.TenantsCreateResponse, error) {
 	object := req.GetObject()
 	if object == nil {
@@ -180,20 +220,55 @@ func (s *TenantsServer) Create(ctx context.Context, req *aigridv1.TenantsCreateR
 		return nil, err
 	}
 
+	var normalizedIdP *aigridv1.IdentityProvider
+	if object.GetSpec().GetIdentityProvider() != nil {
+		normalizedIdP, err = normalizeIdentityProvider(name, object.GetSpec().GetIdentityProvider())
+		if err != nil {
+			return nil, err
+		}
+		if s.secrets == nil {
+			return nil, connect.Errorf(connect.CodeInternal, "identity provider secret reader is not configured")
+		}
+	}
+
+	attrs := map[string][]string{
+		tenantVersionAttribute:    {"1"},
+		tenantCreateTimeAttribute: {s.now().UTC().Format(time.RFC3339)},
+	}
+	if normalizedIdP != nil {
+		chunks, err := identityProviderToAttributeValues(normalizedIdP)
+		if err != nil {
+			return nil, connect.Errorf(connect.CodeInternal, "encode identity provider: %v", err)
+		}
+		attrs[tenantIdentityProviderAttribute] = chunks
+	}
+
 	org := keycloak.Organization{
-		Name:    name,
-		Alias:   name,
-		Domains: domains,
-		Attributes: map[string][]string{
-			tenantVersionAttribute:    {"1"},
-			tenantCreateTimeAttribute: {s.now().UTC().Format(time.RFC3339)},
-		},
+		Name:       name,
+		Alias:      name,
+		Domains:    domains,
+		Attributes: attrs,
 	}
 	created, err := s.tenants.CreateOrganization(ctx, org)
 	if err != nil {
 		return nil, mapTenantKeycloakError("create", name, err)
 	}
-	return &aigridv1.TenantsCreateResponse{Object: tenantFromOrganization(created)}, nil
+	if normalizedIdP != nil {
+		idpCreated, setupErr := s.setupIdentityProvider(ctx, created, normalizedIdP)
+		if setupErr == nil && len(created.Domains) > 0 {
+			// Only now that the IdP is linked may a domain name it.
+			created.Domains = routeDomainsToIdentityProvider(created.Domains, identityProviderAliasOf(created))
+			created, setupErr = s.updateRoutedOrganization(ctx, created)
+		}
+		if setupErr != nil {
+			return nil, s.cleanupIdentityProviderCreate(ctx, created.ID, created.Alias, idpCreated, setupErr)
+		}
+	}
+	tenant, err := tenantFromOrganization(created)
+	if err != nil {
+		return nil, connect.Errorf(connect.CodeInternal, "project tenant: %v", err)
+	}
+	return &aigridv1.TenantsCreateResponse{Object: tenant}, nil
 }
 
 // Update patches tenant name and/or domains according to update_mask.
@@ -227,14 +302,22 @@ func (s *TenantsServer) Update(ctx context.Context, req *aigridv1.TenantsUpdateR
 		return nil, staleTenantError("update", id)
 	}
 
-	updateName, updateDomains, nameRequired, err := tenantUpdatePaths(req.GetUpdateMask(), req.GetObject())
+	updateName, updateDomains, updateIdP, nameRequired, err := tenantUpdatePaths(req.GetUpdateMask(), req.GetObject())
 	if err != nil {
 		return nil, err
 	}
+	if updateIdP {
+		if err := s.ensureIdentityProviderUnchanged(current, object.GetSpec().GetIdentityProvider()); err != nil {
+			return nil, err
+		}
+	}
 	if !updateName && !updateDomains {
-		// The mask names only id, version or creation time: nothing to
-		// write, so the version stays and other editors aren't made stale.
-		return &aigridv1.TenantsUpdateResponse{Object: tenantFromOrganization(current)}, nil
+		// IdP-only (or identity/version-only) mask: nothing to write.
+		tenant, err := tenantFromOrganization(current)
+		if err != nil {
+			return nil, connect.Errorf(connect.CodeInternal, "project tenant: %v", err)
+		}
+		return &aigridv1.TenantsUpdateResponse{Object: tenant}, nil
 	}
 	next := current
 	if updateName {
@@ -264,6 +347,13 @@ func (s *TenantsServer) Update(ctx context.Context, req *aigridv1.TenantsUpdateR
 		if err := validateTenantDomains(next.Domains); err != nil {
 			return nil, err
 		}
+		storedIdP, err := identityProviderFromOrganizationAttrs(current.Attributes)
+		if err != nil {
+			return nil, connect.Errorf(connect.CodeInternal, "read identity provider: %v", err)
+		}
+		if storedIdP != nil {
+			next.Domains = routeDomainsToIdentityProvider(next.Domains, identityProviderAliasOf(current))
+		}
 	}
 
 	// The rest of the representation, attributes this backend doesn't own
@@ -284,7 +374,73 @@ func (s *TenantsServer) Update(ctx context.Context, req *aigridv1.TenantsUpdateR
 	if err != nil {
 		return nil, mapTenantKeycloakError("update", id, err)
 	}
-	return &aigridv1.TenantsUpdateResponse{Object: tenantFromOrganization(updated)}, nil
+	if updateName {
+		// The org name mapper is hardcoded per IdP: refresh it so new logins get the new
+		// org_name. Done on every name update, not only a change, so a retry repairs a
+		// failed refresh.
+		if err := s.refreshIdentityProviderMappers(ctx, updated); err != nil {
+			return nil, err
+		}
+	}
+	tenant, err := tenantFromOrganization(updated)
+	if err != nil {
+		return nil, connect.Errorf(connect.CodeInternal, "project tenant: %v", err)
+	}
+	return &aigridv1.TenantsUpdateResponse{Object: tenant}, nil
+}
+
+// identityProviderAliasOf is the alias of the IdP linked to an organization:
+// the organization's alias, or its name when it has none.
+func identityProviderAliasOf(org keycloak.Organization) string {
+	if org.Alias != "" {
+		return org.Alias
+	}
+	return org.Name
+}
+
+// routeDomainsToIdentityProvider points every domain at the organization's
+// identity provider with autoRedirect, so Keycloak's identity-first login sends
+// a user whose email domain matches straight to the tenant's login server
+// instead of showing a button.
+func routeDomainsToIdentityProvider(domains []keycloak.OrganizationDomain, alias string) []keycloak.OrganizationDomain {
+	routed := make([]keycloak.OrganizationDomain, len(domains))
+	for i, d := range domains {
+		d.IdentityProviderAlias = alias
+		d.AutoRedirect = true
+		routed[i] = d
+	}
+	return routed
+}
+
+// updateRoutedOrganization writes the organization back after Create routed its
+// domains, accepting a write whose read-back failed.
+func (s *TenantsServer) updateRoutedOrganization(ctx context.Context, org keycloak.Organization) (keycloak.Organization, error) {
+	updated, err := s.tenants.UpdateOrganization(ctx, org)
+	if readBack := (*keycloak.ReadBackError)(nil); errors.As(err, &readBack) {
+		s.logger.WarnContext(ctx, "tenant domains routed, but reading it back failed", "id", org.ID, "error", readBack.Err)
+		return readBack.Written, nil
+	}
+	if err != nil {
+		return org, mapTenantKeycloakError("route domains to identity provider", org.ID, err)
+	}
+	return updated, nil
+}
+
+// refreshIdentityProviderMappers upserts the broker mappers of an organization's linked
+// identity provider with its current id and name. An organization without one is left alone.
+func (s *TenantsServer) refreshIdentityProviderMappers(ctx context.Context, org keycloak.Organization) error {
+	storedIdP, err := identityProviderFromOrganizationAttrs(org.Attributes)
+	if err != nil {
+		return connect.Errorf(connect.CodeInternal, "read identity provider: %v", err)
+	}
+	if storedIdP == nil {
+		return nil
+	}
+	alias := identityProviderAliasOf(org)
+	if err := s.tenants.UpsertIdentityProviderMapper(ctx, alias, org.ID, org.Name); err != nil {
+		return mapTenantKeycloakError("update identity provider mappers", alias, err)
+	}
+	return nil
 }
 
 // errTenantVersionRequired answers an Update or Delete without a version.
@@ -313,6 +469,19 @@ func (s *TenantsServer) Delete(ctx context.Context, req *aigridv1.TenantsDeleteR
 	}
 	if version != organizationVersion(current) {
 		return nil, staleTenantError("delete", id)
+	}
+	storedIdP, err := identityProviderFromOrganizationAttrs(current.Attributes)
+	if err != nil {
+		return nil, connect.Errorf(connect.CodeInternal, "read identity provider: %v", err)
+	}
+	if storedIdP != nil {
+		alias := current.Alias
+		if alias == "" {
+			alias = current.Name
+		}
+		if err := s.tenants.DeleteIdentityProvider(ctx, alias); err != nil {
+			return nil, mapTenantKeycloakError("delete identity provider", alias, err)
+		}
 	}
 	if err := s.tenants.DeleteOrganization(ctx, id); err != nil {
 		return nil, mapTenantKeycloakError("delete", id, err)
@@ -346,7 +515,11 @@ func (s *TenantsServer) ListMembers(ctx context.Context, req *aigridv1.TenantsLi
 	}, nil
 }
 
-func tenantFromOrganization(organization keycloak.Organization) *aigridv1.Tenant {
+func tenantFromOrganization(organization keycloak.Organization) (*aigridv1.Tenant, error) {
+	idp, err := identityProviderFromOrganizationAttrs(organization.Attributes)
+	if err != nil {
+		return nil, err
+	}
 	return &aigridv1.Tenant{
 		Id: organization.ID,
 		Metadata: &aigridv1.Metadata{
@@ -355,10 +528,11 @@ func tenantFromOrganization(organization keycloak.Organization) *aigridv1.Tenant
 			CreationTimestamp: organizationCreateTime(organization),
 		},
 		Spec: &aigridv1.TenantSpec{
-			Domains: organization.DomainNames(),
+			Domains:          organization.DomainNames(),
+			IdentityProvider: idp,
 		},
 		Status: &aigridv1.TenantStatus{},
-	}
+	}, nil
 }
 
 // organizationVersion reads the version attribute. An organization without
@@ -470,11 +644,21 @@ func domainsFromTenantSpec(spec *aigridv1.TenantSpec) ([]keycloak.OrganizationDo
 // REST PATCH arrives without one, because vanguard does not synthesise a mask
 // from the JSON body the way grpc-gateway did. Treating an empty mask as "write
 // everything" made a name-only PATCH clear the tenant's domains.
-func tenantUpdatePaths(mask *fieldmaskpb.FieldMask, object *aigridv1.Tenant) (name, domains, nameRequired bool, err error) {
+func tenantUpdatePaths(mask *fieldmaskpb.FieldMask, object *aigridv1.Tenant) (name, domains, idp, nameRequired bool, err error) {
 	if mask == nil || len(mask.GetPaths()) == 0 {
 		// Only a name counts: metadata holding just the version or creation
 		// time names nothing to write, so it stays a no-op.
-		return object.GetMetadata().GetName() != "", object.GetSpec() != nil, false, nil
+		//
+		// spec != nil used to mean "replace domains". A REST PATCH that sends
+		// only spec.identityProvider still has an empty domains list (proto3
+		// has no presence for it), so that cleared the domains and never
+		// checked the identity provider. An identity provider with no domains
+		// is an IdP check, not a domain write. Domains are still replaced
+		// when the body has no identity provider, including an empty list.
+		spec := object.GetSpec()
+		idp := spec.GetIdentityProvider() != nil
+		domains := spec != nil && (spec.GetIdentityProvider() == nil || len(spec.GetDomains()) > 0)
+		return object.GetMetadata().GetName() != "", domains, idp, false, nil
 	}
 	for _, path := range mask.GetPaths() {
 		p := strings.TrimPrefix(path, "object.")
@@ -485,13 +669,18 @@ func tenantUpdatePaths(mask *fieldmaskpb.FieldMask, object *aigridv1.Tenant) (na
 		case "metadata", "metadata.name":
 			name = true
 			nameRequired = true
-		case "spec", "spec.domains":
+		case "spec":
 			domains = true
+			idp = true
+		case "spec.domains":
+			domains = true
+		case "spec.identity_provider":
+			idp = true
 		default:
-			return false, false, false, connect.Errorf(connect.CodeInvalidArgument, "unsupported update_mask path %q", path)
+			return false, false, false, false, connect.Errorf(connect.CodeInvalidArgument, "unsupported update_mask path %q", path)
 		}
 	}
-	return name, domains, nameRequired, nil
+	return name, domains, idp, nameRequired, nil
 }
 
 func validateTenantID(id string) error {
@@ -573,4 +762,121 @@ func mapTenantKeycloakError(op, id string, err error) error {
 		}
 		return connect.Errorf(connect.CodeInternal, "%s tenant %q: %v", op, id, err).WithCause(err)
 	}
+}
+
+func (s *TenantsServer) setupIdentityProvider(ctx context.Context, org keycloak.Organization, idp *aigridv1.IdentityProvider) (idpCreated bool, err error) {
+	secret, err := s.secrets.Read(ctx, idp.GetConfig().GetClientSecretSecretName())
+	if err != nil {
+		if IsSecretNotFound(err) {
+			return false, connect.Errorf(connect.CodeNotFound, "identity provider secret %q not found", idp.GetConfig().GetClientSecretSecretName()).WithCause(err)
+		}
+		return false, connect.Errorf(connect.CodeInternal, "read identity provider secret: %v", err).WithCause(err)
+	}
+	alias := org.Alias
+	if alias == "" {
+		alias = org.Name
+	}
+	kcIdP := keycloak.IdentityProvider{
+		Alias:       alias,
+		DisplayName: idp.GetTitle(),
+		ProviderID:  "oidc",
+		Enabled:     idp.GetEnabled(),
+		Config:      oidcConfigForKeycloak(idp.GetConfig(), secret),
+	}
+	if err := s.tenants.CreateIdentityProvider(ctx, kcIdP); err != nil {
+		return false, mapTenantKeycloakError("create identity provider", alias, err)
+	}
+	idpCreated = true
+	if err := s.tenants.LinkOrganizationIdentityProvider(ctx, org.ID, alias); err != nil {
+		return idpCreated, mapTenantKeycloakError("link identity provider", alias, err)
+	}
+	if err := s.tenants.ConfigureOrganizationIdentityProvider(ctx, org.ID, alias); err != nil {
+		return idpCreated, mapTenantKeycloakError("configure identity provider", alias, err)
+	}
+	if err := s.tenants.UpsertIdentityProviderMapper(ctx, alias, org.ID, org.Name); err != nil {
+		return idpCreated, mapTenantKeycloakError("upsert identity provider mapper", alias, err)
+	}
+	return idpCreated, nil
+}
+
+// identityProviderCleanupTimeout bounds rollback after the caller's context
+// is already canceled. It matches the Keycloak admin client's own timeout.
+const identityProviderCleanupTimeout = 30 * time.Second
+
+func (s *TenantsServer) cleanupIdentityProviderCreate(ctx context.Context, orgID, alias string, idpCreated bool, setupErr error) error {
+	// The caller may have canceled mid-create. Cleanup still has to remove the
+	// organization and identity provider, or a retry collides with what was left behind.
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), identityProviderCleanupTimeout)
+	defer cancel()
+	var idpCleanupErr, orgCleanupErr error
+	if idpCreated {
+		idpCleanupErr = s.tenants.DeleteIdentityProvider(ctx, alias)
+	}
+	orgCleanupErr = s.tenants.DeleteOrganization(ctx, orgID)
+	if idpCleanupErr == nil && orgCleanupErr == nil {
+		return setupErr
+	}
+	if idpCleanupErr != nil && orgCleanupErr != nil {
+		return connect.Errorf(connect.CodeInternal, "identity provider setup failed (%v); cleanup also failed (identity provider: %v; organization: %v)", setupErr, idpCleanupErr, orgCleanupErr)
+	}
+	if idpCleanupErr != nil {
+		return connect.Errorf(connect.CodeInternal, "identity provider setup failed (%v); identity provider cleanup also failed: %v", setupErr, idpCleanupErr)
+	}
+	return connect.Errorf(connect.CodeInternal, "identity provider setup failed (%v); organization cleanup also failed: %v", setupErr, orgCleanupErr)
+}
+
+func (s *TenantsServer) ensureIdentityProviderUnchanged(current keycloak.Organization, request *aigridv1.IdentityProvider) error {
+	stored, err := identityProviderFromOrganizationAttrs(current.Attributes)
+	if err != nil {
+		return connect.Errorf(connect.CodeInternal, "read identity provider: %v", err)
+	}
+	if stored == nil && request == nil {
+		return nil
+	}
+	if stored == nil && request != nil {
+		return connect.Errorf(connect.CodeInvalidArgument, "spec.identity_provider cannot be added after create")
+	}
+	if stored != nil && request == nil {
+		return connect.Errorf(connect.CodeInvalidArgument, "spec.identity_provider cannot be removed")
+	}
+	normalized, err := normalizeIdentityProvider(current.Name, request)
+	if err != nil {
+		return err
+	}
+	if !proto.Equal(stored, normalized) {
+		return connect.Errorf(connect.CodeInvalidArgument, "spec.identity_provider is immutable after create")
+	}
+	return nil
+}
+
+func oidcConfigForKeycloak(cfg *aigridv1.OidcConfig, clientSecret []byte) map[string]string {
+	out := map[string]string{
+		"clientId":          cfg.GetClientId(),
+		"clientSecret":      string(clientSecret),
+		"issuer":            cfg.GetIssuer(),
+		"authorizationUrl":  cfg.GetAuthorizationUrl(),
+		"tokenUrl":          cfg.GetTokenUrl(),
+		"defaultScope":      cfg.GetDefaultScopes(),
+		"validateSignature": boolString(cfg.GetValidateSignature()),
+		"syncMode":          "FORCE",
+		"clientAuthMethod":  "client_secret_post",
+	}
+	if v := cfg.GetUserInfoUrl(); v != "" {
+		out["userInfoUrl"] = v
+	}
+	if v := cfg.GetJwksUrl(); v != "" {
+		out["jwksUrl"] = v
+		out["useJwksUrl"] = "true"
+	}
+	if v := cfg.GetLogoutUrl(); v != "" {
+		out["logoutUrl"] = v
+	}
+	return out
+}
+
+func boolString(v bool) string {
+	if v {
+		return "true"
+	}
+	return "false"
 }

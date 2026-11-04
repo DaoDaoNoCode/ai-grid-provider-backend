@@ -56,12 +56,18 @@ type tokenResponse struct {
 }
 
 // OrganizationDomain is a domain on a Keycloak Organization. Keys this type
-// doesn't model (such as identityProviderAlias) are kept in Extra and written
-// back unchanged.
+// doesn't model are kept in Extra and written back unchanged.
+//
+// IdentityProviderAlias and AutoRedirect route sign-in: when a user's email
+// domain matches and AutoRedirect is set, Keycloak's identity-first login sends
+// them straight to that identity provider, which must be linked to the
+// organization (Keycloak 26.8 OrganizationAuthenticator).
 type OrganizationDomain struct {
-	Name     string                     `json:"name"`
-	Verified bool                       `json:"verified"`
-	Extra    map[string]json.RawMessage `json:"-"`
+	Name                  string                     `json:"name"`
+	Verified              bool                       `json:"verified"`
+	IdentityProviderAlias string                     `json:"identityProviderAlias,omitempty"`
+	AutoRedirect          bool                       `json:"autoRedirect"`
+	Extra                 map[string]json.RawMessage `json:"-"`
 }
 
 type organizationDomainFields OrganizationDomain

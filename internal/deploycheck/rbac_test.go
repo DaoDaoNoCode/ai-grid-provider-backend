@@ -104,6 +104,77 @@ func readRoles(t *testing.T, file string) []role {
 	return out
 }
 
+func TestIdpSecretRBAC(t *testing.T) {
+	t.Parallel()
+	files := []string{
+		filepath.Join("..", "..", "deploy", "openshift", "rbac.yaml"),
+		filepath.Join("..", "..", "deploy", "kind", "ai-grid-provider-backend.yaml"),
+	}
+	for _, file := range files {
+		roles := readRoles(t, file)
+		var found bool
+		for _, role := range roles {
+			if role.Name != "ai-grid-provider-backend-idp-secrets" {
+				continue
+			}
+			found = true
+			if len(role.Rules) != 1 {
+				t.Fatalf("%s: idp Role rules = %d, want 1", file, len(role.Rules))
+			}
+			rule := role.Rules[0]
+			if !slices.Equal(rule.APIGroups, []string{""}) || !slices.Equal(rule.Resources, []string{"secrets"}) || !slices.Equal(rule.Verbs, []string{"get"}) {
+				t.Fatalf("%s: idp Role rule = %+v, want get on secrets", file, rule)
+			}
+			for _, verb := range []string{"list", "watch", "create", "update", "patch", "delete", "*"} {
+				if slices.Contains(rule.Verbs, verb) {
+					t.Fatalf("%s: idp Role must not grant %q", file, verb)
+				}
+			}
+		}
+		if !found {
+			t.Fatalf("%s: missing Role ai-grid-provider-backend-idp-secrets", file)
+		}
+		assertIdpSecretRoleBinding(t, file)
+	}
+}
+
+func assertIdpSecretRoleBinding(t *testing.T, file string) {
+	t.Helper()
+	data, err := os.ReadFile(file)
+	if err != nil {
+		t.Fatalf("read %s: %v", file, err)
+	}
+	var found bool
+	for _, doc := range bytes.Split(data, []byte("\n---")) {
+		var head struct {
+			Kind string `json:"kind"`
+		}
+		if err := yaml.Unmarshal(doc, &head); err != nil || head.Kind != "RoleBinding" {
+			continue
+		}
+		var rb rbacv1.RoleBinding
+		if err := yaml.UnmarshalStrict(doc, &rb); err != nil {
+			t.Fatalf("%s: RoleBinding: %v", file, err)
+		}
+		if rb.Name != "ai-grid-provider-backend-idp-secrets" {
+			continue
+		}
+		found = true
+		if rb.Namespace != "ai-grid-idp-secrets" {
+			t.Fatalf("%s: RoleBinding namespace = %q, want ai-grid-idp-secrets", file, rb.Namespace)
+		}
+		if rb.RoleRef.Kind != "Role" || rb.RoleRef.Name != "ai-grid-provider-backend-idp-secrets" {
+			t.Fatalf("%s: RoleBinding roleRef = %+v", file, rb.RoleRef)
+		}
+		if len(rb.Subjects) != 1 || rb.Subjects[0].Kind != "ServiceAccount" || rb.Subjects[0].Name != "ai-grid-provider-backend" {
+			t.Fatalf("%s: RoleBinding subjects = %+v", file, rb.Subjects)
+		}
+	}
+	if !found {
+		t.Fatalf("%s: missing RoleBinding ai-grid-provider-backend-idp-secrets", file)
+	}
+}
+
 // The test fails on the rules cluster mode needed.
 func TestWriteAllowedRejectsClusterModeRules(t *testing.T) {
 	t.Parallel()

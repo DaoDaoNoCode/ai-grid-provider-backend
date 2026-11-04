@@ -78,7 +78,9 @@ spec:
     spec:
       containers:
         - name: keycloak
-          image: quay.io/keycloak/keycloak:26.3
+          # Match hub / Option 2 docs (26.8): org IdP link PUT with
+          # autoMembership/membershipType is not on 26.3 (HTTP 405).
+          image: quay.io/keycloak/keycloak:26.8.0
           args: ["start-dev", "--http-port=8080"]
           env:
             - name: KC_BOOTSTRAP_ADMIN_USERNAME
@@ -129,6 +131,30 @@ data:
         --data "{\"name\":\"$tenant\",\"alias\":\"$tenant\",\"domains\":[{\"name\":\"$tenant.example.com\",\"verified\":false}]}" | \
         grep -E '^(201|409)$' >/dev/null
     done
+    # Client that emits flat claim org_id from user attribute maas_org_id
+    # (companion to the provider-backend IdP hardcoded-attribute mapper).
+    curl -sS -o /dev/null -w '%{http_code}' -X POST "$base/admin/realms/ai-grid/clients" \
+      -H "$auth" -H 'Content-Type: application/json' \
+      --data '{"clientId":"saas","name":"saas","enabled":true,"publicClient":true,"directAccessGrantsEnabled":true,"standardFlowEnabled":true,"protocol":"openid-connect"}' | \
+      grep -E '^(201|409)$' >/dev/null
+    client_uuid=$(curl -fsS "$base/admin/realms/ai-grid/clients?clientId=saas" -H "$auth" | \
+      sed -n 's/.*"id":"\([^"]*\)".*/\1/p' | head -n1)
+    if [ -n "$client_uuid" ]; then
+      curl -sS -o /dev/null -w '%{http_code}' -X POST \
+        "$base/admin/realms/ai-grid/clients/$client_uuid/protocol-mappers/models" \
+        -H "$auth" -H 'Content-Type: application/json' \
+        --data '{"name":"MaaS org id","protocol":"openid-connect","protocolMapper":"oidc-usermodel-attribute-mapper","config":{"user.attribute":"maas_org_id","claim.name":"org_id","jsonType.label":"String","multivalued":"false","id.token.claim":"true","access.token.claim":"true","userinfo.token.claim":"true"}}' | \
+        grep -E '^(201|409)$' >/dev/null || true
+    fi
+    # Second realm used as a stand-in OIDC broker for IdP create E2E (URLs only;
+    # full broker login is optional).
+    curl -sS -o /dev/null -w '%{http_code}' -X POST "$base/admin/realms" \
+      -H "$auth" -H 'Content-Type: application/json' \
+      --data '{"realm":"org-idp","enabled":true}' | grep -E '^(201|409)$' >/dev/null
+    curl -sS -o /dev/null -w '%{http_code}' -X POST "$base/admin/realms/org-idp/clients" \
+      -H "$auth" -H 'Content-Type: application/json' \
+      --data '{"clientId":"ai-grid-broker","secret":"demo-broker-client-secret","enabled":true,"publicClient":false,"directAccessGrantsEnabled":true,"standardFlowEnabled":true,"redirectUris":["*"],"protocol":"openid-connect"}' | \
+      grep -E '^(201|409)$' >/dev/null
 ---
 apiVersion: batch/v1
 kind: Job

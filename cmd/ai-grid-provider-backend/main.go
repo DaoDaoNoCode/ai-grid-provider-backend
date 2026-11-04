@@ -29,6 +29,7 @@ import (
 	"github.com/osac-project/ai-grid-provider-backend/internal/restgateway"
 	"github.com/osac-project/ai-grid-provider-backend/internal/servers"
 	"k8s.io/client-go/dynamic"
+	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
 	"k8s.io/client-go/transport"
@@ -58,6 +59,11 @@ func main() {
 	kubeClient, err := dynamic.NewForConfig(restConfig)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "create Kubernetes client: %v\n", err)
+		os.Exit(1)
+	}
+	kubeCore, err := kubernetes.NewForConfig(restConfig)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "create Kubernetes core client: %v\n", err)
 		os.Exit(1)
 	}
 	gpuInventory, err := newGPUInventory(restConfig, search)
@@ -93,6 +99,7 @@ func main() {
 		fmt.Fprintf(os.Stderr, "build Clusters server: %v\n", err)
 		os.Exit(1)
 	}
+	idpSecretNamespace := getEnv("AI_GRID_IDP_SECRET_NAMESPACE", "ai-grid-idp-secrets")
 	tenantsServer, err := servers.NewTenantsServer().
 		SetLogger(logger).
 		SetOrganizationClient(keycloak.New(keycloak.Config{
@@ -105,6 +112,7 @@ func main() {
 			// lock until the caller gives up.
 			HTTPClient: &http.Client{Timeout: 30 * time.Second},
 		})).
+		SetSecretReader(servers.NewKubernetesSecretReader(kubeCore, idpSecretNamespace)).
 		Build()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "build Tenants server: %v\n", err)

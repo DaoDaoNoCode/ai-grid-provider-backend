@@ -73,6 +73,8 @@ spec:
               value: ai-grid-internal-models
             - name: AI_GRID_SUBSCRIPTION_NAMESPACE
               value: models-as-a-service
+            - name: AI_GRID_IDP_SECRET_NAMESPACE
+              value: ai-grid-idp-secrets
           volumeMounts:
             - name: git-token
               mountPath: /var/run/secrets/ai-grid-git

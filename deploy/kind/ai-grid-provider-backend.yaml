@@ -4,6 +4,11 @@ metadata:
   name: ai-grid
 ---
 apiVersion: v1
+kind: Namespace
+metadata:
+  name: ai-grid-idp-secrets
+---
+apiVersion: v1
 kind: ServiceAccount
 metadata:
   name: ai-grid-provider-backend
@@ -49,6 +54,30 @@ roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: ClusterRole
   name: ai-grid-provider-backend-managedclusters
+subjects:
+  - kind: ServiceAccount
+    name: ai-grid-provider-backend
+    namespace: ai-grid
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: ai-grid-provider-backend-idp-secrets
+  namespace: ai-grid-idp-secrets
+rules:
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: ai-grid-provider-backend-idp-secrets
+  namespace: ai-grid-idp-secrets
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: ai-grid-provider-backend-idp-secrets
 subjects:
   - kind: ServiceAccount
     name: ai-grid-provider-backend
@@ -120,6 +149,8 @@ spec:
               value: admin
             - name: AI_GRID_GIT_URL
               value: file:///catalog/repo.git
+            - name: AI_GRID_IDP_SECRET_NAMESPACE
+              value: ai-grid-idp-secrets
           volumeMounts:
             - name: catalog
               mountPath: /catalog

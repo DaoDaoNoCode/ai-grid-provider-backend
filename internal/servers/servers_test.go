@@ -11,6 +11,7 @@ import (
 	"sync"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	connect "connectrpc.com/connect/v2"
 	aigridv1 "github.com/osac-project/ai-grid-provider-backend/gen/ai_grid/v1"
@@ -798,6 +799,420 @@ func TestCreateTenant(t *testing.T) {
 		_, err := server.Create(context.Background(), &aigridv1.TenantsCreateRequest{})
 		assertConnectCode(t, err, connect.CodeInvalidArgument)
 	})
+
+	t.Run("with identity provider", func(t *testing.T) {
+		t.Parallel()
+		store := newFakeOrganizationStore()
+		secrets := &fakeSecretReader{secrets: map[string][]byte{"acme-idp-secret": []byte("s3cret")}}
+		server := mustTenantsServerWithSecrets(t, store, secrets)
+		got, err := server.Create(context.Background(), &aigridv1.TenantsCreateRequest{
+			Object: &aigridv1.Tenant{
+				Metadata: &aigridv1.Metadata{Name: "acme"},
+				Spec: &aigridv1.TenantSpec{
+					Domains:          []string{"acme.example.com"},
+					IdentityProvider: validCreateIdP(),
+				},
+			},
+		})
+		if err != nil {
+			t.Fatalf("Create: %v", err)
+		}
+		idp := got.GetObject().GetSpec().GetIdentityProvider()
+		if idp == nil || idp.GetConfig().GetClientSecretSecretName() != "acme-idp-secret" {
+			t.Fatalf("response idp = %+v", idp)
+		}
+		if strings.Contains(fmt.Sprintf("%v", got), "s3cret") {
+			t.Fatal("response leaked secret value")
+		}
+		stored := store.byID[got.GetObject().GetId()]
+		chunks := stored.Attributes[tenantIdentityProviderAttribute]
+		if len(chunks) == 0 {
+			t.Fatalf("missing idp attribute: %+v", stored.Attributes)
+		}
+		for i, c := range chunks {
+			if len(c) > keycloakGroupAttributeMax {
+				t.Fatalf("idp attribute chunk %d length %d exceeds Keycloak limit %d", i, len(c), keycloakGroupAttributeMax)
+			}
+		}
+		gotIdP, err := identityProviderFromOrganizationAttrs(stored.Attributes)
+		if err != nil || gotIdP == nil || gotIdP.GetConfig().GetClientSecretSecretName() != "acme-idp-secret" {
+			t.Fatalf("idp attribute round-trip = %+v, err=%v", gotIdP, err)
+		}
+		if _, ok := store.idps["acme"]; !ok {
+			t.Fatal("idp alias not created")
+		}
+		if store.idps["acme"].Config["useJwksUrl"] != "true" || store.idps["acme"].Config["jwksUrl"] == "" {
+			t.Fatalf("keycloak idp config = %+v, want jwksUrl and useJwksUrl", store.idps["acme"].Config)
+		}
+		if store.mappers["acme"].Config["attribute.value"] != got.GetObject().GetId() {
+			t.Fatalf("mapper value = %q, want org id", store.mappers["acme"].Config["attribute.value"])
+		}
+		domains := store.byID[got.GetObject().GetId()].Domains
+		if len(domains) != 1 || domains[0].Name != "acme.example.com" || domains[0].IdentityProviderAlias != "acme" || !domains[0].AutoRedirect {
+			t.Fatalf("domains = %+v, want acme.example.com routed to IdP acme with autoRedirect", domains)
+		}
+	})
+
+	t.Run("with identity provider and no domains writes no routing", func(t *testing.T) {
+		t.Parallel()
+		store := newFakeOrganizationStore()
+		secrets := &fakeSecretReader{secrets: map[string][]byte{"acme-idp-secret": []byte("s3cret")}}
+		server := mustTenantsServerWithSecrets(t, store, secrets)
+		if _, err := server.Create(context.Background(), &aigridv1.TenantsCreateRequest{
+			Object: &aigridv1.Tenant{
+				Metadata: &aigridv1.Metadata{Name: "acme"},
+				Spec:     &aigridv1.TenantSpec{IdentityProvider: validCreateIdP()},
+			},
+		}); err != nil {
+			t.Fatalf("Create: %v", err)
+		}
+		if store.puts != 0 {
+			t.Fatalf("unexpected organization write: puts=%d", store.puts)
+		}
+	})
+
+	t.Run("missing secret", func(t *testing.T) {
+		t.Parallel()
+		store := newFakeOrganizationStore()
+		server := mustTenantsServerWithSecrets(t, store, &fakeSecretReader{secrets: map[string][]byte{}})
+		_, err := server.Create(context.Background(), &aigridv1.TenantsCreateRequest{
+			Object: &aigridv1.Tenant{
+				Metadata: &aigridv1.Metadata{Name: "acme"},
+				Spec:     &aigridv1.TenantSpec{IdentityProvider: validCreateIdP()},
+			},
+		})
+		assertConnectCode(t, err, connect.CodeNotFound)
+		if len(store.byID) != 0 {
+			t.Fatalf("org left behind: %+v", store.byID)
+		}
+	})
+
+	t.Run("idp create failure cleans up", func(t *testing.T) {
+		t.Parallel()
+		store := newFakeOrganizationStore()
+		store.createIdPErr = &keycloak.APIError{Op: "create identity provider", StatusCode: http.StatusBadGateway}
+		server := mustTenantsServerWithSecrets(t, store, &fakeSecretReader{secrets: map[string][]byte{"acme-idp-secret": []byte("x")}})
+		_, err := server.Create(context.Background(), &aigridv1.TenantsCreateRequest{
+			Object: &aigridv1.Tenant{
+				Metadata: &aigridv1.Metadata{Name: "acme"},
+				Spec:     &aigridv1.TenantSpec{IdentityProvider: validCreateIdP()},
+			},
+		})
+		if err == nil {
+			t.Fatal("expected error")
+		}
+		if len(store.byID) != 0 || len(store.idps) != 0 {
+			t.Fatalf("cleanup failed: orgs=%v idps=%v", store.byID, store.idps)
+		}
+	})
+
+	t.Run("link failure cleans up idp and org", func(t *testing.T) {
+		t.Parallel()
+		store := newFakeOrganizationStore()
+		store.linkIdPErr = &keycloak.APIError{Op: "link", StatusCode: http.StatusBadGateway}
+		server := mustTenantsServerWithSecrets(t, store, &fakeSecretReader{secrets: map[string][]byte{"acme-idp-secret": []byte("x")}})
+		_, err := server.Create(context.Background(), &aigridv1.TenantsCreateRequest{
+			Object: &aigridv1.Tenant{
+				Metadata: &aigridv1.Metadata{Name: "acme"},
+				Spec:     &aigridv1.TenantSpec{IdentityProvider: validCreateIdP()},
+			},
+		})
+		if err == nil {
+			t.Fatal("expected error")
+		}
+		if len(store.byID) != 0 || len(store.idps) != 0 {
+			t.Fatalf("cleanup failed: orgs=%v idps=%v", store.byID, store.idps)
+		}
+	})
+
+	t.Run("cleanup runs after the caller cancels", func(t *testing.T) {
+		t.Parallel()
+		store := newFakeOrganizationStore()
+		store.linkIdPErr = &keycloak.APIError{Op: "link", StatusCode: http.StatusBadGateway}
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		store.linkHook = cancel
+		server := mustTenantsServerWithSecrets(t, store, &fakeSecretReader{secrets: map[string][]byte{"acme-idp-secret": []byte("x")}})
+		_, err := server.Create(ctx, &aigridv1.TenantsCreateRequest{
+			Object: &aigridv1.Tenant{
+				Metadata: &aigridv1.Metadata{Name: "acme"},
+				Spec:     &aigridv1.TenantSpec{IdentityProvider: validCreateIdP()},
+			},
+		})
+		if err == nil {
+			t.Fatal("expected error")
+		}
+		if len(store.byID) != 0 || len(store.idps) != 0 {
+			t.Fatalf("canceled caller left orgs=%v idps=%v", store.byID, store.idps)
+		}
+	})
+
+	t.Run("mapper failure cleans up", func(t *testing.T) {
+		t.Parallel()
+		store := newFakeOrganizationStore()
+		store.mapperErr = &keycloak.APIError{Op: "mapper", StatusCode: http.StatusBadGateway}
+		server := mustTenantsServerWithSecrets(t, store, &fakeSecretReader{secrets: map[string][]byte{"acme-idp-secret": []byte("x")}})
+		_, err := server.Create(context.Background(), &aigridv1.TenantsCreateRequest{
+			Object: &aigridv1.Tenant{
+				Metadata: &aigridv1.Metadata{Name: "acme"},
+				Spec:     &aigridv1.TenantSpec{IdentityProvider: validCreateIdP()},
+			},
+		})
+		if err == nil {
+			t.Fatal("expected error")
+		}
+		if len(store.byID) != 0 || len(store.idps) != 0 {
+			t.Fatalf("cleanup failed: orgs=%v idps=%v", store.byID, store.idps)
+		}
+	})
+
+	t.Run("cleanup failure names both errors", func(t *testing.T) {
+		t.Parallel()
+		store := newFakeOrganizationStore()
+		store.createIdPErr = errors.New("setup boom")
+		store.deleteOrgErr = errors.New("cleanup boom")
+		server := mustTenantsServerWithSecrets(t, store, &fakeSecretReader{secrets: map[string][]byte{"acme-idp-secret": []byte("x")}})
+		_, err := server.Create(context.Background(), &aigridv1.TenantsCreateRequest{
+			Object: &aigridv1.Tenant{
+				Metadata: &aigridv1.Metadata{Name: "acme"},
+				Spec:     &aigridv1.TenantSpec{IdentityProvider: validCreateIdP()},
+			},
+		})
+		assertConnectCode(t, err, connect.CodeInternal)
+		if !strings.Contains(err.Error(), "setup boom") || !strings.Contains(err.Error(), "cleanup boom") {
+			t.Fatalf("error = %v", err)
+		}
+	})
+}
+
+func TestListSkipsUnreadableIdentityProvider(t *testing.T) {
+	t.Parallel()
+	normalized, err := normalizeIdentityProvider("good-org", validCreateIdP())
+	if err != nil {
+		t.Fatalf("normalize: %v", err)
+	}
+	chunks, err := identityProviderToAttributeValues(normalized)
+	if err != nil {
+		t.Fatalf("attribute: %v", err)
+	}
+	store := newFakeOrganizationStore(
+		keycloak.Organization{
+			ID: "bad", Name: "bad-org", Alias: "bad-org",
+			Domains: []keycloak.OrganizationDomain{{Name: "bad.example.com"}},
+			Attributes: map[string][]string{
+				tenantVersionAttribute:          {"1"},
+				tenantIdentityProviderAttribute: {"{"},
+			},
+		},
+		keycloak.Organization{
+			ID: "good", Name: "good-org", Alias: "good-org",
+			Attributes: map[string][]string{
+				tenantVersionAttribute:          {"1"},
+				tenantIdentityProviderAttribute: chunks,
+			},
+		},
+	)
+	server := mustTenantsServer(t, store)
+	listed, err := server.List(context.Background(), &aigridv1.TenantsListRequest{})
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if listed.GetTotal() != 2 || len(listed.GetItems()) != 2 {
+		t.Fatalf("List size = %d items %d, want both tenants", listed.GetTotal(), len(listed.GetItems()))
+	}
+	byID := map[string]*aigridv1.Tenant{}
+	for _, item := range listed.GetItems() {
+		byID[item.GetId()] = item
+	}
+	bad := byID["bad"]
+	if bad == nil || bad.GetSpec().GetIdentityProvider() != nil || len(bad.GetSpec().GetDomains()) != 1 {
+		t.Fatalf("bad tenant = %+v", bad)
+	}
+	good := byID["good"]
+	if good.GetSpec().GetIdentityProvider().GetConfig().GetClientSecretSecretName() != "acme-idp-secret" {
+		t.Fatalf("good tenant idp = %+v", good.GetSpec().GetIdentityProvider())
+	}
+	got, err := server.Get(context.Background(), &aigridv1.TenantsGetRequest{Id: "bad"})
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if got.GetObject().GetSpec().GetIdentityProvider() != nil || got.GetObject().GetMetadata().GetName() != "bad-org" {
+		t.Fatalf("Get bad = %+v", got.GetObject())
+	}
+}
+
+func TestUpdateTenantIdentityProvider(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	normalized, err := normalizeIdentityProvider("acme", validCreateIdP())
+	if err != nil {
+		t.Fatalf("normalize: %v", err)
+	}
+	raw, err := identityProviderToAttribute(normalized)
+	if err != nil {
+		t.Fatalf("attribute: %v", err)
+	}
+	org := keycloak.Organization{
+		ID: "org-1", Name: "acme", Alias: "acme",
+		Attributes: map[string][]string{
+			tenantVersionAttribute:          {"1"},
+			tenantIdentityProviderAttribute: {raw},
+		},
+	}
+
+	t.Run("maskless identity provider patch keeps domains", func(t *testing.T) {
+		t.Parallel()
+		stored := org
+		stored.Domains = []keycloak.OrganizationDomain{{Name: "acme.example.com", Verified: true}}
+		store := newFakeOrganizationStore(stored)
+		server := mustTenantsServer(t, store)
+		changed := validCreateIdP()
+		changed.Title = "other"
+		_, err := server.Update(ctx, &aigridv1.TenantsUpdateRequest{
+			Object: &aigridv1.Tenant{
+				Id: "org-1", Metadata: &aigridv1.Metadata{Version: 1},
+				Spec: &aigridv1.TenantSpec{IdentityProvider: changed},
+			},
+		})
+		assertConnectCode(t, err, connect.CodeInvalidArgument)
+		got := store.byID["org-1"]
+		if len(got.Domains) != 1 || got.Domains[0].Name != "acme.example.com" || !got.Domains[0].Verified {
+			t.Fatalf("domains = %+v, want acme.example.com kept", got.Domains)
+		}
+		if store.puts != 0 {
+			t.Fatalf("maskless idp patch wrote the organization: puts=%d", store.puts)
+		}
+	})
+
+	t.Run("same idp succeeds without idp write", func(t *testing.T) {
+		t.Parallel()
+		store := newFakeOrganizationStore(org)
+		server := mustTenantsServer(t, store)
+		_, err := server.Update(ctx, &aigridv1.TenantsUpdateRequest{
+			Object: &aigridv1.Tenant{
+				Id: "org-1", Metadata: &aigridv1.Metadata{Version: 1},
+				Spec: &aigridv1.TenantSpec{IdentityProvider: validCreateIdP()},
+			},
+			UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.identity_provider"}},
+		})
+		if err != nil {
+			t.Fatalf("Update: %v", err)
+		}
+		if store.puts != 0 {
+			t.Fatalf("unexpected organization write: puts=%d", store.puts)
+		}
+	})
+
+	t.Run("changed idp rejected", func(t *testing.T) {
+		t.Parallel()
+		store := newFakeOrganizationStore(org)
+		server := mustTenantsServer(t, store)
+		changed := validCreateIdP()
+		changed.Config.ClientId = "other"
+		_, err := server.Update(ctx, &aigridv1.TenantsUpdateRequest{
+			Object: &aigridv1.Tenant{
+				Id: "org-1", Metadata: &aigridv1.Metadata{Version: 1},
+				Spec: &aigridv1.TenantSpec{IdentityProvider: changed},
+			},
+			UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.identity_provider"}},
+		})
+		assertConnectCode(t, err, connect.CodeInvalidArgument)
+	})
+
+	t.Run("add idp rejected", func(t *testing.T) {
+		t.Parallel()
+		store := newFakeOrganizationStore(keycloak.Organization{ID: "org-1", Name: "acme", Alias: "acme"})
+		server := mustTenantsServer(t, store)
+		_, err := server.Update(ctx, &aigridv1.TenantsUpdateRequest{
+			Object: &aigridv1.Tenant{
+				Id: "org-1", Metadata: &aigridv1.Metadata{Version: 1},
+				Spec: &aigridv1.TenantSpec{IdentityProvider: validCreateIdP()},
+			},
+			UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.identity_provider"}},
+		})
+		assertConnectCode(t, err, connect.CodeInvalidArgument)
+	})
+
+	t.Run("rename refreshes the org name mapper", func(t *testing.T) {
+		t.Parallel()
+		store := newFakeOrganizationStore(org)
+		store.idps["acme"] = keycloak.IdentityProvider{Alias: "acme"}
+		server := mustTenantsServer(t, store)
+		_, err := server.Update(ctx, &aigridv1.TenantsUpdateRequest{
+			Object: &aigridv1.Tenant{
+				Id: "org-1", Metadata: &aigridv1.Metadata{Version: 1, Name: "acme-corp"},
+			},
+			UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"metadata.name"}},
+		})
+		if err != nil {
+			t.Fatalf("Update: %v", err)
+		}
+		if got := store.mapperOrgNames["acme"]; got != "acme-corp" {
+			t.Fatalf("mapper org name = %q, want %q", got, "acme-corp")
+		}
+		if got := store.mappers["acme"].Config["attribute.value"]; got != "org-1" {
+			t.Fatalf("mapper org id = %q, want org-1", got)
+		}
+	})
+
+	t.Run("added domain is routed to the linked idp", func(t *testing.T) {
+		t.Parallel()
+		linked := org
+		linked.Domains = []keycloak.OrganizationDomain{{Name: "acme.example.com", IdentityProviderAlias: "acme", AutoRedirect: true}}
+		store := newFakeOrganizationStore(linked)
+		store.idps["acme"] = keycloak.IdentityProvider{Alias: "acme"}
+		store.links["org-1"] = "acme"
+		server := mustTenantsServer(t, store)
+		_, err := server.Update(ctx, &aigridv1.TenantsUpdateRequest{
+			Object: &aigridv1.Tenant{
+				Id: "org-1", Metadata: &aigridv1.Metadata{Version: 1},
+				Spec: &aigridv1.TenantSpec{Domains: []string{"acme.example.com", "acme.example.org"}},
+			},
+			UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.domains"}},
+		})
+		if err != nil {
+			t.Fatalf("Update: %v", err)
+		}
+		domains := store.byID["org-1"].Domains
+		if len(domains) != 2 {
+			t.Fatalf("domains = %+v", domains)
+		}
+		for _, d := range domains {
+			if d.IdentityProviderAlias != "acme" || !d.AutoRedirect {
+				t.Fatalf("domain %s = %+v, want routed to IdP acme with autoRedirect", d.Name, d)
+			}
+		}
+	})
+
+	t.Run("rename without an idp writes no mappers", func(t *testing.T) {
+		t.Parallel()
+		store := newFakeOrganizationStore(keycloak.Organization{
+			ID: "org-1", Name: "acme", Alias: "acme",
+			Attributes: map[string][]string{tenantVersionAttribute: {"1"}},
+		})
+		server := mustTenantsServer(t, store)
+		_, err := server.Update(ctx, &aigridv1.TenantsUpdateRequest{
+			Object:     &aigridv1.Tenant{Id: "org-1", Metadata: &aigridv1.Metadata{Version: 1, Name: "acme-corp"}},
+			UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"metadata.name"}},
+		})
+		if err != nil {
+			t.Fatalf("Update: %v", err)
+		}
+		if len(store.mapperOrgNames) != 0 {
+			t.Fatalf("unexpected mapper upsert: %v", store.mapperOrgNames)
+		}
+	})
+
+	t.Run("remove idp rejected", func(t *testing.T) {
+		t.Parallel()
+		store := newFakeOrganizationStore(org)
+		server := mustTenantsServer(t, store)
+		_, err := server.Update(ctx, &aigridv1.TenantsUpdateRequest{
+			Object:     &aigridv1.Tenant{Id: "org-1", Metadata: &aigridv1.Metadata{Version: 1}},
+			UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.identity_provider"}},
+		})
+		assertConnectCode(t, err, connect.CodeInvalidArgument)
+	})
 }
 
 func TestUpdateTenant(t *testing.T) {
@@ -1072,26 +1487,112 @@ func TestDeleteTenant(t *testing.T) {
 		_, err := server.Delete(context.Background(), &aigridv1.TenantsDeleteRequest{Id: "missing", Version: 1})
 		assertConnectCode(t, err, connect.CodeNotFound)
 	})
+
+	t.Run("deletes idp then organization", func(t *testing.T) {
+		t.Parallel()
+		normalized, err := normalizeIdentityProvider("acme", validCreateIdP())
+		if err != nil {
+			t.Fatalf("normalize: %v", err)
+		}
+		raw, err := identityProviderToAttribute(normalized)
+		if err != nil {
+			t.Fatalf("attribute: %v", err)
+		}
+		store := newFakeOrganizationStore(keycloak.Organization{
+			ID: "org-1", Name: "acme", Alias: "acme",
+			Attributes: map[string][]string{tenantIdentityProviderAttribute: {raw}},
+		})
+		store.idps["acme"] = keycloak.IdentityProvider{Alias: "acme"}
+		server := mustTenantsServer(t, store)
+		if _, err := server.Delete(context.Background(), &aigridv1.TenantsDeleteRequest{Id: "org-1", Version: 1}); err != nil {
+			t.Fatalf("Delete: %v", err)
+		}
+		if _, ok := store.idps["acme"]; ok {
+			t.Fatal("idp not deleted")
+		}
+		if _, ok := store.byID["org-1"]; ok {
+			t.Fatal("org not deleted")
+		}
+	})
+
+	t.Run("idp already gone is ok", func(t *testing.T) {
+		t.Parallel()
+		normalized, err := normalizeIdentityProvider("acme", validCreateIdP())
+		if err != nil {
+			t.Fatalf("normalize: %v", err)
+		}
+		raw, _ := identityProviderToAttribute(normalized)
+		store := newFakeOrganizationStore(keycloak.Organization{
+			ID: "org-1", Name: "acme", Alias: "acme",
+			Attributes: map[string][]string{tenantIdentityProviderAttribute: {raw}},
+		})
+		server := mustTenantsServer(t, store)
+		if _, err := server.Delete(context.Background(), &aigridv1.TenantsDeleteRequest{Id: "org-1", Version: 1}); err != nil {
+			t.Fatalf("Delete: %v", err)
+		}
+	})
+
+	t.Run("org kept when idp delete fails", func(t *testing.T) {
+		t.Parallel()
+		normalized, err := normalizeIdentityProvider("acme", validCreateIdP())
+		if err != nil {
+			t.Fatalf("normalize: %v", err)
+		}
+		raw, _ := identityProviderToAttribute(normalized)
+		store := newFakeOrganizationStore(keycloak.Organization{
+			ID: "org-1", Name: "acme", Alias: "acme",
+			Attributes: map[string][]string{tenantIdentityProviderAttribute: {raw}},
+		})
+		store.idps["acme"] = keycloak.IdentityProvider{Alias: "acme"}
+		store.deleteIdPErr = errors.New("idp locked")
+		server := mustTenantsServer(t, store)
+		_, err = server.Delete(context.Background(), &aigridv1.TenantsDeleteRequest{Id: "org-1", Version: 1})
+		if err == nil {
+			t.Fatal("expected error")
+		}
+		if _, ok := store.byID["org-1"]; !ok {
+			t.Fatal("organization was deleted despite idp failure")
+		}
+	})
 }
 
 type fakeOrganizationStore struct {
 	mu      sync.Mutex
 	byID    map[string]keycloak.Organization
 	members map[string][]keycloak.OrganizationMember
-	next    int
-	listErr error
+	idps    map[string]keycloak.IdentityProvider
+	links   map[string]string // orgID -> alias
+	mappers map[string]keycloak.IdentityProviderMapper
+	// mapperOrgNames is the org name each alias's mappers were last upserted with.
+	mapperOrgNames map[string]string
+	next           int
+	listErr        error
 	// updateDelay widens the window between an Update's read and its write.
 	updateDelay time.Duration
 	// readBackErr makes UpdateOrganization store the change, then fail the
 	// read-back as the real client does.
 	readBackErr error
 	puts        int
+
+	createIdPErr   error
+	linkIdPErr     error
+	configureErr   error
+	mapperErr      error
+	deleteIdPErr   error
+	deleteOrgErr   error
+	deleteIdPCalls int
+	// linkHook runs at the start of LinkOrganizationIdentityProvider, before the error.
+	linkHook func()
 }
 
 func newFakeOrganizationStore(orgs ...keycloak.Organization) *fakeOrganizationStore {
 	store := &fakeOrganizationStore{
-		byID:    make(map[string]keycloak.Organization, len(orgs)),
-		members: make(map[string][]keycloak.OrganizationMember),
+		byID:           make(map[string]keycloak.Organization, len(orgs)),
+		members:        make(map[string][]keycloak.OrganizationMember),
+		idps:           make(map[string]keycloak.IdentityProvider),
+		links:          make(map[string]string),
+		mappers:        make(map[string]keycloak.IdentityProviderMapper),
+		mapperOrgNames: make(map[string]string),
 	}
 	for _, org := range orgs {
 		store.byID[org.ID] = org
@@ -1152,6 +1653,12 @@ func (f *fakeOrganizationStore) UpdateOrganization(_ context.Context, org keyclo
 			return keycloak.Organization{}, &keycloak.APIError{Op: "update organization", StatusCode: http.StatusConflict}
 		}
 	}
+	// Keycloak rejects a domain that names an IdP not linked to this organization.
+	for _, d := range org.Domains {
+		if d.IdentityProviderAlias != "" && f.links[org.ID] != d.IdentityProviderAlias {
+			return keycloak.Organization{}, &keycloak.APIError{Op: "update organization", StatusCode: http.StatusBadRequest}
+		}
+	}
 	f.puts++
 	// Keycloak alias is immutable once set; preserve when omitted.
 	if org.Alias == "" {
@@ -1175,19 +1682,134 @@ func (f *fakeOrganizationStore) ListOrganizationMembers(_ context.Context, orgID
 	return out, nil
 }
 
-func (f *fakeOrganizationStore) DeleteOrganization(_ context.Context, id string) error {
+func (f *fakeOrganizationStore) DeleteOrganization(ctx context.Context, id string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.deleteOrgErr != nil {
+		return f.deleteOrgErr
+	}
 	if _, ok := f.byID[id]; !ok {
 		return &keycloak.APIError{Op: "delete organization", StatusCode: http.StatusNotFound}
 	}
 	delete(f.byID, id)
+	delete(f.links, id)
 	return nil
+}
+
+func (f *fakeOrganizationStore) CreateIdentityProvider(_ context.Context, idp keycloak.IdentityProvider) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.createIdPErr != nil {
+		return f.createIdPErr
+	}
+	if _, ok := f.idps[idp.Alias]; ok {
+		return &keycloak.APIError{Op: "create identity provider", StatusCode: http.StatusConflict}
+	}
+	f.idps[idp.Alias] = idp
+	return nil
+}
+
+func (f *fakeOrganizationStore) DeleteIdentityProvider(ctx context.Context, alias string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.deleteIdPCalls++
+	if f.deleteIdPErr != nil {
+		return f.deleteIdPErr
+	}
+	if _, ok := f.idps[alias]; !ok {
+		return nil // 404 treated as success by real client; tests may still call this
+	}
+	delete(f.idps, alias)
+	delete(f.mappers, alias)
+	return nil
+}
+
+func (f *fakeOrganizationStore) LinkOrganizationIdentityProvider(ctx context.Context, orgID, alias string) error {
+	if f.linkHook != nil {
+		f.linkHook()
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if err := ctx.Err(); err != nil && f.linkIdPErr == nil {
+		return err
+	}
+	if f.linkIdPErr != nil {
+		return f.linkIdPErr
+	}
+	if _, ok := f.byID[orgID]; !ok {
+		return &keycloak.APIError{Op: "link organization identity provider", StatusCode: http.StatusNotFound}
+	}
+	if _, ok := f.idps[alias]; !ok {
+		return &keycloak.APIError{Op: "link organization identity provider", StatusCode: http.StatusBadRequest}
+	}
+	f.links[orgID] = alias
+	return nil
+}
+
+func (f *fakeOrganizationStore) ConfigureOrganizationIdentityProvider(_ context.Context, orgID, alias string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.configureErr != nil {
+		return f.configureErr
+	}
+	if f.links[orgID] != alias {
+		return &keycloak.APIError{Op: "configure organization identity provider", StatusCode: http.StatusNotFound}
+	}
+	return nil
+}
+
+func (f *fakeOrganizationStore) UpsertIdentityProviderMapper(_ context.Context, alias, organizationID, organizationName string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.mapperErr != nil {
+		return f.mapperErr
+	}
+	if _, ok := f.idps[alias]; !ok {
+		return &keycloak.APIError{Op: "upsert identity provider mapper", StatusCode: http.StatusNotFound}
+	}
+	f.mappers[alias] = keycloak.IdentityProviderMapper{
+		Name: "AI Grid org id", IdentityProviderAlias: alias,
+		IdentityProviderMapper: "hardcoded-attribute-idp-mapper",
+		Config:                 map[string]string{"attribute": "maas_org_id", "attribute.value": organizationID, "syncMode": "FORCE"},
+	}
+	f.mapperOrgNames[alias] = organizationName
+	return nil
+}
+
+type fakeSecretReader struct {
+	secrets map[string][]byte
+	err     error
+}
+
+func (f *fakeSecretReader) Read(_ context.Context, name string) ([]byte, error) {
+	if f.err != nil {
+		return nil, f.err
+	}
+	v, ok := f.secrets[name]
+	if !ok {
+		return nil, apierrors.NewNotFound(schema.GroupResource{Resource: "secrets"}, name)
+	}
+	return v, nil
 }
 
 func mustTenantsServer(t *testing.T, client organizationClient) *TenantsServer {
 	t.Helper()
 	server, err := NewTenantsServer().SetOrganizationClient(client).Build()
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+	return server
+}
+
+func mustTenantsServerWithSecrets(t *testing.T, client organizationClient, secrets SecretReader) *TenantsServer {
+	t.Helper()
+	server, err := NewTenantsServer().SetOrganizationClient(client).SetSecretReader(secrets).Build()
 	if err != nil {
 		t.Fatalf("Build() error = %v", err)
 	}
@@ -1546,4 +2168,297 @@ func TestTenantVersion(t *testing.T) {
 		_, err = server.Delete(ctx, &aigridv1.TenantsDeleteRequest{Id: "org-1", Version: 4})
 		assertConnectCode(t, err, connect.CodeNotFound)
 	})
+}
+
+func TestTenantIdentityProviderMessages(t *testing.T) {
+	t.Parallel()
+
+	enabled := true
+	validate := false
+	idp := &aigridv1.IdentityProvider{
+		Title:       "Acme IdP",
+		Description: "broker",
+		Enabled:     &enabled,
+		Config: &aigridv1.OidcConfig{
+			ClientId:               "client",
+			ClientSecretSecretName: "acme-idp-secret",
+			Issuer:                 "https://idp.example.com",
+			AuthorizationUrl:       "https://idp.example.com/auth",
+			TokenUrl:               "https://idp.example.com/token",
+			DefaultScopes:          "openid profile email",
+			UserInfoUrl:            "https://idp.example.com/userinfo",
+			JwksUrl:                "https://idp.example.com/jwks",
+			LogoutUrl:              "https://idp.example.com/logout",
+			ValidateSignature:      &validate,
+		},
+	}
+
+	spec := &aigridv1.TenantSpec{IdentityProvider: idp}
+	got := spec.GetIdentityProvider()
+	if got == nil {
+		t.Fatal("TenantSpec.IdentityProvider is nil")
+	}
+	if got.GetTitle() != "Acme IdP" || got.GetDescription() != "broker" {
+		t.Fatalf("IdentityProvider title/description = %q / %q", got.GetTitle(), got.GetDescription())
+	}
+	if !got.GetEnabled() {
+		t.Fatal("IdentityProvider.Enabled = false, want true via optional field")
+	}
+	cfg := got.GetConfig()
+	if cfg == nil {
+		t.Fatal("IdentityProvider.Config is nil")
+	}
+	if cfg.GetClientId() != "client" ||
+		cfg.GetClientSecretSecretName() != "acme-idp-secret" ||
+		cfg.GetIssuer() != "https://idp.example.com" ||
+		cfg.GetAuthorizationUrl() != "https://idp.example.com/auth" ||
+		cfg.GetTokenUrl() != "https://idp.example.com/token" ||
+		cfg.GetDefaultScopes() != "openid profile email" ||
+		cfg.GetUserInfoUrl() != "https://idp.example.com/userinfo" ||
+		cfg.GetJwksUrl() != "https://idp.example.com/jwks" ||
+		cfg.GetLogoutUrl() != "https://idp.example.com/logout" {
+		t.Fatalf("OidcConfig = %+v", cfg)
+	}
+	if cfg.GetValidateSignature() {
+		t.Fatal("OidcConfig.ValidateSignature = true, want false via optional field")
+	}
+}
+
+func TestTenantIdentityProviderValidation(t *testing.T) {
+	t.Parallel()
+
+	valid := func() *aigridv1.IdentityProvider {
+		return &aigridv1.IdentityProvider{
+			Config: &aigridv1.OidcConfig{
+				ClientId:               "client",
+				ClientSecretSecretName: "acme-idp-secret",
+				Issuer:                 "https://idp.example.com",
+				AuthorizationUrl:       "https://idp.example.com/auth",
+				TokenUrl:               "https://idp.example.com/token",
+				JwksUrl:                "https://idp.example.com/jwks",
+			},
+		}
+	}
+
+	t.Run("normalizes defaults", func(t *testing.T) {
+		t.Parallel()
+		got, err := normalizeIdentityProvider("acme", valid())
+		if err != nil {
+			t.Fatalf("normalize: %v", err)
+		}
+		if got.GetTitle() != "acme" || !got.GetEnabled() || got.GetConfig().GetDefaultScopes() != defaultOIDCScopes || !got.GetConfig().GetValidateSignature() {
+			t.Fatalf("normalized = %+v", got)
+		}
+	})
+
+	t.Run("missing config", func(t *testing.T) {
+		t.Parallel()
+		_, err := normalizeIdentityProvider("acme", &aigridv1.IdentityProvider{})
+		assertConnectCode(t, err, connect.CodeInvalidArgument)
+	})
+
+	t.Run("missing client id", func(t *testing.T) {
+		t.Parallel()
+		idp := valid()
+		idp.Config.ClientId = ""
+		_, err := normalizeIdentityProvider("acme", idp)
+		assertConnectCode(t, err, connect.CodeInvalidArgument)
+	})
+
+	t.Run("missing secret name", func(t *testing.T) {
+		t.Parallel()
+		idp := valid()
+		idp.Config.ClientSecretSecretName = ""
+		_, err := normalizeIdentityProvider("acme", idp)
+		assertConnectCode(t, err, connect.CodeInvalidArgument)
+	})
+
+	t.Run("invalid secret name", func(t *testing.T) {
+		t.Parallel()
+		idp := valid()
+		idp.Config.ClientSecretSecretName = "NOT_VALID"
+		_, err := normalizeIdentityProvider("acme", idp)
+		assertConnectCode(t, err, connect.CodeInvalidArgument)
+	})
+
+	t.Run("missing required url", func(t *testing.T) {
+		t.Parallel()
+		idp := valid()
+		idp.Config.Issuer = ""
+		_, err := normalizeIdentityProvider("acme", idp)
+		assertConnectCode(t, err, connect.CodeInvalidArgument)
+	})
+
+	t.Run("non-http url", func(t *testing.T) {
+		t.Parallel()
+		idp := valid()
+		idp.Config.Issuer = "ftp://idp.example.com"
+		_, err := normalizeIdentityProvider("acme", idp)
+		assertConnectCode(t, err, connect.CodeInvalidArgument)
+	})
+
+	t.Run("overlong title", func(t *testing.T) {
+		t.Parallel()
+		idp := valid()
+		idp.Title = strings.Repeat("a", 254)
+		_, err := normalizeIdentityProvider("acme", idp)
+		assertConnectCode(t, err, connect.CodeInvalidArgument)
+	})
+
+	t.Run("optional urls", func(t *testing.T) {
+		t.Parallel()
+		idp := valid()
+		idp.Config.UserInfoUrl = "https://idp.example.com/userinfo"
+		idp.Config.LogoutUrl = "https://idp.example.com/logout"
+		got, err := normalizeIdentityProvider("acme", idp)
+		if err != nil {
+			t.Fatalf("normalize: %v", err)
+		}
+		if got.GetConfig().GetUserInfoUrl() == "" || got.GetConfig().GetLogoutUrl() == "" {
+			t.Fatalf("optional urls = %+v", got.GetConfig())
+		}
+	})
+
+	t.Run("jwks required when validating signatures", func(t *testing.T) {
+		t.Parallel()
+		idp := valid()
+		idp.Config.JwksUrl = ""
+		_, err := normalizeIdentityProvider("acme", idp)
+		assertConnectCode(t, err, connect.CodeInvalidArgument)
+		if err == nil || !strings.Contains(err.Error(), "jwks_url") {
+			t.Fatalf("error = %v, want jwks_url", err)
+		}
+	})
+
+	t.Run("jwks optional when signature validation is off", func(t *testing.T) {
+		t.Parallel()
+		idp := valid()
+		idp.Config.JwksUrl = "  "
+		validate := false
+		idp.Config.ValidateSignature = &validate
+		got, err := normalizeIdentityProvider("acme", idp)
+		if err != nil {
+			t.Fatalf("normalize: %v", err)
+		}
+		if got.GetConfig().GetValidateSignature() || got.GetConfig().GetJwksUrl() != "" {
+			t.Fatalf("config = %+v", got.GetConfig())
+		}
+	})
+}
+
+func TestTenantIdentityProviderPersistence(t *testing.T) {
+	t.Parallel()
+	enabled := true
+	validate := true
+	longBase := "https://idp.example.com/" + strings.Repeat("path/", 40) + "realm"
+	idp := &aigridv1.IdentityProvider{
+		Title: "acme", Description: "d", Enabled: &enabled,
+		Config: &aigridv1.OidcConfig{
+			ClientId: "c", ClientSecretSecretName: "sec",
+			Issuer: longBase, AuthorizationUrl: longBase + "/auth", TokenUrl: longBase + "/token",
+			JwksUrl: longBase + "/jwks", LogoutUrl: longBase + "/logout",
+			DefaultScopes: defaultOIDCScopes, ValidateSignature: &validate,
+		},
+	}
+	raw, err := identityProviderToAttribute(idp)
+	if err != nil {
+		t.Fatalf("to attribute: %v", err)
+	}
+	if len(raw) <= keycloakGroupAttributeMax {
+		t.Fatalf("test IdP JSON too short (%d) to exercise Keycloak attribute chunking", len(raw))
+	}
+	if !strings.Contains(raw, "clientSecretSecretName") && !strings.Contains(raw, "client_secret_secret_name") {
+		t.Fatalf("attribute missing secret name field: %s", raw)
+	}
+	if strings.Contains(raw, `"s3cret"`) {
+		t.Fatalf("attribute leaked a secret value: %s", raw)
+	}
+	chunks, err := identityProviderToAttributeValues(idp)
+	if err != nil {
+		t.Fatalf("to attribute values: %v", err)
+	}
+	if len(chunks) < 2 {
+		t.Fatalf("expected chunked attribute for long IdP JSON, got %d chunks (%d bytes)", len(chunks), len(raw))
+	}
+	for i, c := range chunks {
+		if len(c) > keycloakGroupAttributeMax {
+			t.Fatalf("chunk %d length %d exceeds %d", i, len(c), keycloakGroupAttributeMax)
+		}
+	}
+	got, err := identityProviderFromOrganizationAttrs(map[string][]string{
+		tenantIdentityProviderAttribute: chunks,
+	})
+	if err != nil {
+		t.Fatalf("from attribute: %v", err)
+	}
+	if got.GetTitle() != idp.GetTitle() || got.GetConfig().GetClientSecretSecretName() != "sec" {
+		t.Fatalf("round-trip = %+v", got)
+	}
+	nilIdP, err := identityProviderFromAttribute("")
+	if err != nil || nilIdP != nil {
+		t.Fatalf("absent = %v, %v", nilIdP, err)
+	}
+	if _, err := identityProviderFromAttribute("{"); err == nil {
+		t.Fatal("malformed JSON expected error")
+	}
+
+	// Keycloak may return multi-valued attributes in any order. The index prefix
+	// is what puts the JSON back together.
+	reversed := append([]string(nil), chunks...)
+	for i, j := 0, len(reversed)-1; i < j; i, j = i+1, j-1 {
+		reversed[i], reversed[j] = reversed[j], reversed[i]
+	}
+	reordered, err := identityProviderFromOrganizationAttrs(map[string][]string{
+		tenantIdentityProviderAttribute: reversed,
+	})
+	if err != nil || reordered.GetConfig().GetClientSecretSecretName() != "sec" {
+		t.Fatalf("reordered round-trip = %+v, err=%v", reordered, err)
+	}
+
+	// Writes from before the index prefix are still joined in stored order.
+	legacy := chunkString(raw, 100)
+	for _, c := range legacy {
+		if len(c) >= chunkIndexPrefixLen && c[chunkIndexPrefixLen-1] == '|' && c[0] >= '0' && c[0] <= '9' {
+			t.Fatalf("legacy chunk looks indexed: %q", c)
+		}
+	}
+	legacyGot, err := identityProviderFromOrganizationAttrs(map[string][]string{
+		tenantIdentityProviderAttribute: legacy,
+	})
+	if err != nil || legacyGot.GetTitle() != idp.GetTitle() {
+		t.Fatalf("legacy round-trip = %+v, err=%v", legacyGot, err)
+	}
+}
+
+func TestChunkStringKeepsRunesWhole(t *testing.T) {
+	t.Parallel()
+	const in = "aaa世bbb世"
+	chunks := chunkString(in, 4)
+	if strings.Join(chunks, "") != in {
+		t.Fatalf("chunks %q joined to %q", chunks, strings.Join(chunks, ""))
+	}
+	for i, c := range chunks {
+		if len(c) > 4 {
+			t.Fatalf("chunk %d %q is %d bytes", i, c, len(c))
+		}
+		if !utf8.ValidString(c) {
+			t.Fatalf("chunk %d is not valid UTF-8: %q", i, c)
+		}
+	}
+	if strings.Contains(strings.Join(chunks, ""), "\uFFFD") {
+		t.Fatal("chunk split a rune")
+	}
+}
+
+func validCreateIdP() *aigridv1.IdentityProvider {
+	return &aigridv1.IdentityProvider{
+		Config: &aigridv1.OidcConfig{
+			ClientId:               "client",
+			ClientSecretSecretName: "acme-idp-secret",
+			Issuer:                 "https://idp.example.com",
+			AuthorizationUrl:       "https://idp.example.com/auth",
+			TokenUrl:               "https://idp.example.com/token",
+			JwksUrl:                "https://idp.example.com/jwks",
+		},
+	}
 }

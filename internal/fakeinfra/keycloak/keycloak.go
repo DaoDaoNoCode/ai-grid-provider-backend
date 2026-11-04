@@ -66,9 +66,12 @@ type Server struct {
 	clock  func() time.Time
 	logger *slog.Logger
 
-	mu     sync.Mutex
-	orgs   map[string]*organization
-	tokens map[string]time.Time
+	mu      sync.Mutex
+	orgs    map[string]*organization
+	tokens  map[string]time.Time
+	idps    map[string]*identityProvider
+	orgIdPs map[string]orgIdPLinkState
+	mappers map[string][]*identityProviderMapper
 
 	// readStarted, when non-nil, is signaled (non-blocking, once per call)
 	// the moment the admin wrapper begins reading a request body. A test
@@ -96,7 +99,12 @@ func New(cfg Config, seed []Organization) (*Server, error) {
 	if cfg.AdminRealm == "" || cfg.Realm == "" || cfg.Username == "" || cfg.Password == "" {
 		return nil, errors.New("admin realm, realm, username and password are required")
 	}
-	s := &Server{cfg: cfg, clock: cfg.Clock, logger: cfg.Logger, orgs: map[string]*organization{}, tokens: map[string]time.Time{}}
+	s := &Server{
+		cfg: cfg, clock: cfg.Clock, logger: cfg.Logger,
+		orgs: map[string]*organization{}, tokens: map[string]time.Time{},
+		idps: map[string]*identityProvider{}, orgIdPs: map[string]orgIdPLinkState{},
+		mappers: map[string][]*identityProviderMapper{},
+	}
 	if s.clock == nil {
 		s.clock = time.Now
 	}
@@ -138,11 +146,18 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET "+orgs+"/{id}", s.admin(s.get))
 	mux.HandleFunc("PUT "+orgs+"/{id}", s.admin(s.update))
 	mux.HandleFunc("DELETE "+orgs+"/{id}", s.admin(s.delete))
+	idps := "/admin/realms/{realm}/identity-provider/instances"
+	mux.HandleFunc("POST "+idps, s.admin(s.createIdP))
+	mux.HandleFunc("GET "+idps+"/{alias}", s.admin(s.getIdP))
+	mux.HandleFunc("DELETE "+idps+"/{alias}", s.admin(s.deleteIdP))
+	mux.HandleFunc("GET "+idps+"/{alias}/mappers", s.admin(s.listIdPMappers))
+	mux.HandleFunc("POST "+idps+"/{alias}/mappers", s.admin(s.createIdPMapper))
+	mux.HandleFunc("PUT "+idps+"/{alias}/mappers/{mapperId}", s.admin(s.updateIdPMapper))
+	mux.HandleFunc("POST "+orgs+"/{id}/identity-providers", s.admin(s.linkOrgIdP))
+	mux.HandleFunc("PUT "+orgs+"/{id}/identity-providers/{alias}", s.admin(s.configureOrgIdP))
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		// Everything else is a resource this fake does not serve
-		// (members, identity providers, groups, invitations, other admin
-		// endpoints). Keycloak's error handler writes a JAX-RS 404 as
-		// below.
+		// (members, groups, invitations, other admin endpoints).
 		writeError(w, http.StatusNotFound, "HTTP 404 Not Found")
 	})
 	return mux
@@ -427,6 +442,7 @@ func (s *Server) delete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	delete(s.orgs, id)
+	delete(s.orgIdPs, id)
 	s.logger.Debug("organization deleted", "id", id)
 	w.WriteHeader(http.StatusNoContent)
 }

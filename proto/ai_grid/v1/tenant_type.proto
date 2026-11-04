@@ -27,9 +27,56 @@ message Tenant {
 message TenantSpec {
   // Email domains associated with this tenant (DNS hostnames, lowercase).
   repeated string domains = 1;
+
+  // Optional OIDC identity provider for this organization. Set only on Create;
+  // immutable afterward (Update may repeat the same normalized value; add,
+  // change, or remove returns InvalidArgument). The API stores only the
+  // Secret name in config.client_secret_secret_name, never the secret value.
+  IdentityProvider identity_provider = 2;
 }
 
 message TenantStatus {}
+
+// An organization's OIDC identity provider (realm IdP linked to the Keycloak
+// Organization). Field numbers match the draft proposal.
+message IdentityProvider {
+  // Display title. At most 253 characters after trimming. Empty on Create
+  // normalizes to the organization create-time name.
+  string title = 1;
+  // Free text. At most 4000 characters.
+  string description = 2;
+  // Unset means true. Always set on output. Must be true when set.
+  optional bool enabled = 3;
+  // Required OIDC client configuration.
+  OidcConfig config = 4;
+}
+
+// OIDC client configuration for an IdentityProvider. Only the name of the
+// Secret that holds the client secret is stored, never the secret itself.
+message OidcConfig {
+  // Required; at most 253 characters after trimming.
+  string client_id = 1;
+  // Name of the Secret holding the client secret (key client-secret): required,
+  // a DNS subdomain name, at most 253 characters.
+  string client_secret_secret_name = 2;
+  // Required HTTP or HTTPS URLs, at most 2048 characters after trimming.
+  string issuer = 3;
+  string authorization_url = 4;
+  string token_url = 5;
+  // Space-separated scopes, at most 2048 characters after trimming.
+  // Empty/unset normalizes to "openid profile email".
+  string default_scopes = 6;
+  // Optional HTTP or HTTPS URLs; empty when unset.
+  string user_info_url = 7;
+  // HTTP or HTTPS URL. Required when validate_signature is true (the default):
+  // Keycloak rejects broker logins when signature checks are on and it has no JWKS.
+  // Empty only when validate_signature is false.
+  string jwks_url = 8;
+  // Optional HTTP or HTTPS URL; empty when unset.
+  string logout_url = 9;
+  // Unset means true. Always set on output. When true, jwks_url is required.
+  optional bool validate_signature = 10;
+}
 
 // TenantMember is a Keycloak user that belongs to the tenant's Organization.
 // This is a read projection for listing; full user management is out of scope.

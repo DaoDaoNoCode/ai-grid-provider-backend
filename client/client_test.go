@@ -407,6 +407,11 @@ type organizationClient interface {
 	UpdateOrganization(ctx context.Context, org keycloak.Organization) (keycloak.Organization, error)
 	DeleteOrganization(ctx context.Context, id string) error
 	ListOrganizationMembers(ctx context.Context, orgID string) ([]keycloak.OrganizationMember, error)
+	CreateIdentityProvider(ctx context.Context, idp keycloak.IdentityProvider) error
+	DeleteIdentityProvider(ctx context.Context, alias string) error
+	LinkOrganizationIdentityProvider(ctx context.Context, orgID, alias string) error
+	ConfigureOrganizationIdentityProvider(ctx context.Context, orgID, alias string) error
+	UpsertIdentityProviderMapper(ctx context.Context, alias, organizationID, organizationName string) error
 }
 
 type mutableOrganizationStore struct {
@@ -467,6 +472,20 @@ func (f *mutableOrganizationStore) DeleteOrganization(_ context.Context, id stri
 
 func (f *mutableOrganizationStore) ListOrganizationMembers(context.Context, string) ([]keycloak.OrganizationMember, error) {
 	return nil, nil
+}
+
+func (f *mutableOrganizationStore) CreateIdentityProvider(context.Context, keycloak.IdentityProvider) error {
+	return nil
+}
+func (f *mutableOrganizationStore) DeleteIdentityProvider(context.Context, string) error { return nil }
+func (f *mutableOrganizationStore) LinkOrganizationIdentityProvider(context.Context, string, string) error {
+	return nil
+}
+func (f *mutableOrganizationStore) ConfigureOrganizationIdentityProvider(context.Context, string, string) error {
+	return nil
+}
+func (f *mutableOrganizationStore) UpsertIdentityProviderMapper(context.Context, string, string, string) error {
+	return nil
 }
 
 func startTestClient(t *testing.T, objects []runtime.Object, orgs organizationClient) (*clientpkg.Client, func()) {
@@ -590,6 +609,22 @@ func (f fakeOrganizationLister) DeleteOrganization(context.Context, string) erro
 
 func (f fakeOrganizationLister) ListOrganizationMembers(context.Context, string) ([]keycloak.OrganizationMember, error) {
 	return nil, errors.New("ListOrganizationMembers not implemented in list-only fake")
+}
+
+func (f fakeOrganizationLister) CreateIdentityProvider(context.Context, keycloak.IdentityProvider) error {
+	return errors.New("CreateIdentityProvider not implemented in list-only fake")
+}
+func (f fakeOrganizationLister) DeleteIdentityProvider(context.Context, string) error {
+	return errors.New("DeleteIdentityProvider not implemented in list-only fake")
+}
+func (f fakeOrganizationLister) LinkOrganizationIdentityProvider(context.Context, string, string) error {
+	return errors.New("LinkOrganizationIdentityProvider not implemented in list-only fake")
+}
+func (f fakeOrganizationLister) ConfigureOrganizationIdentityProvider(context.Context, string, string) error {
+	return errors.New("ConfigureOrganizationIdentityProvider not implemented in list-only fake")
+}
+func (f fakeOrganizationLister) UpsertIdentityProviderMapper(context.Context, string, string, string) error {
+	return errors.New("UpsertIdentityProviderMapper not implemented in list-only fake")
 }
 
 func managedCluster(name string, labels map[string]string, accepts bool) *unstructured.Unstructured {
