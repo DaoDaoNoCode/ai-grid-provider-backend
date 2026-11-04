@@ -77,7 +77,7 @@ realm** — not a per-tenant identifier.
 | `deletion_timestamp` | string (RFC 3339) | Set while deleting |
 | `creator` | string | Reserved; often empty today |
 | `tenant` | string | Reserved; often empty today |
-| `version` | int32 | Optimistic lock field; **not enforced yet** |
+| `version` | int32 | Optimistic lock field; each resource's update section says how it is checked (Clusters: [PATCH](#patch-apiv1clustersid)) |
 
 ### List query parameters (Clusters + Tenants + Models + Subscriptions)
 
@@ -101,7 +101,8 @@ Non-2xx responses use gRPC status JSON, for example:
 ```
 
 Common `code` values (gRPC status numbers): `3` InvalidArgument, `5` NotFound,
-`6` AlreadyExists, `7` PermissionDenied, `13` Internal.
+`6` AlreadyExists, `7` PermissionDenied, `9` FailedPrecondition, `10` Aborted,
+`13` Internal, `14` Unavailable.
 
 ---
 
@@ -170,11 +171,12 @@ Hub-side ACM/OCM `ManagedCluster` CRs. **Does not provision spoke clusters.**
 | `status.capacity` / `allocatable` | Kubernetes quantity strings by resource name, for example `"cpu": "68"`, `"memory": "273509824Ki"`, `"nvidia.com/gpu": "1"`; absent until the agent reports them |
 | `status.cluster_claims` | `{name, value}` pairs the agent reports, for example the console URL (`consoleurl.cluster.open-cluster-management.io`), platform and product |
 | `status.gpus` | The cluster's GPUs from ACM Search (its nodes' NVIDIA GPU Feature Discovery labels); absent when Search is off, unavailable or hasn't indexed the cluster (`capacity["nvidia.com/gpu"]` still counts schedulable GPUs then). `total` GPU devices as GPU Feature Discovery counts them (physical GPUs; MIG devices on a node with MIG strategy `"single"`, where GFD reports no physical count) and `node_count` GPU nodes; `configurations[]`: `{vendor, product, memory_mib, gpus_per_node, node_count, sharing}`, most nodes first (for a list cell such as "NVIDIA-L4 · 1 per node"); `nodes[]`: `{name, vendor, product, count, memory_mib, family, compute_capability, driver_version, cuda_runtime_version, sharing, instance_type, ready}` by name. `sharing`: `{strategy` (`"none"`, `"time-slicing"`, `"mps"` or `"mig"`), `replicas` (schedulable units per GPU), `mig_capable`, `mig_strategy` (`"single"` / `"mixed"`)`}`. With time-slicing, `capacity["nvidia.com/gpu"]` is `total` × `replicas`. |
-| `status.ai_grid_member` | The cluster is an AI Grid member: its `ai-grid/enabled` label is exactly `"true"`. Join or leave by setting or removing that label with PATCH |
+| `status.ai_grid_member` | The cluster is an AI Grid member: its `ai-grid/enabled` label is exactly `"true"`. Join or leave by setting or removing that label with PATCH; leaving is refused while it would revoke subscriptions' keys, strand users or models ([Roles](#roles)) |
 | `status.state` | Lifecycle state, as the ACM console shows it: `MANAGED_CLUSTER_STATE_` + `READY`, `OFFLINE`, `UNKNOWN`, `PENDING_IMPORT`, `IMPORTING`, `IMPORT_FAILED`, `NOT_ACCEPTED` or `DETACHING`; `UNSPECIFIED` before the hub reports any condition (and for a state added after the client was built). Derived from `status.conditions` in the order the comment on `ManagedClusterState` gives |
 | `status.state_message` | The message of the condition that decided `state`, for example `"Managed cluster is available"`; may be empty |
 | `status.location` | Always set. `site_name` (`ai-grid/site-name`, trimmed); `latitude` and `longitude` in decimal degrees, both present or both absent (absent is not `0`: `0, 0` is a valid position); `source`: `MANAGED_CLUSTER_LOCATION_SOURCE_ANNOTATIONS` (the `ai-grid/latitude` / `ai-grid/longitude` annotations), `..._CLOUD_REGION` (approximate, from a known cloud region; say so in the UI) or `..._NONE` (no coordinates); `problem`: what is wrong with the annotations, to show a provider admin as is (empty when nothing is); `region`: the `region.open-cluster-management.io` claim, for example `"us-east-2"`, empty on most on-premises clusters. Wrong annotations give no coordinates, never the region's. README, "Cluster locations", has every case |
 | `metadata.labels["ai-grid/enabled"]` | Enroll-style flag (string `"true"` / `"false"`); read `status.ai_grid_member` instead of comparing it |
+| `metadata.labels["ai-grid/role"]` | What the hub installs on a grid member: `ingress`, `inference` or `combined` (both). Absent on a cluster that was never added. PATCH accepts only those three values; see [Roles](#roles) |
 
 ---
 
@@ -284,10 +286,99 @@ Merge-update mutable fields. Path `{id}` must match the object’s id.
 
 **Behavior today:**
 
-- **Labels** are **merged** onto existing labels (keys in the body overwrite; other keys kept).
+- **Labels**: the body's console keys (`ai-grid/*` and `location`) are the
+  whole set: one on the hub but missing from the body is removed. Other keys
+  are left as they are on the hub, and the body may only send them back
+  unchanged (`InvalidArgument` otherwise). Annotations work the same way
+  for `ai-grid/*`.
 - **`hub_accepts_client`** is replaced when included in the update.
 - Empty update mask (typical REST PATCH with no `update_mask` query) updates **all mutable fields** (labels + hub accepts).
-- Optional query `lock` exists for future optimistic locking — **not enforced yet**.
+- `metadata.version` is the hub `resourceVersion`: a stale one answers
+  `Aborted` before anything else is checked. Query `lock=true` requires it.
+- The role rules below apply.
+
+#### Roles
+
+`ai-grid/role` picks what the hub installs on a grid member. The hub's AI
+Grid Placements select `ai-grid/enabled: "true"` clusters by it (in
+ai-grid-cloud/ai-grid-cluster-gitops,
+`apps/ai-grid-spokes/manifests/02-placements.yaml`, and the per-role values
+in `apps/rhoai/roles/<role>.yaml`, delivered by
+`apps/rhoai/hub/01-applicationset.yaml`):
+
+| Role | Serves | What the gitops repository installs for it |
+| --- | --- | --- |
+| `ingress` | ingress | MaaS, the portal and the grid consumer gateway; the models' catalog entries and the subscriptions |
+| `inference` | inference | the models placed on it and the grid provider gateway |
+| `combined` | both | both |
+
+Changing the role of a grid member makes GitOps install what the new role
+has and, with `prune: true`, remove what only the old role had. Removing a
+cluster from the grid (`ai-grid/enabled` removed, or anything but `"true"`)
+takes it out of every AI Grid Placement, whatever its role. The backend only
+writes the labels; it doesn't check what the hub does with them, so read the
+gitops repository for what changes on the cluster.
+
+Two consequences the rules below guard against:
+
+- **Subscriptions.** Every ingress or combined cluster gets every
+  subscription in the catalog (`catalog/subscriptions/`, the
+  `acm-models-catalog-subscriptions` ApplicationSet in
+  `apps/acm-models/hub/catalog-04-applicationsets.yaml`). When a cluster
+  stops serving ingress, Argo CD deletes its copies of all of them (the
+  resources finalizer on that Application), and maas-controller revokes the
+  API keys of each deleted `MaaSSubscription` in the maas-db every cluster
+  shares (opendatahub-io/models-as-a-service,
+  `maas-controller/pkg/controller/maas/maassubscription_controller.go`,
+  `handleDeletion`). So the keys of every subscription stop working on all
+  clusters, not only on the one that changed.
+- **Placed models.** A role change without inference prunes the models
+  placed on the cluster. Removing the cluster from the grid leaves them
+  running but unmanaged (`preserveResourcesOnDeletion` on the models
+  ApplicationSet), and removing it then adding it back with another role
+  would get around the role change rule.
+
+"Serves ingress" means role `ingress` or `combined`; "serves inference",
+`inference` or `combined`. A grid member is a cluster with
+`ai-grid/enabled: "true"` before the PATCH. PATCH checks, in this order,
+after the version, and answers the first rule that refuses:
+
+| # | Rule | Code |
+| --- | --- | --- |
+| 1 | A role the body sets or changes must be `ingress`, `inference` or `combined`. No role is allowed. A role the cluster already has and the body sends back unchanged isn't judged again. | `InvalidArgument` (`3`) |
+| 2 | A grid member that serves ingress stops serving it (its role changes to one without ingress, or it is removed from the grid) while the Git catalog has any subscription (`catalog/subscriptions/<id>.yaml`). The message counts the subscriptions and names up to five; delete them first. | `FailedPrecondition` (`9`) |
+| 3 | A grid member that serves ingress stops serving it while no other grid member serves ingress, and the grid keeps a member: the cluster itself on a role change, any other cluster on a removal. Users reach models through ingress clusters; give another cluster role `ingress` or `combined` first. The grid's last member may be removed: that retires the grid and strands no one. | `FailedPrecondition` (`9`) |
+| 4 | A grid member stops serving inference (its role changes from `inference` or `combined` to one without inference), or is removed from the grid whatever its role, while the Git catalog places models on it (`catalog/clusters/<name>/kustomization.yaml`). The message counts the models and names up to five; move them to other clusters first. | `FailedPrecondition` (`9`) |
+
+The order puts what every cluster loses first: the subscriptions' keys,
+then the ingress every model is reached through, then the cluster's own
+models. When several apply, only the first is reported; once it is dealt
+with, the same PATCH reports the next.
+
+Notes:
+
+- A cluster joining the grid, a role change of a cluster outside the grid,
+  and an update that keeps a member in the grid with its role (other
+  labels, annotations, `hub_accepts_client`) aren't checked.
+- So retiring an ingress cluster, by a role change or a removal, needs
+  every subscription deleted first. That revokes their keys too, but as a
+  step the admin chooses, not as a side effect of a cluster change.
+- The catalog is read once per PATCH, on the remote's head, not on the
+  backend's read cache (`AI_GRID_GIT_READ_MAX_AGE`), so a model placed or a
+  subscription created by another writer a moment ago counts. A backend
+  without `AI_GRID_GIT_URL` has no catalog, so no subscription or model
+  refuses a PATCH; one whose repository isn't cloned yet, or can't be
+  fetched, answers `Unavailable` (`14`) for a PATCH rules 2 or 4 apply to.
+- The checks and the write are not atomic: a subscription created, a model
+  placed on the cluster, or another cluster's role or membership changed,
+  between the check and the write is not refused.
+- Messages, for example:
+  - `label "ai-grid/role" must be ingress, inference or combined, got "gateway"`
+  - `Cluster "site-a" serves ingress, and 3 subscriptions exist (sub-a, sub-b, sub-c). When a cluster stops serving ingress, the API keys of every subscription are revoked on all clusters. Delete the subscriptions first, or keep the ingress or combined role.`
+  - `Cluster "site-a" serves ingress, and 1 subscription exists (sub-a). When a cluster stops serving ingress, the API keys of every subscription are revoked on all clusters. Delete the subscription first, or keep the cluster in AI Grid.` (a removal)
+  - `Cluster "site-a" is the only AI Grid cluster that serves ingress, and users reach models through ingress clusters. Give another cluster the ingress or combined role first.`
+  - `Cluster "site-a" has 2 models placed on it (model-a, model-b). Move them to other clusters before changing it to a role without inference.`
+  - `Cluster "site-b" has 2 models placed on it (model-a, model-b). Move them to other clusters before removing it from AI Grid.`
 
 **Enroll pattern (PoC-compatible intent):**
 

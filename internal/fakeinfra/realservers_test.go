@@ -923,6 +923,173 @@ func TestRealModelsPlacementClustersOnFakeHub(t *testing.T) {
 	}
 }
 
+// The real Clusters server on the fake hub, with the real Models server's
+// catalog: a grid cluster's role changes as the console sends it (the labels
+// it read, the role changed), and the changes that would strand a placed
+// model or leave the grid without an ingress cluster are refused and leave
+// the hub as it was. Removing a cluster from the grid is refused while a
+// subscription exists (an ingress cluster), while it is the last ingress
+// cluster of a grid that keeps members, and while models are placed on it,
+// with the real Subscriptions server's catalog too. The stock fixtures' grid
+// clusters have no role, which Update accepts.
+func TestRealClustersServerRoleChangesOnFakeHub(t *testing.T) {
+	h, srv := startHub(t)
+	cfg := &rest.Config{Host: srv.URL, BearerToken: h.ServiceAccountToken(), QPS: 1000, Burst: 1000}
+	client, err := dynamic.NewForConfig(cfg)
+	if err != nil {
+		t.Fatalf("dynamic.NewForConfig() error = %v", err)
+	}
+	ctx := context.Background()
+	catalog := gitops.NewMemoryWriter(nil)
+	clusters, err := servers.NewClustersServer().SetLogger(slog.New(slog.DiscardHandler)).SetDynamicClient(client).SetCatalog(catalog).Build()
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+	models, err := servers.NewModelsServer().SetLogger(slog.New(slog.DiscardHandler)).SetWriter(catalog).SetDynamicClient(client).Build()
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+	setRole := func(id, role string) error {
+		t.Helper()
+		got, err := clusters.Get(ctx, &aigridv1.ClustersGetRequest{Id: id})
+		if err != nil {
+			t.Fatalf("Get(%s) error = %v", id, err)
+		}
+		labels := maps.Clone(got.GetObject().GetMetadata().GetLabels())
+		labels["ai-grid/role"] = role
+		_, err = clusters.Update(ctx, &aigridv1.ClustersUpdateRequest{
+			Object:     &aigridv1.ManagedCluster{Id: id, Metadata: &aigridv1.Metadata{Labels: labels, Version: got.GetObject().GetMetadata().GetVersion()}},
+			UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"metadata.labels"}},
+			Lock:       true,
+		})
+		return err
+	}
+	role := func(id string) string {
+		t.Helper()
+		got, err := clusters.Get(ctx, &aigridv1.ClustersGetRequest{Id: id})
+		if err != nil {
+			t.Fatalf("Get(%s) error = %v", id, err)
+		}
+		return got.GetObject().GetMetadata().GetLabels()["ai-grid/role"]
+	}
+
+	if err := setRole("site-paris-1", "combined"); err != nil {
+		t.Fatalf("site-paris-1 to combined: %v", err)
+	}
+	if err := setRole("site-madrid-1", "inference"); err != nil {
+		t.Fatalf("site-madrid-1 to inference: %v", err)
+	}
+	replicas := int32(1)
+	if _, err := models.Create(ctx, &aigridv1.ModelsCreateRequest{Object: &aigridv1.Model{Id: "granite-3b", Spec: &aigridv1.ModelSpec{
+		Model:    &aigridv1.ModelSource{Uri: "hf://ibm-granite/granite-3b"},
+		Replicas: &replicas,
+		Placement: &aigridv1.ModelPlacement{LabelSelector: &aigridv1.ModelLabelSelector{
+			MatchExpressions: []*aigridv1.ModelLabelSelectorRequirement{{Key: "name", Operator: "In", Values: []string{"site-paris-1"}}},
+		}},
+	}}}); err != nil {
+		t.Fatalf("Create(granite-3b) error = %v", err)
+	}
+
+	for _, tc := range []struct {
+		id, role string
+		want     connect.Code
+	}{
+		{"site-paris-1", "gateway", connect.CodeInvalidArgument},
+		{"site-paris-1", "inference", connect.CodeFailedPrecondition}, // the last ingress cluster
+		{"site-paris-1", "ingress", connect.CodeFailedPrecondition},   // granite-3b is placed on it
+	} {
+		if err := setRole(tc.id, tc.role); connect.CodeOf(err) != tc.want {
+			t.Fatalf("%s to %s: error = %v, want %v", tc.id, tc.role, err, tc.want)
+		}
+		if got := role(tc.id); got != "combined" {
+			t.Fatalf("%s role after a refused Update = %q, want combined", tc.id, got)
+		}
+	}
+
+	if err := setRole("site-madrid-1", "ingress"); err != nil {
+		t.Fatalf("site-madrid-1 to ingress: %v", err)
+	}
+	if err := setRole("site-paris-1", "inference"); err != nil {
+		t.Fatalf("site-paris-1 to inference with site-madrid-1 serving ingress: %v", err)
+	}
+	if got := role("site-paris-1"); got != "inference" {
+		t.Fatalf("site-paris-1 role = %q, want inference", got)
+	}
+
+	// Removing a cluster from the grid, as the console does: the labels it
+	// read without ai-grid/enabled. site-madrid-1 serves ingress,
+	// site-paris-1 inference with granite-3b, site-ashburn-1 nothing.
+	subscriptions, err := servers.NewSubscriptionsServer().SetLogger(slog.New(slog.DiscardHandler)).SetWriter(catalog).Build()
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+	if _, err := subscriptions.Create(ctx, &aigridv1.SubscriptionsCreateRequest{Object: &aigridv1.Subscription{
+		Id: "team-a",
+		Spec: &aigridv1.SubscriptionSpec{
+			Organization: &aigridv1.SubscriptionOrganization{Id: "org-a"},
+			Owner:        &aigridv1.SubscriptionOwner{Groups: []string{"team-a"}},
+			ModelRefs:    []*aigridv1.SubscriptionModelRef{{Name: "granite-3b", Unlimited: true}},
+		},
+	}}); err != nil {
+		t.Fatalf("Subscriptions Create() error = %v", err)
+	}
+	remove := func(id string) error {
+		t.Helper()
+		got, err := clusters.Get(ctx, &aigridv1.ClustersGetRequest{Id: id})
+		if err != nil {
+			t.Fatalf("Get(%s) error = %v", id, err)
+		}
+		labels := maps.Clone(got.GetObject().GetMetadata().GetLabels())
+		delete(labels, "ai-grid/enabled")
+		_, err = clusters.Update(ctx, &aigridv1.ClustersUpdateRequest{
+			Object:     &aigridv1.ManagedCluster{Id: id, Metadata: &aigridv1.Metadata{Labels: labels, Version: got.GetObject().GetMetadata().GetVersion()}},
+			UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"metadata.labels"}},
+			Lock:       true,
+		})
+		return err
+	}
+	member := func(id string) bool {
+		t.Helper()
+		got, err := clusters.Get(ctx, &aigridv1.ClustersGetRequest{Id: id})
+		if err != nil {
+			t.Fatalf("Get(%s) error = %v", id, err)
+		}
+		return got.GetObject().GetStatus().GetAiGridMember()
+	}
+	refused := func(id, why string) {
+		t.Helper()
+		if err := remove(id); connect.CodeOf(err) != connect.CodeFailedPrecondition {
+			t.Fatalf("removing %s (%s): error = %v, want FailedPrecondition", id, why, err)
+		}
+		if !member(id) {
+			t.Fatalf("%s left the grid on a refused removal", id)
+		}
+	}
+	removed := func(id string) {
+		t.Helper()
+		if err := remove(id); err != nil {
+			t.Fatalf("removing %s: %v", id, err)
+		}
+		if member(id) {
+			t.Fatalf("%s is still in the grid", id)
+		}
+	}
+
+	refused("site-madrid-1", "team-a's keys would be revoked")
+	refused("site-paris-1", "granite-3b is placed on it")
+	if _, err := subscriptions.Delete(ctx, &aigridv1.SubscriptionsDeleteRequest{Id: "team-a"}); err != nil {
+		t.Fatalf("Subscriptions Delete() error = %v", err)
+	}
+	refused("site-madrid-1", "the last ingress cluster, site-paris-1 stays")
+	removed("site-ashburn-1")
+	if _, err := models.Delete(ctx, &aigridv1.ModelsDeleteRequest{Id: "granite-3b"}); err != nil {
+		t.Fatalf("Models Delete() error = %v", err)
+	}
+	removed("site-paris-1")
+	// The grid's last cluster may leave.
+	removed("site-madrid-1")
+}
+
 // The backend's own ACM Search client against the fake Search: List and Get
 // carry each cluster's GPUs from fixtures/default/searchnodes.json, and a
 // token Search rejects leaves them out without failing the call.

@@ -50,6 +50,7 @@ type ClustersServerBuilder struct {
 	client      dynamic.Interface
 	readyPolicy string
 	gpus        clusterGPUSource
+	catalog     catalogReader
 }
 
 // ClustersServer implements ai_grid.v1.Clusters against hub ManagedCluster CRs.
@@ -60,6 +61,7 @@ type ClustersServer struct {
 	readyPolicyNamespace string
 	readyPolicyName      string
 	gpus                 clusterGPUSource
+	catalog              catalogReader
 }
 
 var _ aigridv1connect.ClustersHandler = (*ClustersServer)(nil)
@@ -108,6 +110,17 @@ func (b *ClustersServerBuilder) SetGPUInventory(inventory clusterGPUSource) *Clu
 	return b
 }
 
+// SetCatalog sets the Git catalog the Models and Subscriptions servers commit
+// to, which Update reads for the subscriptions before a cluster stops serving
+// ingress, and for the models placed on a cluster before it stops serving
+// inference or leaves the grid. Optional; without it no subscription or
+// placed model refuses an update, as with a backend started without
+// AI_GRID_GIT_URL: there is no catalog either could be written to.
+func (b *ClustersServerBuilder) SetCatalog(catalog catalogReader) *ClustersServerBuilder {
+	b.catalog = catalog
+	return b
+}
+
 // Build creates the ClustersServer.
 func (b *ClustersServerBuilder) Build() (*ClustersServer, error) {
 	if b.client == nil {
@@ -121,7 +134,7 @@ func (b *ClustersServerBuilder) Build() (*ClustersServer, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &ClustersServer{logger: logger, client: b.client, readyPolicyNamespace: namespace, readyPolicyName: name, gpus: b.gpus}, nil
+	return &ClustersServer{logger: logger, client: b.client, readyPolicyNamespace: namespace, readyPolicyName: name, gpus: b.gpus, catalog: b.catalog}, nil
 }
 
 // List returns ManagedCluster objects from the Kubernetes API.
@@ -207,6 +220,13 @@ func (s *ClustersServer) Create(ctx context.Context, req *aigridv1.ClustersCreat
 // Update merge-patches labels and/or hubAcceptsClient according to update_mask.
 // An empty mask updates the mutable fields the request sets: labels merge when
 // metadata is set, hubAcceptsClient when spec is set.
+//
+// An ai-grid/role the update writes must be ingress, inference or combined
+// (checkRoleValue). A cluster in the grid may not stop serving ingress, by a
+// role change or by leaving the grid, while subscriptions exist or while it
+// is the grid's last ingress cluster, nor stop serving inference or leave the
+// grid while models are placed on it (checkRoleChange, which gives the order
+// and says why a change made meanwhile isn't refused).
 func (s *ClustersServer) Update(ctx context.Context, req *aigridv1.ClustersUpdateRequest) (*aigridv1.ClustersUpdateResponse, error) {
 	object := req.GetObject()
 	if object == nil {
@@ -238,11 +258,17 @@ func (s *ClustersServer) Update(ctx context.Context, req *aigridv1.ClustersUpdat
 	paths := updatePaths(req.GetUpdateMask(), object)
 
 	patchMeta := map[string]interface{}{}
+	labels := current.GetLabels()
 	if paths.labels {
 		if err := checkConsoleKeys("label", current.GetLabels(), object.GetMetadata().GetLabels()); err != nil {
 			return nil, err
 		}
-		patchMeta["labels"] = managedKeysPatch("label", current.GetLabels(), object.GetMetadata().GetLabels())
+		patch := managedKeysPatch("label", current.GetLabels(), object.GetMetadata().GetLabels())
+		labels = labelsAfter(current.GetLabels(), patch)
+		if err := checkRoleValue(current.GetLabels(), labels); err != nil {
+			return nil, err
+		}
+		patchMeta["labels"] = patch
 	}
 	if paths.annotations {
 		if err := checkConsoleKeys("annotation", current.GetAnnotations(), object.GetMetadata().GetAnnotations()); err != nil {
@@ -252,6 +278,9 @@ func (s *ClustersServer) Update(ctx context.Context, req *aigridv1.ClustersUpdat
 			return nil, err
 		}
 		patchMeta["annotations"] = managedKeysPatch("annotation", current.GetAnnotations(), object.GetMetadata().GetAnnotations())
+	}
+	if err := s.checkRoleChange(ctx, id, current.GetLabels(), labels); err != nil {
+		return nil, err
 	}
 	patchBody := map[string]interface{}{}
 	if len(patchMeta) > 0 {
