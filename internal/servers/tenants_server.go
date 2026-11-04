@@ -784,9 +784,10 @@ func (s *TenantsServer) setupIdentityProvider(ctx context.Context, org keycloak.
 	// So a tenant IdP must send email_verified=true for its users: in the ID token, and also in
 	// the userinfo response when the IdP has a userinfo URL. If userinfo returns an email without
 	// email_verified, Keycloak reads the claim as false and TrustEmail doesn't help.
-	// It doesn't link accounts: the realm's default first broker login flow (Keycloak 26) links a login to an
-	// existing user with the same email only after that user clicks an emailed link or
-	// re-enters their password, so a tenant IdP can't take over another account by email.
+	// TrustEmail doesn't change account linking: the realm's first broker login flow matches a
+	// brokered login to an existing user by email or username without reading email_verified,
+	// so what a tenant IdP can do by asserting another user's email or username is the same
+	// with it on or off.
 	kcIdP := keycloak.IdentityProvider{
 		Alias:       alias,
 		DisplayName: idp.GetTitle(),
