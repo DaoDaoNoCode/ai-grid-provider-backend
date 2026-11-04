@@ -548,6 +548,12 @@ to the Organization and upserts four broker mappers (sync mode `FORCE`):
 `maas_groups` and `maas_roles` copy the tenant IdP's `groups` and `roles`
 claims on every login. The realm's client mappers turn these attributes into
 the flat `org_id`, `org_name`, `groups` and `roles` claims (ODH-ADR-MS-0007).
+The backend creates the IdP with `trustEmail` on, so Keycloak takes each user's
+`email_verified` from the tenant IdP, on every login. The tenant IdP must send
+`email_verified: true` for its users in the ID token, and also in the userinfo
+response when `config.user_info_url` is set: Keycloak reads an email in
+userinfo without `email_verified` as unverified. With `email_verified` false,
+the MaaS Portal's oauth2-proxy rejects the user's token.
 The IdP is immutable after Create. Client secrets are **not** stored
 in the API: put them in namespace `ai-grid-idp-secrets` (env
 `AI_GRID_IDP_SECRET_NAMESPACE`) as a Secret whose name is

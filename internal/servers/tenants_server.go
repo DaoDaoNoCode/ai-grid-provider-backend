@@ -781,6 +781,9 @@ func (s *TenantsServer) setupIdentityProvider(ctx context.Context, org keycloak.
 	// verified for a new user or a changed email. With TrustEmail off, email_verified is false and
 	// the MaaS Portal's oauth2-proxy refuses the token. The IdP's sync mode is FORCE
 	// (oidcConfigForKeycloak), so this applies on every login, not only the first.
+	// So a tenant IdP must send email_verified=true for its users: in the ID token, and also in
+	// the userinfo response when the IdP has a userinfo URL. If userinfo returns an email without
+	// email_verified, Keycloak reads the claim as false and TrustEmail doesn't help.
 	// It doesn't link accounts: the realm's default first broker login flow (Keycloak 26) links a login to an
 	// existing user with the same email only after that user clicks an emailed link or
 	// re-enters their password, so a tenant IdP can't take over another account by email.
