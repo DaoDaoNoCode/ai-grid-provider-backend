@@ -5,6 +5,7 @@ import (
 
 	"buf.build/go/protovalidate"
 	aigridv1 "github.com/osac-project/ai-grid-provider-backend/gen/ai_grid/v1"
+	"google.golang.org/protobuf/proto"
 )
 
 func TestModelStatusSummaryValidation(t *testing.T) {
@@ -54,6 +55,41 @@ func TestModelClusterViewValidation(t *testing.T) {
 			}
 			if err := protovalidate.Validate(status); (err != nil) != tc.wantErr {
 				t.Errorf("Validate(%v) = %v, want error %t", status, err, tc.wantErr)
+			}
+		})
+	}
+}
+
+func TestModelStatusSummaryOnlyValues(t *testing.T) {
+	t.Parallel()
+	for name, tc := range map[string]struct {
+		message proto.Message
+		wantErr bool
+	}{
+		"partial cluster": {
+			message: &aigridv1.ModelClusterStatus{Cluster: "site-a", Phase: aigridv1.ModelPhase_MODEL_PHASE_READY,
+				Reason: "Ready", State: aigridv1.ModelState_MODEL_STATE_PARTIALLY_READY},
+			wantErr: true,
+		},
+		"unavailable ingress": {
+			message: &aigridv1.ModelIngressStatus{Cluster: "site-a", State: aigridv1.ModelMaasState_MODEL_MAAS_STATE_UNAVAILABLE},
+			wantErr: true,
+		},
+		"model summary": {
+			message: &aigridv1.ModelStatus{State: aigridv1.ModelState_MODEL_STATE_PARTIALLY_READY,
+				Maas: aigridv1.ModelMaasState_MODEL_MAAS_STATE_UNAVAILABLE},
+		},
+		"unreported cluster": {
+			message: &aigridv1.ModelClusterStatus{Cluster: "site-a", Phase: aigridv1.ModelPhase_MODEL_PHASE_PENDING, Reason: "NoReport"},
+		},
+		"unreported ingress": {
+			message: &aigridv1.ModelIngressStatus{Cluster: "site-a"},
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			if err := protovalidate.Validate(tc.message); (err != nil) != tc.wantErr {
+				t.Errorf("Validate(%v) = %v, want error %t", tc.message, err, tc.wantErr)
 			}
 		})
 	}

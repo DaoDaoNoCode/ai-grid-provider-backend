@@ -414,7 +414,8 @@ enum ModelMaasState {
   MODEL_MAAS_STATE_AWAITING_SUBSCRIPTION_AND_BACKEND = 5;
   // No placed cluster serves it, while MaaS publishes it or is still
   // routing it: MaaS checks only the route, so it can't see the model's pods
-  // are down. Summary only (ModelStatus.maas), from `state`.
+  // are down. Summary only (ModelStatus.maas), from the placed clusters'
+  // live deployment states.
   MODEL_MAAS_STATE_UNAVAILABLE = 6;
 }
 
@@ -445,7 +446,10 @@ message ModelIngressStatus {
   }];
 
   // What the cluster reports.
-  ModelMaasState state = 2 [(buf.validate.field).enum.defined_only = true];
+  ModelMaasState state = 2 [(buf.validate.field).enum = {
+    defined_only: true
+    not_in: [6]
+  }];
 
   // MaaS's or Argo CD's message, for example "Awaiting governance pairing".
   string message = 3;
@@ -558,7 +562,10 @@ message ModelClusterStatus {
   // LLMInferenceService is on the cluster; FAILED when its sync failed;
   // SYNCING while Argo CD hasn't applied it; SYNCED when it has but KServe
   // hasn't reported yet; UNSPECIFIED with no report.
-  ModelState state = 9 [(buf.validate.field).enum.defined_only = true];
+  ModelState state = 9 [(buf.validate.field).enum = {
+    defined_only: true
+    not_in: [6]
+  }];
 
   // Where to see the model on this cluster: OpenShift AI's model
   // deployments page, or the LLMInferenceService in the OpenShift console
