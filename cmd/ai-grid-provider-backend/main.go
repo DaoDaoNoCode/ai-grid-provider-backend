@@ -72,8 +72,19 @@ func main() {
 		fmt.Fprintf(os.Stderr, "build AiGrid server: %v\n", err)
 		os.Exit(1)
 	}
+	// Models and Subscriptions are committed to the AI_GRID_GIT_URL
+	// repository, and Argo CD delivers them. The status of what came up on
+	// the spokes is read back from inform-only ACM Policies on this hub.
+	// Clusters reads it for the models placed on a cluster whose role
+	// changes.
+	writer, err := newGitWriter()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "git writer: %v\n", err)
+		os.Exit(1)
+	}
 	clustersServer, err := servers.NewClustersServer().
 		SetLogger(logger).
+		SetCatalog(writer).
 		SetDynamicClient(kubeClient).
 		SetReadyPolicy(getEnv("AI_GRID_READY_POLICY", servers.DefaultReadyPolicy)).
 		SetGPUInventory(gpuInventory).
@@ -97,14 +108,6 @@ func main() {
 		Build()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "build Tenants server: %v\n", err)
-		os.Exit(1)
-	}
-	// Models and Subscriptions are committed to the AI_GRID_GIT_URL
-	// repository, and Argo CD delivers them. The status of what came up on
-	// the spokes is read back from inform-only ACM Policies on this hub.
-	writer, err := newGitWriter()
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "git writer: %v\n", err)
 		os.Exit(1)
 	}
 	status := servers.NewCatalogStatusReader(kubeClient, getEnv("AI_GRID_POLICY_NAMESPACE", servers.DefaultPolicyNamespace))

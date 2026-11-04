@@ -50,6 +50,7 @@ type ClustersServerBuilder struct {
 	client      dynamic.Interface
 	readyPolicy string
 	gpus        clusterGPUSource
+	catalog     catalogReader
 }
 
 // ClustersServer implements ai_grid.v1.Clusters against hub ManagedCluster CRs.
@@ -60,6 +61,7 @@ type ClustersServer struct {
 	readyPolicyNamespace string
 	readyPolicyName      string
 	gpus                 clusterGPUSource
+	catalog              catalogReader
 }
 
 var _ aigridv1connect.ClustersHandler = (*ClustersServer)(nil)
@@ -108,6 +110,16 @@ func (b *ClustersServerBuilder) SetGPUInventory(inventory clusterGPUSource) *Clu
 	return b
 }
 
+// SetCatalog sets the Git catalog the Models server commits to, which Update
+// reads for the models placed on a cluster before that cluster stops serving
+// inference. Optional; without it no placed model refuses a role change, as
+// with a backend started without AI_GRID_GIT_URL: there is no catalog a model
+// could be placed through.
+func (b *ClustersServerBuilder) SetCatalog(catalog catalogReader) *ClustersServerBuilder {
+	b.catalog = catalog
+	return b
+}
+
 // Build creates the ClustersServer.
 func (b *ClustersServerBuilder) Build() (*ClustersServer, error) {
 	if b.client == nil {
@@ -121,7 +133,7 @@ func (b *ClustersServerBuilder) Build() (*ClustersServer, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &ClustersServer{logger: logger, client: b.client, readyPolicyNamespace: namespace, readyPolicyName: name, gpus: b.gpus}, nil
+	return &ClustersServer{logger: logger, client: b.client, readyPolicyNamespace: namespace, readyPolicyName: name, gpus: b.gpus, catalog: b.catalog}, nil
 }
 
 // List returns ManagedCluster objects from the Kubernetes API.
@@ -207,6 +219,12 @@ func (s *ClustersServer) Create(ctx context.Context, req *aigridv1.ClustersCreat
 // Update merge-patches labels and/or hubAcceptsClient according to update_mask.
 // An empty mask updates the mutable fields the request sets: labels merge when
 // metadata is set, hubAcceptsClient when spec is set.
+//
+// An ai-grid/role the update writes must be ingress, inference or combined
+// (checkRoleValue). A cluster in the grid before and after the update whose
+// role changes may not stop serving inference while models are placed on it,
+// nor stop serving ingress while it is the grid's last ingress cluster
+// (checkRoleChange, which says why a model placed meanwhile isn't refused).
 func (s *ClustersServer) Update(ctx context.Context, req *aigridv1.ClustersUpdateRequest) (*aigridv1.ClustersUpdateResponse, error) {
 	object := req.GetObject()
 	if object == nil {
@@ -238,11 +256,17 @@ func (s *ClustersServer) Update(ctx context.Context, req *aigridv1.ClustersUpdat
 	paths := updatePaths(req.GetUpdateMask(), object)
 
 	patchMeta := map[string]interface{}{}
+	labels := current.GetLabels()
 	if paths.labels {
 		if err := checkConsoleKeys("label", current.GetLabels(), object.GetMetadata().GetLabels()); err != nil {
 			return nil, err
 		}
-		patchMeta["labels"] = managedKeysPatch("label", current.GetLabels(), object.GetMetadata().GetLabels())
+		patch := managedKeysPatch("label", current.GetLabels(), object.GetMetadata().GetLabels())
+		labels = labelsAfter(current.GetLabels(), patch)
+		if err := checkRoleValue(current.GetLabels(), labels); err != nil {
+			return nil, err
+		}
+		patchMeta["labels"] = patch
 	}
 	if paths.annotations {
 		if err := checkConsoleKeys("annotation", current.GetAnnotations(), object.GetMetadata().GetAnnotations()); err != nil {
@@ -252,6 +276,9 @@ func (s *ClustersServer) Update(ctx context.Context, req *aigridv1.ClustersUpdat
 			return nil, err
 		}
 		patchMeta["annotations"] = managedKeysPatch("annotation", current.GetAnnotations(), object.GetMetadata().GetAnnotations())
+	}
+	if err := s.checkRoleChange(ctx, id, current.GetLabels(), labels); err != nil {
+		return nil, err
 	}
 	patchBody := map[string]interface{}{}
 	if len(patchMeta) > 0 {
