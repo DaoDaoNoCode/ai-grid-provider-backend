@@ -567,6 +567,15 @@ identity-provider roles a Create with `spec.identity_provider` gets 403.
 `manage-identity-providers` is realm-wide: it lets the backend edit any IdP in
 the realm, not only its organizations'.
 
+Tenants created by an earlier build have IdPs without `trustEmail`, and the
+backend doesn't update existing IdPs. To fix one, turn on **Trust email** on
+the IdP (its alias is the tenant's IdP alias, or the organization name) in the
+Keycloak admin console, under the realm's **Identity providers**. Or, with the
+Admin REST API, `GET` `/admin/realms/<realm>/identity-provider/instances/<alias>`,
+set `"trustEmail": true` in the response, and `PUT` it back to the same path; the
+masked `clientSecret` in the response keeps the stored secret. The change applies
+from each user's next login, as long as the IdP sends `email_verified`.
+
 ## Local architecture
 
 The local environment is Kubernetes-native:
