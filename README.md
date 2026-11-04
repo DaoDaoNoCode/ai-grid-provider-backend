@@ -70,6 +70,23 @@ derives, so no client has to:
 - `status.ai_grid_member`: the `ai-grid/enabled` label is exactly `"true"`,
   the selector the hub's AI Grid Placements match. A cluster joins or leaves
   the grid through `Clusters/Update` by setting or removing that label.
+- The `ai-grid/role` label is not derived, but `Clusters/Update` checks it:
+  `ingress`, `inference` or `combined` picks what the hub installs on a
+  member (ai-grid-cloud/ai-grid-cluster-gitops,
+  `apps/ai-grid-spokes/manifests/02-placements.yaml` and
+  `apps/rhoai/roles/<role>.yaml`), and a role change makes GitOps install
+  what the new role has and prune what only the old one had. A role the
+  update sets or changes must be one of the three (`InvalidArgument`); no
+  role is allowed. A member that stays in the grid may not stop serving
+  inference (`inference` or `combined` to anything else) while the Git
+  catalog places models on it, nor stop serving ingress (`ingress` or
+  `combined` to anything else) while it is the grid's last ingress cluster:
+  both are `FailedPrecondition`. The catalog is read on the remote's head,
+  not the read cache; without `AI_GRID_GIT_URL` no model is placed, and a
+  repository not cloned yet answers `Unavailable`. The checks and the label
+  write aren't atomic, so a model placed between them isn't refused.
+  Joining or leaving the grid isn't checked. See
+  [`docs/UI_API_REFERENCE.md`](docs/UI_API_REFERENCE.md), "Roles".
 - `status.state` and `status.state_message`: the lifecycle state the ACM
   console shows (`READY`, `OFFLINE`, `UNKNOWN`, `PENDING_IMPORT`, `IMPORTING`,
   `IMPORT_FAILED`, `NOT_ACCEPTED`, `DETACHING`; `UNSPECIFIED` before the hub
@@ -161,7 +178,7 @@ status from the hub's ACM Policies ([Status](#status-from-the-spokes)).
 
 | Setting | Meaning |
 |---|---|
-| `AI_GRID_GIT_URL` | Repository URL, without credentials. Without it the backend still starts: Models' and Subscriptions' list, get, create, update and delete answer `FailedPrecondition`, naming this setting, and `Models/ListPlacementClusters` and `Models/ListLocations` (which read the cluster) and the other APIs serve as usual. Setting `AI_GRID_GIT_TOKEN_FILE` without it is an error at startup. The backend clones it in the background and retries a failed clone, waiting up to a minute between attempts; until a clone succeeds, Models and Subscriptions answer `Unavailable` and the other APIs serve as usual. A `file://` URL or local path is served in-process, so the image needs no `git`. |
+| `AI_GRID_GIT_URL` | Repository URL, without credentials. Without it the backend still starts: Models' and Subscriptions' list, get, create, update and delete answer `FailedPrecondition`, naming this setting, and `Models/ListPlacementClusters` and `Models/ListLocations` (which read the cluster) and the other APIs serve as usual. Setting `AI_GRID_GIT_TOKEN_FILE` without it is an error at startup. The backend clones it in the background and retries a failed clone, waiting up to a minute between attempts; until a clone succeeds, Models and Subscriptions answer `Unavailable`, and so does a `Clusters/Update` that stops a grid cluster serving inference (it reads the models placed on it, [Cluster membership](#cluster-membership-state-and-location)); the other APIs serve as usual. A `file://` URL or local path is served in-process, so the image needs no `git`. |
 | `AI_GRID_GIT_BRANCH` | Branch to commit to. Default `main`. It must have at least one commit. |
 | `AI_GRID_GIT_TOKEN_FILE` | File holding a GitHub personal access token with `contents: write` on that repository only, for example a mounted Secret. Sent as HTTPS basic auth, so `AI_GRID_GIT_URL` must be `https://` when it is set; never logged. |
 | `AI_GRID_GIT_READ_MAX_AGE` | How old the last fetch or push of the branch may be for a read to use its head, and for a write to commit on it without fetching, as a Go duration. Default `10s`; `0` fetches before every read and every write. A commit pushed by anyone else shows in reads within about this long (below); a value that doesn't parse, or a negative one, is an error at startup. |

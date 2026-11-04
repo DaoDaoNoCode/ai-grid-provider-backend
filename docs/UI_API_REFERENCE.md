@@ -101,7 +101,8 @@ Non-2xx responses use gRPC status JSON, for example:
 ```
 
 Common `code` values (gRPC status numbers): `3` InvalidArgument, `5` NotFound,
-`6` AlreadyExists, `7` PermissionDenied, `13` Internal.
+`6` AlreadyExists, `7` PermissionDenied, `9` FailedPrecondition, `10` Aborted,
+`13` Internal, `14` Unavailable.
 
 ---
 
@@ -175,6 +176,7 @@ Hub-side ACM/OCM `ManagedCluster` CRs. **Does not provision spoke clusters.**
 | `status.state_message` | The message of the condition that decided `state`, for example `"Managed cluster is available"`; may be empty |
 | `status.location` | Always set. `site_name` (`ai-grid/site-name`, trimmed); `latitude` and `longitude` in decimal degrees, both present or both absent (absent is not `0`: `0, 0` is a valid position); `source`: `MANAGED_CLUSTER_LOCATION_SOURCE_ANNOTATIONS` (the `ai-grid/latitude` / `ai-grid/longitude` annotations), `..._CLOUD_REGION` (approximate, from a known cloud region; say so in the UI) or `..._NONE` (no coordinates); `problem`: what is wrong with the annotations, to show a provider admin as is (empty when nothing is); `region`: the `region.open-cluster-management.io` claim, for example `"us-east-2"`, empty on most on-premises clusters. Wrong annotations give no coordinates, never the region's. README, "Cluster locations", has every case |
 | `metadata.labels["ai-grid/enabled"]` | Enroll-style flag (string `"true"` / `"false"`); read `status.ai_grid_member` instead of comparing it |
+| `metadata.labels["ai-grid/role"]` | What the hub installs on a grid member: `ingress`, `inference` or `combined` (both). Absent on a cluster that was never added. PATCH accepts only those three values; see [Roles](#roles) |
 
 ---
 
@@ -284,10 +286,63 @@ Merge-update mutable fields. Path `{id}` must match the object’s id.
 
 **Behavior today:**
 
-- **Labels** are **merged** onto existing labels (keys in the body overwrite; other keys kept).
+- **Labels**: the body's console keys (`ai-grid/*` and `location`) are the
+  whole set: one on the hub but missing from the body is removed. Other keys
+  are left as they are on the hub, and the body may only send them back
+  unchanged (`InvalidArgument` otherwise). Annotations work the same way
+  for `ai-grid/*`.
 - **`hub_accepts_client`** is replaced when included in the update.
 - Empty update mask (typical REST PATCH with no `update_mask` query) updates **all mutable fields** (labels + hub accepts).
-- Optional query `lock` exists for future optimistic locking — **not enforced yet**.
+- `metadata.version` is the hub `resourceVersion`: a stale one answers
+  `Aborted` before anything else is checked. Query `lock=true` requires it.
+- The role rules below apply.
+
+#### Roles
+
+`ai-grid/role` picks what the hub installs on a grid member. The hub's AI
+Grid Placements select `ai-grid/enabled: "true"` clusters by it (in
+ai-grid-cloud/ai-grid-cluster-gitops,
+`apps/ai-grid-spokes/manifests/02-placements.yaml`, and the per-role values
+in `apps/rhoai/roles/<role>.yaml`, delivered by
+`apps/rhoai/hub/01-applicationset.yaml`):
+
+| Role | Serves | What the gitops repository installs for it |
+| --- | --- | --- |
+| `ingress` | ingress | MaaS, the portal and the grid consumer gateway; the models' catalog entries and the subscriptions |
+| `inference` | inference | the models placed on it and the grid provider gateway |
+| `combined` | both | both |
+
+Changing the role of a grid member makes GitOps install what the new role
+has and, with `prune: true`, remove what only the old role had. The backend
+only writes the label; it doesn't check what the hub does with it, so read
+the gitops repository for what changes on the cluster.
+
+PATCH checks, in this order, after the version:
+
+| Rule | Code |
+| --- | --- |
+| A role the body sets or changes must be `ingress`, `inference` or `combined`. No role is allowed. A role the cluster already has and the body sends back unchanged isn't judged again. | `InvalidArgument` (`3`) |
+| A grid member (`ai-grid/enabled: "true"` before and after the PATCH) whose role stops serving ingress (`ingress` or `combined` to anything else, or no role) while no other grid member serves ingress. Users reach models through ingress clusters; give another cluster role `ingress` or `combined` first. | `FailedPrecondition` (`9`) |
+| A grid member whose role stops serving inference (`inference` or `combined` to anything else, or no role) while the Git catalog places models on it (`catalog/clusters/<name>/kustomization.yaml`). The message names the cluster, counts the models and names up to five; move them to other clusters first. | `FailedPrecondition` (`9`) |
+
+Notes:
+
+- The checks don't apply to a cluster joining or leaving the grid in the
+  same PATCH (`ai-grid/enabled` set or removed), nor to a role change of a
+  cluster outside the grid.
+- The catalog is read on the remote's head, not on the backend's read cache
+  (`AI_GRID_GIT_READ_MAX_AGE`), so a model another writer placed a moment
+  ago counts. A backend without `AI_GRID_GIT_URL` has no catalog, so no
+  model refuses a role change; one whose repository isn't cloned yet, or
+  can't be fetched, answers `Unavailable` (`14`) for a change that stops
+  serving inference.
+- The checks and the write are not atomic: a model placed on the cluster,
+  or another cluster's role changed, between the check and the write is not
+  refused.
+- Messages, for example:
+  - `label "ai-grid/role" must be ingress, inference or combined, got "gateway"`
+  - `cluster "site-a" is the last cluster in the grid that serves ingress, and users reach models through ingress clusters; give another cluster role ingress or combined before this one stops serving ingress`
+  - `cluster "site-a" cannot stop serving inference while 2 models are placed on it (model-a, model-b); move them to other clusters first`
 
 **Enroll pattern (PoC-compatible intent):**
 
