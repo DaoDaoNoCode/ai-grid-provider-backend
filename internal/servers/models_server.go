@@ -50,9 +50,11 @@ type ModelsServerBuilder struct {
 // is an LLMInferenceService that Argo CD delivers to the clusters its
 // placement names, and an ExternalModel and MaaSModelRef for the ingress
 // clusters (models_git.go). It never writes to the cluster; it reads the
-// ManagedClusters for ListPlacementClusters, status.placement.locations and
-// the check that a placement names existing clusters, and status from the hub
-// through its CatalogStatusReader.
+// ManagedClusters for ListPlacementClusters, the check that a placement names
+// existing clusters, and the ingress clusters and View links of the status
+// (clusterFacts), and status from the hub through its CatalogStatusReader. It
+// leaves the deprecated status.placement.locations empty: a model's clusters
+// are status.placement.selected_clusters.
 type ModelsServer struct {
 	aigridv1connect.UnimplementedModelsHandler
 	logger                *slog.Logger
@@ -87,9 +89,9 @@ func (b *ModelsServerBuilder) SetWriter(writer gitops.Writer) *ModelsServerBuild
 }
 
 // SetDynamicClient sets the hub client that ListPlacementClusters (and the
-// deprecated ListLocations), status.placement.locations and the placement's
-// cluster check read ManagedClusters with. Optional; without it the lists are
-// empty and placements are not checked.
+// deprecated ListLocations), the placement's cluster check and the catalog
+// status (clusterFacts) read ManagedClusters with. Optional; without it the
+// lists are empty and placements are not checked.
 func (b *ModelsServerBuilder) SetDynamicClient(client dynamic.Interface) *ModelsServerBuilder {
 	b.client = client
 	return b
@@ -179,7 +181,6 @@ func (s *ModelsServer) List(ctx context.Context, req *aigridv1.ModelsListRequest
 	if err != nil {
 		return nil, err
 	}
-	s.enrichGitLocations(ctx, items...)
 	return listModelItems(ctx, req, items)
 }
 
@@ -193,7 +194,6 @@ func (s *ModelsServer) Get(ctx context.Context, req *aigridv1.ModelsGetRequest) 
 	if err != nil {
 		return nil, err
 	}
-	s.enrichGitLocations(ctx, m)
 	return &aigridv1.ModelsGetResponse{Object: m}, nil
 }
 
@@ -232,7 +232,6 @@ func (s *ModelsServer) Create(ctx context.Context, req *aigridv1.ModelsCreateReq
 	if err != nil {
 		return nil, err
 	}
-	s.enrichGitLocations(ctx, m)
 	return &aigridv1.ModelsCreateResponse{Object: m}, nil
 }
 
@@ -257,7 +256,6 @@ func (s *ModelsServer) Update(ctx context.Context, req *aigridv1.ModelsUpdateReq
 	if err != nil {
 		return nil, err
 	}
-	s.enrichGitLocations(ctx, m)
 	return &aigridv1.ModelsUpdateResponse{Object: m}, nil
 }
 
@@ -444,40 +442,6 @@ func isPlacementCluster(item unstructured.Unstructured, provisioned map[string]s
 	}
 	status := managedClusterStatusFromUnstructured(item)
 	return status != nil && status.GetAvailable()
-}
-
-// enrichGitLocations fills status.placement.locations of models from the
-// location labels of the clusters their files place them on. Without a dynamic client it leaves
-// them empty.
-func (s *ModelsServer) enrichGitLocations(ctx context.Context, models ...*aigridv1.Model) {
-	if s.client == nil || len(models) == 0 {
-		return
-	}
-	list, err := s.client.Resource(managedClustersResource).List(ctx, metav1.ListOptions{})
-	if err != nil {
-		s.logger.WarnContext(ctx, "list ManagedClusters for model locations", "error", err)
-		return
-	}
-	byName := map[string]string{}
-	for i := range list.Items {
-		if loc := list.Items[i].GetLabels()["location"]; loc != "" {
-			byName[list.Items[i].GetName()] = loc
-		}
-	}
-	for _, m := range models {
-		placement := m.GetStatus().GetPlacement()
-		if placement == nil {
-			continue
-		}
-		var locs []string
-		for _, cluster := range placement.GetSelectedClusters() {
-			if loc := byName[cluster]; loc != "" && !slices.Contains(locs, loc) {
-				locs = append(locs, loc)
-			}
-		}
-		sort.Strings(locs)
-		placement.Locations = locs
-	}
 }
 
 type modelUpdatePaths struct {

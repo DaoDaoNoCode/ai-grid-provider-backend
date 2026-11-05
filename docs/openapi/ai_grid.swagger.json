@@ -451,7 +451,7 @@
     },
     "/api/v1/models:listLocations": {
       "get": {
-        "summary": "Deprecated: use ListPlacementClusters, which answers the same list as\n`clusters`. Despite its name, this RPC answers cluster names, not values\nof the cluster's `location` label (those are in a model's\nstatus.placement.locations). It is removed once its clients have moved\n(docs/API_CONTRACT.md, \"Expand, migrate, contract\").",
+        "summary": "Deprecated: use ListPlacementClusters, which answers the same list as\n`clusters`. Despite its name, this RPC answers cluster names, not values\nof the cluster's `location` label. It is removed once its clients have\nmoved (docs/API_CONTRACT.md, \"Expand, migrate, contract\").",
         "operationId": "Models_ListLocations",
         "responses": {
           "200": {
@@ -1915,7 +1915,7 @@
           "items": {
             "type": "string"
           },
-          "description": "Unique sorted values of the `location` label of the selected clusters\n(P8): where they are, not which clusters they are. Several clusters can\nshare one location, so these are not cluster names and a placement can't\nname them; use selected_clusters for that. A selected cluster without a\nlocation label adds nothing. Output only.",
+          "description": "Deprecated: always empty. It held the `location` labels of the selected\nclusters, which no client reads; use selected_clusters, the cluster names,\nand Clusters/List for where each cluster is. It is removed once its\nclients have moved (docs/API_CONTRACT.md, \"Expand, migrate, contract\").\nOutput only.",
           "readOnly": true
         }
       },

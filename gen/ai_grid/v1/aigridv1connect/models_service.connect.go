@@ -105,9 +105,8 @@ type ModelsClient interface {
 	Delete(context.Context, *v1.ModelsDeleteRequest) (*v1.ModelsDeleteResponse, error)
 	// Deprecated: use ListPlacementClusters, which answers the same list as
 	// `clusters`. Despite its name, this RPC answers cluster names, not values
-	// of the cluster's `location` label (those are in a model's
-	// status.placement.locations). It is removed once its clients have moved
-	// (docs/API_CONTRACT.md, "Expand, migrate, contract").
+	// of the cluster's `location` label. It is removed once its clients have
+	// moved (docs/API_CONTRACT.md, "Expand, migrate, contract").
 	//
 	// Deprecated: do not use.
 	ListLocations(context.Context, *v1.ModelsListLocationsRequest) (*v1.ModelsListLocationsResponse, error)
@@ -137,9 +136,8 @@ type ModelsHandler interface {
 	Delete(context.Context, *v1.ModelsDeleteRequest) (*v1.ModelsDeleteResponse, error)
 	// Deprecated: use ListPlacementClusters, which answers the same list as
 	// `clusters`. Despite its name, this RPC answers cluster names, not values
-	// of the cluster's `location` label (those are in a model's
-	// status.placement.locations). It is removed once its clients have moved
-	// (docs/API_CONTRACT.md, "Expand, migrate, contract").
+	// of the cluster's `location` label. It is removed once its clients have
+	// moved (docs/API_CONTRACT.md, "Expand, migrate, contract").
 	//
 	// Deprecated: do not use.
 	ListLocations(context.Context, *v1.ModelsListLocationsRequest) (*v1.ModelsListLocationsResponse, error)

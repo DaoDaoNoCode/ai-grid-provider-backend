@@ -731,7 +731,7 @@ annotations take only unprefixed keys plus `openshift.io/display-name` and
 | GET | `/api/v1/models` | List; CEL `filter`; `order` allowlist `id`, `-id`, `metadata.name`, `-metadata.name` |
 | GET | `/api/v1/models:listPlacementClusters` | `clusters`: unique sorted names of the provisioned (ai-grid-ready Compliant), Available inference and combined clusters, the values `spec.placement` takes (P7) |
 | GET | `/api/v1/models:listLocations` | Deprecated: the same cluster names, as `locations`. Use `:listPlacementClusters`; removed once clients have moved |
-| GET | `/api/v1/models/{id}` | Get one (unwraps to the Model object); `status.placement` when placed: `selected_clusters` (cluster names) and `locations` (their `location` labels, P8) |
+| GET | `/api/v1/models/{id}` | Get one (unwraps to the Model object); `status.placement` when placed: `selected_clusters` (cluster names); `locations` is deprecated and always empty |
 | POST | `/api/v1/models` | Create (= deploy); body is the Model object |
 | PATCH | `/api/v1/models/{id}` | FieldMask update (`metadata.labels`, `metadata.annotations`, `spec.model`, `spec.replicas`, `spec.base_refs`, `spec.runtime`, `spec.router`, `spec.main`, `spec.main.image`, `spec.main.env`, `spec.main.requests`, `spec.main.limits`, `spec.scaling`, `spec.placement`, `spec.rollout`). Each path replaces its field whole; a subpath such as `metadata.labels.<key>` replaces the whole map. `ModelsUpdateRequest.update_mask` has the full rules |
 | DELETE | `/api/v1/models/{id}` | Refuses while a subscription in the repository references the model |
@@ -772,14 +772,13 @@ Leave `spec.model.name` out, or send the id: it's deprecated. The model is serve
 `InvalidArgument`. A read returns the name the model is served as: the id, or for a model saved
 before this rule, the name it still serves until its next update switches it to the id.
 
-A placed model's status names its clusters and, separately, where they are:
+A placed model's status names its clusters:
 
 ```json
 "status": {
   "placement": {
     "number_of_selected_clusters": 2,
-    "selected_clusters": ["site-a", "site-b"],
-    "locations": ["us-east"]
+    "selected_clusters": ["site-a", "site-b"]
   }
 }
 ```
@@ -868,10 +867,11 @@ pull its image or finds no GPU also shows as `STARTING`, because Argo CD keeps
 only KServe's `Ready` message, which then still says the Deployment is below
 its minimum availability.
 
-`selected_clusters` holds cluster names, the values `spec.placement` takes.
-`locations` holds the distinct values of those clusters' `location` label;
-several clusters can share one, so it can't be turned back into clusters, and
-a placement that names a location is `InvalidArgument`.
+`selected_clusters` holds cluster names, the values `spec.placement` takes; a
+placement that names anything else, such as a cluster's `location` label, is
+`InvalidArgument`. `locations` is deprecated and always empty: it held the
+clusters' `location` labels, which no client read. Clusters/List has each
+cluster's labels and `status.location`.
 
 Without `placement`, the model is on no cluster (only its catalog entry is
 delivered). Gateway defaults to

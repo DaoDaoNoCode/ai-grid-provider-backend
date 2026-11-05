@@ -597,12 +597,12 @@ message ModelPlacementStatus {
   repeated string selected_clusters = 2;
   // Placement conditions when present.
   repeated Condition conditions = 3;
-  // Unique sorted values of the `location` label of the selected clusters
-  // (P8): where they are, not which clusters they are. Several clusters can
-  // share one location, so these are not cluster names and a placement can't
-  // name them; use selected_clusters for that. A selected cluster without a
-  // location label adds nothing. Output only.
-  repeated string locations = 4;
+  // Deprecated: always empty. It held the `location` labels of the selected
+  // clusters, which no client reads; use selected_clusters, the cluster names,
+  // and Clusters/List for where each cluster is. It is removed once its
+  // clients have moved (docs/API_CONTRACT.md, "Expand, migrate, contract").
+  // Output only.
+  repeated string locations = 4 [deprecated = true];
 }
 
 // ManifestWorkReplicaSet observed state.
