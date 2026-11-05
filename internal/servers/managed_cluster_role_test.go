@@ -6,6 +6,7 @@ import (
 	"maps"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -1058,47 +1059,109 @@ func (f *fakeSubscriptionSearch) Resources(_ context.Context, kind, apigroup, cl
 // the cluster, the catalog's still refuse (a subscription committed but not
 // delivered yet, or a cluster whose collector isn't reporting). Search
 // failing is Unavailable, as for a catalog that can't be read.
+//
+// The console lists and deletes only the catalog's subscriptions, so the
+// message tells those Search finds with a catalog file from the others, and
+// offers deleting only the former in the console. A catalog that can't be
+// read leaves the refusal as it is, worded without saying which is which.
 func TestUpdateClusterRoleLiveSubscriptions(t *testing.T) {
 	t.Parallel()
 	const tenantSub = "tenant-42c3e46f-2477-44d7-a85b-d3b43f6b31fa-users"
 	for _, tc := range []struct {
-		name    string
-		search  *fakeSubscriptionSearch
-		catalog []string // subscriptions in the catalog
-		request *aigridv1.ClustersUpdateRequest
-		want    connect.Code
-		message string
+		name       string
+		search     *fakeSubscriptionSearch
+		catalog    []string // subscriptions in the catalog
+		catalogErr error    // the catalog can't be read
+		request    *aigridv1.ClustersUpdateRequest
+		want       connect.Code
+		message    string
+		// noConsoleDelete: none of the subscriptions is the console's, so the
+		// message must not offer deleting one.
+		noConsoleDelete bool
 	}{
 		{
-			name:    "removal with an organization's subscription on the cluster and an empty catalog",
-			search:  &fakeSubscriptionSearch{subscriptions: map[string][]string{"site-a": {tenantSub}}},
-			request: labelsUpdate("site-a", removeLabels("combined")),
-			want:    connect.CodeFailedPrecondition,
-			message: `Cluster "site-a" serves ingress for 1 subscription (` + tenantSub + `). Removing it from AI Grid deletes its copy of that subscription, and its API keys are then revoked on every cluster. Delete the subscription first, or keep the cluster in AI Grid.`,
+			name:            "removal with an organization's subscription on the cluster and an empty catalog",
+			search:          &fakeSubscriptionSearch{subscriptions: map[string][]string{"site-a": {tenantSub}}},
+			request:         labelsUpdate("site-a", removeLabels("combined")),
+			want:            connect.CodeFailedPrecondition,
+			message:         `Cluster "site-a" serves ingress for 1 subscription (` + tenantSub + `). Removing it from AI Grid deletes its copy of that subscription, and its API keys are then revoked on every cluster. The subscription isn't managed in the console: first remove or move it in the GitOps repository that delivers it, or keep the cluster in AI Grid.`,
+			noConsoleDelete: true,
 		},
 		{
-			name:    "role change with an organization's subscription on the cluster and an empty catalog",
-			search:  &fakeSubscriptionSearch{subscriptions: map[string][]string{"site-a": {tenantSub}}},
-			request: labelsUpdate("site-a", roleLabels("inference")),
-			want:    connect.CodeFailedPrecondition,
-			message: `Cluster "site-a" serves ingress for 1 subscription (` + tenantSub + `). Changing its role turns MaaS off there, which can revoke every API key in AI Grid. Delete the subscription first, or keep the ingress or combined role.`,
+			name:            "role change with an organization's subscription on the cluster and an empty catalog",
+			search:          &fakeSubscriptionSearch{subscriptions: map[string][]string{"site-a": {tenantSub}}},
+			request:         labelsUpdate("site-a", roleLabels("inference")),
+			want:            connect.CodeFailedPrecondition,
+			message:         `Cluster "site-a" serves ingress for 1 subscription (` + tenantSub + `). Changing its role turns MaaS off there, which can revoke every API key in AI Grid. The subscription isn't managed in the console: first remove or move it in the GitOps repository that delivers it, or keep the ingress or combined role.`,
+			noConsoleDelete: true,
 		},
 		{
-			name:    "the role removed with an organization's subscription on the cluster",
-			search:  &fakeSubscriptionSearch{subscriptions: map[string][]string{"site-a": {tenantSub}}},
-			request: labelsUpdate("site-a", map[string]string{"ai-grid/enabled": "true", "location": "paris"}),
-			want:    connect.CodeFailedPrecondition,
-			message: `Cluster "site-a" serves ingress for 1 subscription (` + tenantSub + `). Removing its role deletes its copy of that subscription, and its API keys are then revoked on every cluster. Delete the subscription first, or keep the ingress or combined role.`,
+			name:            "the role removed with an organization's subscription on the cluster",
+			search:          &fakeSubscriptionSearch{subscriptions: map[string][]string{"site-a": {tenantSub}}},
+			request:         labelsUpdate("site-a", map[string]string{"ai-grid/enabled": "true", "location": "paris"}),
+			want:            connect.CodeFailedPrecondition,
+			message:         `Cluster "site-a" serves ingress for 1 subscription (` + tenantSub + `). Removing its role deletes its copy of that subscription, and its API keys are then revoked on every cluster. The subscription isn't managed in the console: first remove or move it in the GitOps repository that delivers it, or keep the ingress or combined role.`,
+			noConsoleDelete: true,
 		},
 		{
 			name: "Search's subscriptions are named, not the catalog's",
 			search: &fakeSubscriptionSearch{subscriptions: map[string][]string{
 				"site-a": {"sub-c", tenantSub, "sub-a", "sub-b", "sub-d", "sub-e"},
 			}},
-			catalog: []string{"sub-z"},
+			catalog:         []string{"sub-z"},
+			request:         labelsUpdate("site-a", roleLabels("inference")),
+			want:            connect.CodeFailedPrecondition,
+			message:         `Cluster "site-a" serves ingress for 6 subscriptions (sub-a, sub-b, sub-c, sub-d, sub-e and 1 more). Changing its role turns MaaS off there, which can revoke every API key in AI Grid. The subscriptions aren't managed in the console: first remove or move them in the GitOps repository that delivers them, or keep the ingress or combined role.`,
+			noConsoleDelete: true,
+		},
+		{
+			name:    "Search's subscriptions all in the catalog",
+			search:  &fakeSubscriptionSearch{subscriptions: map[string][]string{"site-a": {"sub-b", "sub-a"}}},
+			catalog: []string{"sub-a", "sub-b", "sub-z"},
+			request: labelsUpdate("site-a", removeLabels("combined")),
+			want:    connect.CodeFailedPrecondition,
+			message: `Cluster "site-a" serves ingress for 2 subscriptions (sub-a, sub-b). Removing it from AI Grid deletes its copies of those subscriptions, and their API keys are then revoked on every cluster. Delete the subscriptions first, or keep the cluster in AI Grid.`,
+		},
+		{
+			name:    "one in the catalog and one outside it",
+			search:  &fakeSubscriptionSearch{subscriptions: map[string][]string{"site-a": {tenantSub, "sub-a"}}},
+			catalog: []string{"sub-a"},
+			request: labelsUpdate("site-a", removeLabels("combined")),
+			want:    connect.CodeFailedPrecondition,
+			message: `Cluster "site-a" serves ingress for 2 subscriptions: 1 managed in the console (sub-a) and 1 managed outside it (` + tenantSub + `). Removing it from AI Grid deletes its copies of those subscriptions, and their API keys are then revoked on every cluster. First delete the one in the console, and remove or move the other in the GitOps repository that delivers it, or keep the cluster in AI Grid.`,
+		},
+		{
+			name: "several in the catalog and several outside it",
+			search: &fakeSubscriptionSearch{subscriptions: map[string][]string{
+				"site-a": {"sub-c", tenantSub, "sub-a", "sub-b", "tenant-org-users"},
+			}},
+			catalog: []string{"sub-a", "sub-b", "sub-c", "sub-z"},
 			request: labelsUpdate("site-a", roleLabels("inference")),
 			want:    connect.CodeFailedPrecondition,
-			message: `Cluster "site-a" serves ingress for 6 subscriptions (sub-a, sub-b, sub-c, sub-d, sub-e and 1 more). Changing its role turns MaaS off there, which can revoke every API key in AI Grid. Delete the subscriptions first, or keep the ingress or combined role.`,
+			message: `Cluster "site-a" serves ingress for 5 subscriptions: 3 managed in the console (sub-a, sub-b, sub-c) and 2 managed outside it (` + tenantSub + `, tenant-org-users). Changing its role turns MaaS off there, which can revoke every API key in AI Grid. First delete those in the console, and remove or move the others in the GitOps repository that delivers them, or keep the ingress or combined role.`,
+		},
+		{
+			name:       "the catalog can't be read to tell one subscription's source",
+			search:     &fakeSubscriptionSearch{subscriptions: map[string][]string{"site-a": {tenantSub}}},
+			catalogErr: errors.New("fetch: host unreachable"),
+			request:    labelsUpdate("site-a", removeLabels("combined")),
+			want:       connect.CodeFailedPrecondition,
+			message:    `Cluster "site-a" serves ingress for 1 subscription (` + tenantSub + `). Removing it from AI Grid deletes its copy of that subscription, and its API keys are then revoked on every cluster. Delete the subscription first, where it is managed (in the console, or in the GitOps repository that delivers it), or keep the cluster in AI Grid.`,
+		},
+		{
+			name:       "the catalog can't be read to tell several subscriptions' sources",
+			search:     &fakeSubscriptionSearch{subscriptions: map[string][]string{"site-a": {tenantSub, "sub-a"}}},
+			catalogErr: errors.New("fetch: host unreachable"),
+			request:    labelsUpdate("site-a", roleLabels("inference")),
+			want:       connect.CodeFailedPrecondition,
+			message:    `Cluster "site-a" serves ingress for 2 subscriptions (sub-a, ` + tenantSub + `). Changing its role turns MaaS off there, which can revoke every API key in AI Grid. Delete the subscriptions first, where each is managed (in the console, or in the GitOps repository that delivers it), or keep the ingress or combined role.`,
+		},
+		{
+			name:       "Search has none and the catalog can't be read",
+			search:     &fakeSubscriptionSearch{},
+			catalogErr: errors.New("fetch: host unreachable"),
+			request:    labelsUpdate("site-a", removeLabels("combined")),
+			want:       connect.CodeUnavailable,
 		},
 		{
 			name:    "Search unavailable",
@@ -1146,11 +1209,15 @@ func TestUpdateClusterRoleLiveSubscriptions(t *testing.T) {
 			ctx := context.Background()
 			writer := newRoleCatalog()
 			createSubscriptions(t, writer, tc.catalog...)
+			var catalog catalogReader = writer
+			if tc.catalogErr != nil {
+				catalog = unreadableCatalog{err: tc.catalogErr}
+			}
 			// site-b serves ingress, so neither the last ingress rule nor
 			// the grid's last member applies.
 			server, err := NewClustersServer().
 				SetDynamicClient(newManagedClusterClient(gridCluster("site-a", "combined"), gridCluster("site-b", "combined"))).
-				SetCatalog(writer).SetSubscriptionSearch(tc.search).Build()
+				SetCatalog(catalog).SetSubscriptionSearch(tc.search).Build()
 			if err != nil {
 				t.Fatalf("Build() error = %v", err)
 			}
@@ -1168,6 +1235,9 @@ func TestUpdateClusterRoleLiveSubscriptions(t *testing.T) {
 			if tc.message != "" {
 				assertConnectMessage(t, err, tc.message)
 			}
+			if tc.noConsoleDelete {
+				assertNoConsoleDelete(t, err)
+			}
 			after, err := server.Get(ctx, &aigridv1.ClustersGetRequest{Id: "site-a"})
 			if err != nil {
 				t.Fatalf("Get() error = %v", err)
@@ -1179,8 +1249,30 @@ func TestUpdateClusterRoleLiveSubscriptions(t *testing.T) {
 	}
 }
 
+// unreadableCatalog is a catalog that is configured but can't be read: every
+// FreshHead fails with err.
+type unreadableCatalog struct{ err error }
+
+func (c unreadableCatalog) FreshHead(context.Context) (gitops.Snapshot, error) {
+	return nil, c.err
+}
+
+// assertNoConsoleDelete fails unless err's message offers no deletion: it is
+// for subscriptions the console can't delete.
+func assertNoConsoleDelete(t *testing.T, err error) {
+	t.Helper()
+	var connectErr *connect.Error
+	if !errors.As(err, &connectErr) {
+		t.Fatalf("error = %v (%T), want *connect.Error", err, err)
+	}
+	if msg := connectErr.Message(); strings.Contains(msg, "Delete") || strings.Contains(msg, "delete those") || strings.Contains(msg, "delete the one") {
+		t.Errorf("Connect message = %q, want no offer to delete a subscription in the console", msg)
+	}
+}
+
 // Without a catalog (a backend started without AI_GRID_GIT_URL), Search's
-// subscriptions still refuse: they don't come from the catalog.
+// subscriptions still refuse: they don't come from the catalog, so none is
+// the console's to delete.
 func TestUpdateClusterRoleLiveSubscriptionsWithoutCatalog(t *testing.T) {
 	t.Parallel()
 	server, err := NewClustersServer().
@@ -1191,4 +1283,6 @@ func TestUpdateClusterRoleLiveSubscriptionsWithoutCatalog(t *testing.T) {
 	}
 	_, err = server.Update(context.Background(), labelsUpdate("site-a", roleLabels("inference")))
 	assertConnectCode(t, err, connect.CodeFailedPrecondition)
+	assertConnectMessage(t, err, `Cluster "site-a" serves ingress for 1 subscription (tenant-org-users). Changing its role turns MaaS off there, which can revoke every API key in AI Grid. The subscription isn't managed in the console: first remove or move it in the GitOps repository that delivers it, or keep the ingress or combined role.`)
+	assertNoConsoleDelete(t, err)
 }

@@ -160,7 +160,7 @@ func (s *ClustersServer) checkRoleChange(ctx context.Context, id string, current
 	}
 	catalog := &catalogHead{reader: s.catalog}
 	if servesIngress(from) && (leaves || !servesIngress(to)) {
-		if err := checkNoSubscriptions(ctx, id, s.search, catalog, leaves, to); err != nil {
+		if err := s.checkNoSubscriptions(ctx, id, catalog, leaves, to); err != nil {
 			return err
 		}
 		if err := s.checkOtherIngress(ctx, id, leaves); err != nil {
@@ -218,7 +218,9 @@ func (s *ClustersServer) checkOtherIngress(ctx context.Context, id string, leave
 // repository a model or a subscription could have been written to, so
 // nothing is refused. A repository that is configured but can't be read
 // (not cloned yet, a failed fetch) is an error, which the checks answer as
-// Unavailable: the change waits until the catalog can be checked.
+// Unavailable: the change waits until the catalog can be checked. The one
+// exception is the wording of a refusal ACM Search already decided
+// (checkNoSubscriptions).
 type catalogHead struct {
 	reader catalogReader
 	read   bool
@@ -247,29 +249,82 @@ func (c *catalogHead) get(ctx context.Context) (gitops.Snapshot, error) {
 // refuse instead, the files catalog/subscriptions/<id>.yaml
 // (subscriptionsGitDir) that Argo CD applies to every ingress cluster: a
 // subscription committed but not delivered yet, or a cluster whose Search
-// collector isn't reporting, still counts. The message names the
-// subscriptions of whichever source found them. A Search query that fails
-// is Unavailable, as a catalog that can't be read is: the change waits until
-// the subscriptions can be checked.
-func checkNoSubscriptions(ctx context.Context, id string, search resourceSearch, catalog *catalogHead, leaves bool, to string) error {
-	names, err := clusterSubscriptions(ctx, id, search)
+// collector isn't reporting, still counts. A Search query that fails is
+// Unavailable, as a catalog that can't be read for that fallback is: the
+// change waits until the subscriptions can be checked.
+//
+// The message names the subscriptions of whichever source found them and
+// says where they are managed, because the console lists and deletes only
+// the catalog's (Subscriptions/List and Delete). Of the subscriptions Search
+// finds, those with a catalog file (a MaaSSubscription of the file's name)
+// are the console's; the others are delivered from elsewhere, such as each
+// organization's tenant-<org-id>-users (ai-grid-cloud/ai-grid-tenant,
+// apps/acm-models/maas/policies/20-tenant-<org-id>-maas-policies.yaml).
+// Without a catalog, none are the console's. A catalog that can't be read
+// doesn't make the refusal Unavailable, since Search's answer alone refuses:
+// the message then doesn't say which subscription is managed where. The
+// catalog fallback's subscriptions are all the console's.
+func (s *ClustersServer) checkNoSubscriptions(ctx context.Context, id string, catalog *catalogHead, leaves bool, to string) error {
+	names, err := clusterSubscriptions(ctx, id, s.search)
 	if err != nil {
 		return err
 	}
-	if len(names) == 0 {
-		if names, err = catalogSubscriptions(ctx, id, catalog); err != nil {
-			return err
-		}
+	var held heldSubscriptions
+	if len(names) > 0 {
+		held = s.splitByCatalog(ctx, id, names, catalog)
+	} else if held.inConsole, err = catalogSubscriptions(ctx, id, catalog); err != nil {
+		return err
 	}
-	if len(names) == 0 {
+	if held.count() == 0 {
 		return nil
 	}
-	// The console shows this message to provider admins as it is, so it says
-	// why for what the admin is doing (checkRoleChange, rule 1).
-	count, them := fmt.Sprintf("%d subscriptions", len(names)), "the subscriptions"
+	return held.refusal(id, leaves, to)
+}
+
+// heldSubscriptions are the subscriptions that hold a cluster in ingress, by
+// where they are managed: inConsole have a catalog file, outside don't, and
+// unknown holds them all when the catalog couldn't be read to tell.
+type heldSubscriptions struct {
+	inConsole, outside, unknown []string
+}
+
+func (h heldSubscriptions) count() int {
+	return len(h.inConsole) + len(h.outside) + len(h.unknown)
+}
+
+// splitByCatalog sorts the subscriptions Search found on cluster id by
+// whether the catalog has a file for them, catalog/subscriptions/<name>.yaml.
+// It reads the head the other checks of the update share.
+func (s *ClustersServer) splitByCatalog(ctx context.Context, id string, names []string, catalog *catalogHead) heldSubscriptions {
+	head, err := catalog.get(ctx)
+	var files []string
+	if err == nil && head != nil {
+		files, err = head.List(subscriptionsGitDir)
+	}
+	if err != nil {
+		s.logger.WarnContext(ctx, "read the catalog's subscriptions for a refusal", "cluster", id, "error", err)
+		return heldSubscriptions{unknown: names}
+	}
+	var held heldSubscriptions
+	for _, name := range names {
+		if slices.Contains(files, name+".yaml") {
+			held.inConsole = append(held.inConsole, name)
+		} else {
+			held.outside = append(held.outside, name)
+		}
+	}
+	return held
+}
+
+// refusal is the FailedPrecondition for cluster id. The console shows its
+// message to provider admins as it is, so it says why for what the admin is
+// doing (checkRoleChange, rule 1), and where to delete the subscriptions.
+func (h heldSubscriptions) refusal(id string, leaves bool, to string) error {
+	total := h.count()
+	count, the, them, isnt := fmt.Sprintf("%d subscriptions", total), "the subscriptions", "them", "aren't"
 	copies := "its copies of those subscriptions, and their API keys are"
-	if len(names) == 1 {
-		count, them = "1 subscription", "the subscription"
+	if total == 1 {
+		count, the, them, isnt = "1 subscription", "the subscription", "it", "isn't"
 		copies = "its copy of that subscription, and its API keys are"
 	}
 	why := "Changing its role turns MaaS off there, which can revoke every API key in AI Grid."
@@ -281,9 +336,35 @@ func checkNoSubscriptions(ctx context.Context, id string, search resourceSearch,
 	case to == "":
 		why = fmt.Sprintf("Removing its role deletes %s then revoked on every cluster.", copies)
 	}
-	return connect.Errorf(connect.CodeFailedPrecondition,
-		"Cluster %q serves ingress for %s (%s). %s Delete %s first, or %s.",
-		id, count, nameIDs(names), why, them, keep)
+	var serves, act string
+	switch {
+	case len(h.unknown) > 0:
+		serves = fmt.Sprintf("%s (%s)", count, nameIDs(h.unknown))
+		where := "where it is managed (in the console, or in the GitOps repository that delivers it)"
+		if total > 1 {
+			where = "where each is managed (in the console, or in the GitOps repository that delivers it)"
+		}
+		act = fmt.Sprintf("Delete %s first, %s, or %s.", the, where, keep)
+	case len(h.inConsole) > 0 && len(h.outside) > 0:
+		serves = fmt.Sprintf("%s: %d managed in the console (%s) and %d managed outside it (%s)",
+			count, len(h.inConsole), nameIDs(h.inConsole), len(h.outside), nameIDs(h.outside))
+		console, other := "the one", "the other in the GitOps repository that delivers it"
+		if len(h.inConsole) > 1 {
+			console = "those"
+		}
+		if len(h.outside) > 1 {
+			other = "the others in the GitOps repository that delivers them"
+		}
+		act = fmt.Sprintf("First delete %s in the console, and remove or move %s, or %s.", console, other, keep)
+	case len(h.outside) > 0:
+		serves = fmt.Sprintf("%s (%s)", count, nameIDs(h.outside))
+		act = fmt.Sprintf("The %s %s managed in the console: first remove or move %s in the GitOps repository that delivers %s, or %s.",
+			strings.TrimPrefix(the, "the "), isnt, them, them, keep)
+	default:
+		serves = fmt.Sprintf("%s (%s)", count, nameIDs(h.inConsole))
+		act = fmt.Sprintf("Delete %s first, or %s.", the, keep)
+	}
+	return connect.Errorf(connect.CodeFailedPrecondition, "Cluster %q serves ingress for %s. %s %s", id, serves, why, act)
 }
 
 // clusterSubscriptions returns the names of the MaaSSubscriptions ACM Search
