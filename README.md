@@ -362,9 +362,8 @@ For models:
   switch every model at a time you choose, save each one once, for example
   by re-saving its display name; a one-time migration is a follow-up.
 - `status.placement` lists the clusters the file places the model on
-  (`selected_clusters`, cluster names), and the distinct values of their
-  `location` labels (`locations`, read from the ManagedClusters; not cluster
-  names). `status.clusters` has one entry per placed cluster: `READY`,
+  (`selected_clusters`, cluster names); its deprecated `locations` is always
+  empty. `status.clusters` has one entry per placed cluster: `READY`,
   reason `Ready`, when the cluster reports the `LLMInferenceService` ready
   (and, on a combined cluster, the `MaaSModelRef` and `ExternalModel` too);
   `FAILED`, reason `Failed`, when one of them is failed; `PENDING`, reason

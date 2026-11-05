@@ -18,6 +18,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -718,8 +719,8 @@ func TestRealCatalogStatusOnFakeHub(t *testing.T) {
 	if !slices.EqualFunc(st.GetClusters(), wantClusters, func(a, b *aigridv1.ModelClusterStatus) bool { return proto.Equal(a, b) }) {
 		t.Fatalf("model status.clusters = %v, want %v", st.GetClusters(), wantClusters)
 	}
-	if got := st.GetPlacement().GetLocations(); !slices.Equal(got, []string{"madrid", "paris"}) {
-		t.Fatalf("model locations = %v", got)
+	if got := st.GetPlacement().GetLocations(); len(got) != 0 {
+		t.Fatalf("model locations = %v, want none (deprecated, always empty)", got)
 	}
 
 	sub, err := subscriptions.Create(ctx, &aigridv1.SubscriptionsCreateRequest{Object: &aigridv1.Subscription{
@@ -855,9 +856,10 @@ func TestRealSubscriptionsTokenWindowOnFakeHub(t *testing.T) {
 }
 
 // The real Models server on the fake hub: ListPlacementClusters and the
-// deprecated ListLocations answer cluster names, status.placement.locations
-// answers location labels, and a placement copied from those labels is
-// InvalidArgument naming them instead of a model deployed nowhere. The stock
+// deprecated ListLocations answer cluster names, status.placement names the
+// placed clusters (locations is deprecated and empty), and a placement on the
+// clusters' location labels is InvalidArgument naming them instead of a model
+// deployed nowhere. The stock
 // fixtures have no ai-grid/role label, so the test adds it the way an admin
 // would, with a merge patch.
 func TestRealModelsPlacementClustersOnFakeHub(t *testing.T) {
@@ -911,11 +913,12 @@ func TestRealModelsPlacementClustersOnFakeHub(t *testing.T) {
 		t.Fatalf("Create() error = %v", err)
 	}
 	st := created.GetObject().GetStatus().GetPlacement()
-	if !slices.Equal(st.GetSelectedClusters(), []string{"site-madrid-1", "site-paris-1"}) || !slices.Equal(st.GetLocations(), []string{"madrid", "paris"}) {
-		t.Fatalf("status.placement = %v, want clusters [site-madrid-1 site-paris-1] at [madrid paris]", st)
+	if !slices.Equal(st.GetSelectedClusters(), []string{"site-madrid-1", "site-paris-1"}) || len(st.GetLocations()) != 0 {
+		t.Fatalf("status.placement = %v, want clusters [site-madrid-1 site-paris-1] and no locations", st)
 	}
 
-	_, err = models.Create(ctx, &aigridv1.ModelsCreateRequest{Object: placed("granite-copy", st.GetLocations()...)})
+	// The two clusters' location labels (fixtures/default/managedclusters.json).
+	_, err = models.Create(ctx, &aigridv1.ModelsCreateRequest{Object: placed("granite-copy", "madrid", "paris")})
 	var connectErr *connect.Error
 	if !errors.As(err, &connectErr) || connectErr.Code() != connect.CodeInvalidArgument {
 		t.Fatalf("Create(placed on the location labels) error = %v, want InvalidArgument", err)
@@ -1172,6 +1175,72 @@ func TestRealClustersServerGPUsFromFakeSearch(t *testing.T) {
 	for _, c := range list.GetItems() {
 		if c.GetStatus().GetGpus() != nil {
 			t.Fatalf("%s has gpus without Search: %v", c.GetId(), c.GetStatus().GetGpus())
+		}
+	}
+}
+
+// The real Models server on the fake hub, through the backend's own dynamic
+// client: a Get or a List sends one ManagedCluster list request, for what the
+// catalog status needs from the clusters (the ingress clusters and each
+// cluster's View link). The deprecated status.placement.locations, always
+// empty, costs no request of its own.
+func TestRealModelsReadsListManagedClustersOnceOnFakeHub(t *testing.T) {
+	h, srv := startHub(t)
+	var lists atomic.Int32
+	cfg := &rest.Config{Host: srv.URL, BearerToken: h.ServiceAccountToken(), QPS: 1000, Burst: 1000,
+		WrapTransport: func(rt http.RoundTripper) http.RoundTripper {
+			return roundTripFunc(func(r *http.Request) (*http.Response, error) {
+				if r.Method == http.MethodGet && r.URL.Path == "/apis/cluster.open-cluster-management.io/v1/managedclusters" {
+					lists.Add(1)
+				}
+				return rt.RoundTrip(r)
+			})
+		}}
+	client, err := dynamic.NewForConfig(cfg)
+	if err != nil {
+		t.Fatalf("dynamic.NewForConfig() error = %v", err)
+	}
+	models, err := servers.NewModelsServer().SetLogger(slog.New(slog.DiscardHandler)).
+		SetWriter(gitops.NewMemoryWriter(nil)).SetCatalogStatus(servers.NewCatalogStatusReader(client, servers.CatalogApps{})).
+		SetDynamicClient(client).Build()
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+	ctx := context.Background()
+	replicas := int32(1)
+	if _, err := models.Create(ctx, &aigridv1.ModelsCreateRequest{Object: &aigridv1.Model{Id: "granite-3b", Spec: &aigridv1.ModelSpec{
+		Model:    &aigridv1.ModelSource{Uri: "hf://ibm-granite/granite-3b"},
+		Replicas: &replicas,
+		Placement: &aigridv1.ModelPlacement{LabelSelector: &aigridv1.ModelLabelSelector{
+			MatchExpressions: []*aigridv1.ModelLabelSelectorRequirement{{Key: "name", Operator: "In", Values: []string{"site-madrid-1", "site-paris-1"}}},
+		}},
+	}}}); err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+
+	lists.Store(0)
+	got, err := models.Get(ctx, &aigridv1.ModelsGetRequest{Id: "granite-3b"})
+	if err != nil {
+		t.Fatalf("Get() error = %v", err)
+	}
+	if n := lists.Load(); n != 1 {
+		t.Errorf("Get listed the ManagedClusters %d times, want 1", n)
+	}
+	lists.Store(0)
+	list, err := models.List(ctx, &aigridv1.ModelsListRequest{})
+	if err != nil {
+		t.Fatalf("List() error = %v", err)
+	}
+	if n := lists.Load(); n != 1 {
+		t.Errorf("List listed the ManagedClusters %d times, want 1", n)
+	}
+	for op, m := range map[string]*aigridv1.Model{"Get": got.GetObject(), "List": list.GetItems()[0]} {
+		placement := m.GetStatus().GetPlacement()
+		if !slices.Equal(placement.GetSelectedClusters(), []string{"site-madrid-1", "site-paris-1"}) || len(placement.GetLocations()) != 0 {
+			t.Errorf("%s status.placement = %v, want clusters [site-madrid-1 site-paris-1] and no locations", op, placement)
+		}
+		if len(m.GetStatus().GetClusters()) != 2 {
+			t.Errorf("%s status.clusters = %v, want site-madrid-1 and site-paris-1", op, m.GetStatus().GetClusters())
 		}
 	}
 }

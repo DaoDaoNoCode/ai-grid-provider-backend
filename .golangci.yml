@@ -40,6 +40,13 @@ linters:
       - linters:
           - staticcheck
         text: 'SA1019: .*\.(Get)?Name is deprecated: (a model is served as its id|Marked as deprecated in ai_grid/v1/model_type\.proto)'
+      # ModelPlacementStatus.locations is deprecated and always empty
+      # (proto/ai_grid/v1/model_type.proto). Only tests read it, to check that
+      # it stays empty.
+      - linters:
+          - staticcheck
+        path: _test\.go
+        text: 'SA1019: .*\.GetLocations is deprecated: Marked as deprecated in ai_grid/v1/model_type\.proto'
 
 issues:
   uniq-by-line: true

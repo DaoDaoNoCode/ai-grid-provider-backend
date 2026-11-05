@@ -3,6 +3,7 @@ package servers
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"slices"
 	"strings"
 	"testing"
@@ -19,6 +20,7 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/client-go/dynamic/fake"
 	clienttesting "k8s.io/client-go/testing"
 )
 
@@ -387,35 +389,57 @@ func kustomizationResources(t *testing.T, writer gitops.Writer, p string) []stri
 	return resources
 }
 
-// Git mode reads the ManagedClusters only for status.placement.locations, from
-// each placed cluster's location label, for ListPlacementClusters and
-// ListLocations, and to check the clusters a placement adds.
-func TestModelsGitLocations(t *testing.T) {
+// status.placement.locations is deprecated and always empty, even when the
+// placed clusters carry a location label: a model's clusters are
+// status.placement.selected_clusters, which Create, Get, List and Update all
+// fill.
+func TestModelsGitLeavesPlacementLocationsEmpty(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	client := newManagedClusterClient(
 		managedCluster("site-a", map[string]string{"location": "us-east"}, true),
 		managedCluster("site-b", map[string]string{"location": "us-west"}, true),
-		managedCluster("site-c", map[string]string{"location": "us-east"}, true),
 	)
 	srv, err := NewModelsServer().SetWriter(gitops.NewMemoryWriter(nil)).SetDynamicClient(client).Build()
 	if err != nil {
 		t.Fatalf("Build() error = %v", err)
 	}
-	created, err := srv.Create(ctx, &aigridv1.ModelsCreateRequest{Object: gitSampleModel("sim", "site-a", "site-c", "site-b")})
+	created, err := srv.Create(ctx, &aigridv1.ModelsCreateRequest{Object: gitSampleModel("sim", "site-a", "site-b")})
 	if err != nil {
 		t.Fatalf("Create() error = %v", err)
 	}
-	want := []string{"us-east", "us-west"}
-	if got := created.GetObject().GetStatus().GetPlacement().GetLocations(); !slices.Equal(got, want) {
-		t.Fatalf("Create locations = %v, want %v", got, want)
+	got, err := srv.Get(ctx, &aigridv1.ModelsGetRequest{Id: "sim"})
+	if err != nil {
+		t.Fatalf("Get() error = %v", err)
 	}
 	list, err := srv.List(ctx, &aigridv1.ModelsListRequest{})
 	if err != nil {
 		t.Fatalf("List() error = %v", err)
 	}
-	if got := list.GetItems()[0].GetStatus().GetPlacement().GetLocations(); !slices.Equal(got, want) {
-		t.Fatalf("List locations = %v, want %v", got, want)
+	updated, err := srv.Update(ctx, &aigridv1.ModelsUpdateRequest{
+		Object:     gitSampleModel("sim", "site-b"),
+		UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.placement"}},
+	})
+	if err != nil {
+		t.Fatalf("Update() error = %v", err)
+	}
+	for _, tc := range []struct {
+		op    string
+		model *aigridv1.Model
+		want  []string
+	}{
+		{"Create", created.GetObject(), []string{"site-a", "site-b"}},
+		{"Get", got.GetObject(), []string{"site-a", "site-b"}},
+		{"List", list.GetItems()[0], []string{"site-a", "site-b"}},
+		{"Update", updated.GetObject(), []string{"site-b"}},
+	} {
+		placement := tc.model.GetStatus().GetPlacement()
+		if !slices.Equal(placement.GetSelectedClusters(), tc.want) || placement.GetNumberOfSelectedClusters() != int32(len(tc.want)) {
+			t.Errorf("%s selected clusters = %v (%d), want %v", tc.op, placement.GetSelectedClusters(), placement.GetNumberOfSelectedClusters(), tc.want)
+		}
+		if len(placement.GetLocations()) != 0 {
+			t.Errorf("%s locations = %v, want none (deprecated, always empty)", tc.op, placement.GetLocations())
+		}
 	}
 
 	// Without a client there are no locations or placement clusters, and no
@@ -429,6 +453,65 @@ func TestModelsGitLocations(t *testing.T) {
 	if err != nil || len(clusters.GetClusters()) != 0 {
 		t.Fatalf("ListPlacementClusters() without a client = %v, %v", clusters, err)
 	}
+}
+
+// A Models Get or List lists the ManagedClusters only for what the catalog
+// status needs from them (clusterFacts: the ingress clusters and each
+// cluster's View link), once per call. Without a catalog status reader nothing
+// needs them, and the call lists none.
+func TestModelsGitReadsListManagedClustersOnlyForStatus(t *testing.T) {
+	t.Parallel()
+	for name, tc := range map[string]struct {
+		status bool
+		want   int
+	}{
+		"without catalog status": {status: false, want: 0},
+		"with catalog status":    {status: true, want: 1},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			ctx := context.Background()
+			client := newAppClient(managedCluster("site-a", map[string]string{"location": "us-east"}, true))
+			builder := NewModelsServer().SetLogger(slog.New(slog.DiscardHandler)).
+				SetWriter(gitops.NewMemoryWriter(nil)).SetDynamicClient(client)
+			if tc.status {
+				builder.SetCatalogStatus(NewCatalogStatusReader(client, CatalogApps{}))
+			}
+			srv, err := builder.Build()
+			if err != nil {
+				t.Fatalf("Build() error = %v", err)
+			}
+			if _, err := srv.Create(ctx, &aigridv1.ModelsCreateRequest{Object: gitSampleModel("sim", "site-a")}); err != nil {
+				t.Fatalf("Create() error = %v", err)
+			}
+			for _, call := range []struct {
+				op  string
+				run func() error
+			}{
+				{"Get", func() error { _, err := srv.Get(ctx, &aigridv1.ModelsGetRequest{Id: "sim"}); return err }},
+				{"List", func() error { _, err := srv.List(ctx, &aigridv1.ModelsListRequest{}); return err }},
+			} {
+				client.ClearActions()
+				if err := call.run(); err != nil {
+					t.Fatalf("%s() error = %v", call.op, err)
+				}
+				if got := managedClusterLists(client); got != tc.want {
+					t.Errorf("%s listed the ManagedClusters %d times, want %d", call.op, got, tc.want)
+				}
+			}
+		})
+	}
+}
+
+// managedClusterLists counts the ManagedCluster lists client has recorded.
+func managedClusterLists(client *fake.FakeDynamicClient) int {
+	n := 0
+	for _, action := range client.Actions() {
+		if action.GetVerb() == "list" && action.GetResource() == managedClustersResource {
+			n++
+		}
+	}
+	return n
 }
 
 // ListPlacementClusters answers the names of the clusters a model can be
@@ -488,10 +571,9 @@ func TestModelsListPlacementClustersAnswersClusterNames(t *testing.T) {
 	}
 }
 
-// A placement names clusters, and status.placement.locations holds their
-// location labels. A create or update that adds a name no ManagedCluster has
-// (such as a location label copied from status.placement.locations) is
-// InvalidArgument naming it, instead of a model deployed nowhere. A cluster the
+// A placement names clusters, not their location labels. A create or update
+// that adds a name no ManagedCluster has (such as a cluster's location label)
+// is InvalidArgument naming it, instead of a model deployed nowhere. A cluster the
 // model is already on is not checked again, so a model on a cluster that has
 // since left the hub can still be changed or moved off it.
 func TestModelsGitPlacementNamesKnownClusters(t *testing.T) {
@@ -506,17 +588,12 @@ func TestModelsGitPlacementNamesKnownClusters(t *testing.T) {
 		t.Fatalf("Build() error = %v", err)
 	}
 
-	created, err := srv.Create(ctx, &aigridv1.ModelsCreateRequest{Object: gitSampleModel("sim", "site-a", "site-b")})
-	if err != nil {
+	if _, err := srv.Create(ctx, &aigridv1.ModelsCreateRequest{Object: gitSampleModel("sim", "site-a", "site-b")}); err != nil {
 		t.Fatalf("Create() error = %v", err)
 	}
-	locations := created.GetObject().GetStatus().GetPlacement().GetLocations()
-	if !slices.Equal(locations, []string{"us-east"}) {
-		t.Fatalf("Create locations = %v, want [us-east]", locations)
-	}
 
-	// The location labels are not cluster names.
-	_, err = srv.Create(ctx, &aigridv1.ModelsCreateRequest{Object: gitSampleModel("copy", locations...)})
+	// The clusters' location label is not a cluster name.
+	_, err = srv.Create(ctx, &aigridv1.ModelsCreateRequest{Object: gitSampleModel("copy", "us-east")})
 	assertConnectCode(t, err, connect.CodeInvalidArgument)
 	if got := unknownPlacementClusters(t, err); !slices.Equal(got, []string{"us-east"}) {
 		t.Fatalf("Create(us-east) unknown clusters = %v, want [us-east] (%v)", got, err)

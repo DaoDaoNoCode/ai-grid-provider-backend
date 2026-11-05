@@ -47,9 +47,8 @@ type ModelsClient interface {
 	// Deprecated: Do not use.
 	// Deprecated: use ListPlacementClusters, which answers the same list as
 	// `clusters`. Despite its name, this RPC answers cluster names, not values
-	// of the cluster's `location` label (those are in a model's
-	// status.placement.locations). It is removed once its clients have moved
-	// (docs/API_CONTRACT.md, "Expand, migrate, contract").
+	// of the cluster's `location` label. It is removed once its clients have
+	// moved (docs/API_CONTRACT.md, "Expand, migrate, contract").
 	ListLocations(ctx context.Context, in *ModelsListLocationsRequest, opts ...grpc.CallOption) (*ModelsListLocationsResponse, error)
 	// Clusters a model can be placed on: unique sorted names of the
 	// ManagedClusters labelled ai-grid/enabled "true" and ai-grid/role
@@ -157,9 +156,8 @@ type ModelsServer interface {
 	// Deprecated: Do not use.
 	// Deprecated: use ListPlacementClusters, which answers the same list as
 	// `clusters`. Despite its name, this RPC answers cluster names, not values
-	// of the cluster's `location` label (those are in a model's
-	// status.placement.locations). It is removed once its clients have moved
-	// (docs/API_CONTRACT.md, "Expand, migrate, contract").
+	// of the cluster's `location` label. It is removed once its clients have
+	// moved (docs/API_CONTRACT.md, "Expand, migrate, contract").
 	ListLocations(context.Context, *ModelsListLocationsRequest) (*ModelsListLocationsResponse, error)
 	// Clusters a model can be placed on: unique sorted names of the
 	// ManagedClusters labelled ai-grid/enabled "true" and ai-grid/role

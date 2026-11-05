@@ -122,6 +122,14 @@ safe.
   field in console #86 before this change merged. **Condition:** a deployment moves its
   backend and console pins together, and never runs a backend at or past #47 with a console
   older than #86. Another client that sends a served name gets `InvalidArgument`.
+- **`ModelPlacementStatus.locations` (2026-11-05).** Deprecated and no longer filled: always
+  empty, where it held the `location` labels of the selected clusters. Filling it cost every
+  Models read a list of all ManagedClusters, and no client reads it: the console reads
+  `selected_clusters` since console #115 (merge a3e560ba), and nothing else in the
+  organization reads the field. The expand step's "the server keeps filling" was skipped
+  for that reason; the field stays in the contract until the contract step removes it.
+  **Condition:** a console older than #115 shows no location labels on a model's page; it
+  doesn't fail.
 
 ### 2. Unstable areas
 
