@@ -1084,7 +1084,7 @@ func TestUpdateClusterRoleLiveSubscriptions(t *testing.T) {
 			search:          &fakeSubscriptionSearch{subscriptions: map[string][]string{"site-a": {tenantSub}}},
 			request:         labelsUpdate("site-a", removeLabels("combined")),
 			want:            connect.CodeFailedPrecondition,
-			message:         `Cluster "site-a" serves ingress for 1 subscription (` + tenantSub + `). Removing it from AI Grid deletes its copy of that subscription, and its API keys are then revoked on every cluster. The subscription isn't managed in the console: first remove or move it in the GitOps repository that delivers it, or keep the cluster in AI Grid.`,
+			message:         `Cluster "site-a" serves ingress for 1 subscription (` + tenantSub + `). Removing it from AI Grid deletes its copy of that subscription, and its API keys are then revoked on every cluster. The subscription isn't managed in the console: first remove it in the GitOps repository that delivers it, or keep the cluster in AI Grid.`,
 			noConsoleDelete: true,
 		},
 		{
@@ -1092,7 +1092,7 @@ func TestUpdateClusterRoleLiveSubscriptions(t *testing.T) {
 			search:          &fakeSubscriptionSearch{subscriptions: map[string][]string{"site-a": {tenantSub}}},
 			request:         labelsUpdate("site-a", roleLabels("inference")),
 			want:            connect.CodeFailedPrecondition,
-			message:         `Cluster "site-a" serves ingress for 1 subscription (` + tenantSub + `). Changing its role turns MaaS off there, which can revoke every API key in AI Grid. The subscription isn't managed in the console: first remove or move it in the GitOps repository that delivers it, or keep the ingress or combined role.`,
+			message:         `Cluster "site-a" serves ingress for 1 subscription (` + tenantSub + `). Changing its role turns MaaS off there, which can revoke every API key in AI Grid. The subscription isn't managed in the console: first remove it in the GitOps repository that delivers it, or keep the ingress or combined role.`,
 			noConsoleDelete: true,
 		},
 		{
@@ -1100,7 +1100,7 @@ func TestUpdateClusterRoleLiveSubscriptions(t *testing.T) {
 			search:          &fakeSubscriptionSearch{subscriptions: map[string][]string{"site-a": {tenantSub}}},
 			request:         labelsUpdate("site-a", map[string]string{"ai-grid/enabled": "true", "location": "paris"}),
 			want:            connect.CodeFailedPrecondition,
-			message:         `Cluster "site-a" serves ingress for 1 subscription (` + tenantSub + `). Removing its role deletes its copy of that subscription, and its API keys are then revoked on every cluster. The subscription isn't managed in the console: first remove or move it in the GitOps repository that delivers it, or keep the ingress or combined role.`,
+			message:         `Cluster "site-a" serves ingress for 1 subscription (` + tenantSub + `). Removing its role deletes its copy of that subscription, and its API keys are then revoked on every cluster. The subscription isn't managed in the console: first remove it in the GitOps repository that delivers it, or keep the ingress or combined role.`,
 			noConsoleDelete: true,
 		},
 		{
@@ -1111,7 +1111,7 @@ func TestUpdateClusterRoleLiveSubscriptions(t *testing.T) {
 			catalog:         []string{"sub-z"},
 			request:         labelsUpdate("site-a", roleLabels("inference")),
 			want:            connect.CodeFailedPrecondition,
-			message:         `Cluster "site-a" serves ingress for 6 subscriptions (sub-a, sub-b, sub-c, sub-d, sub-e and 1 more). Changing its role turns MaaS off there, which can revoke every API key in AI Grid. The subscriptions aren't managed in the console: first remove or move them in the GitOps repository that delivers them, or keep the ingress or combined role.`,
+			message:         `Cluster "site-a" serves ingress for 6 subscriptions (sub-a, sub-b, sub-c, sub-d, sub-e and 1 more). Changing its role turns MaaS off there, which can revoke every API key in AI Grid. The subscriptions aren't managed in the console: first remove them in the GitOps repository that delivers them, or keep the ingress or combined role.`,
 			noConsoleDelete: true,
 		},
 		{
@@ -1128,7 +1128,7 @@ func TestUpdateClusterRoleLiveSubscriptions(t *testing.T) {
 			catalog: []string{"sub-a"},
 			request: labelsUpdate("site-a", removeLabels("combined")),
 			want:    connect.CodeFailedPrecondition,
-			message: `Cluster "site-a" serves ingress for 2 subscriptions: 1 managed in the console (sub-a) and 1 managed outside it (` + tenantSub + `). Removing it from AI Grid deletes its copies of those subscriptions, and their API keys are then revoked on every cluster. First delete the one in the console, and remove or move the other in the GitOps repository that delivers it, or keep the cluster in AI Grid.`,
+			message: `Cluster "site-a" serves ingress for 2 subscriptions: 1 managed in the console (sub-a) and 1 managed outside it (` + tenantSub + `). Removing it from AI Grid deletes its copies of those subscriptions, and their API keys are then revoked on every cluster. First delete the one in the console, and remove the other in the GitOps repository that delivers it, or keep the cluster in AI Grid.`,
 		},
 		{
 			name: "several in the catalog and several outside it",
@@ -1138,7 +1138,7 @@ func TestUpdateClusterRoleLiveSubscriptions(t *testing.T) {
 			catalog: []string{"sub-a", "sub-b", "sub-c", "sub-z"},
 			request: labelsUpdate("site-a", roleLabels("inference")),
 			want:    connect.CodeFailedPrecondition,
-			message: `Cluster "site-a" serves ingress for 5 subscriptions: 3 managed in the console (sub-a, sub-b, sub-c) and 2 managed outside it (` + tenantSub + `, tenant-org-users). Changing its role turns MaaS off there, which can revoke every API key in AI Grid. First delete those in the console, and remove or move the others in the GitOps repository that delivers them, or keep the ingress or combined role.`,
+			message: `Cluster "site-a" serves ingress for 5 subscriptions: 3 managed in the console (sub-a, sub-b, sub-c) and 2 managed outside it (` + tenantSub + `, tenant-org-users). Changing its role turns MaaS off there, which can revoke every API key in AI Grid. First delete those in the console, and remove the others in the GitOps repository that delivers them, or keep the ingress or combined role.`,
 		},
 		{
 			name:       "the catalog can't be read to tell one subscription's source",
@@ -1283,6 +1283,6 @@ func TestUpdateClusterRoleLiveSubscriptionsWithoutCatalog(t *testing.T) {
 	}
 	_, err = server.Update(context.Background(), labelsUpdate("site-a", roleLabels("inference")))
 	assertConnectCode(t, err, connect.CodeFailedPrecondition)
-	assertConnectMessage(t, err, `Cluster "site-a" serves ingress for 1 subscription (tenant-org-users). Changing its role turns MaaS off there, which can revoke every API key in AI Grid. The subscription isn't managed in the console: first remove or move it in the GitOps repository that delivers it, or keep the ingress or combined role.`)
+	assertConnectMessage(t, err, `Cluster "site-a" serves ingress for 1 subscription (tenant-org-users). Changing its role turns MaaS off there, which can revoke every API key in AI Grid. The subscription isn't managed in the console: first remove it in the GitOps repository that delivers it, or keep the ingress or combined role.`)
 	assertNoConsoleDelete(t, err)
 }

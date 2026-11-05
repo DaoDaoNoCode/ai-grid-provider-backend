@@ -355,10 +355,10 @@ func (h heldSubscriptions) refusal(id string, leaves bool, to string) error {
 		if len(h.outside) > 1 {
 			other = "the others in the GitOps repository that delivers them"
 		}
-		act = fmt.Sprintf("First delete %s in the console, and remove or move %s, or %s.", console, other, keep)
+		act = fmt.Sprintf("First delete %s in the console, and remove %s, or %s.", console, other, keep)
 	case len(h.outside) > 0:
 		serves = fmt.Sprintf("%s (%s)", count, nameIDs(h.outside))
-		act = fmt.Sprintf("The %s %s managed in the console: first remove or move %s in the GitOps repository that delivers %s, or %s.",
+		act = fmt.Sprintf("The %s %s managed in the console: first remove %s in the GitOps repository that delivers %s, or %s.",
 			strings.TrimPrefix(the, "the "), isnt, them, them, keep)
 	default:
 		serves = fmt.Sprintf("%s (%s)", count, nameIDs(h.inConsole))
