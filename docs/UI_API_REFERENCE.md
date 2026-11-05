@@ -324,14 +324,33 @@ Two consequences the rules below guard against:
 - **Subscriptions.** Every ingress or combined cluster gets every
   subscription in the catalog (`catalog/subscriptions/`, the
   `acm-models-catalog-subscriptions` ApplicationSet in
-  `apps/acm-models/hub/catalog-04-applicationsets.yaml`). When a cluster
-  stops serving ingress, Argo CD deletes its copies of all of them (the
-  resources finalizer on that Application), and maas-controller revokes the
-  API keys of each deleted `MaaSSubscription` in the maas-db every cluster
-  shares (opendatahub-io/models-as-a-service,
-  `maas-controller/pkg/controller/maas/maassubscription_controller.go`,
-  `handleDeletion`). So the keys of every subscription stop working on all
-  clusters, not only on the one that changed.
+  `apps/acm-models/hub/catalog-04-applicationsets.yaml`) and, from the
+  gitops repository itself, each organization's own `MaaSSubscription`,
+  such as `tenant-<org-id>-users` (`apps/acm-models/maas/policies/`,
+  delivered by `apps/acm-models/hub/maas-03-applicationset.yaml`). The
+  cluster loses their API keys in a different way depending on the change:
+  - **Leaving the grid**, or losing the role while staying in it, takes the
+    cluster out of the `ai-grid-ingress` Placement. Argo CD deletes its
+    copies of the subscriptions (the resources finalizer on those
+    Applications, without `Delete=false`), and maas-controller revokes the
+    API keys of each deleted `MaaSSubscription` in the maas-db every cluster
+    shares (opendatahub-io/models-as-a-service,
+    `maas-controller/pkg/controller/maas/maassubscription_controller.go`,
+    `handleDeletion`). So those keys stop working on every cluster, not only
+    on the one that changed. MaaS itself stays installed: the `rhoai`
+    ApplicationSet preserves what it installed
+    (`apps/rhoai/hub/01-applicationset.yaml`).
+  - **A change to the `inference` role** does the same, and also turns MaaS
+    off on the cluster: that role's profile sets `modelsAsAService` to
+    `Removed` (opendatahub-io/odh-gitops, `rhai-on-openshift-chart` README).
+    ai-gateway-operator would then tear maas-controller down
+    (`internal/controller/aigateway/aigateway_remove.go`), which would delete
+    the AITenant (`maas-controller/pkg/controller/maas/self_teardown.go`),
+    and deleting an AITenant revokes every API key of that tenant in the
+    shared maas-db (`aitenant_controller.go`;
+    `maas-api/internal/api_keys/store_postgres.go`). The grid has one
+    AITenant, `models-as-a-service`, so that can be every API key in AI
+    Grid. This is read from those sources, not tried on a cluster.
 - **Placed models.** A role change without inference prunes the models
   placed on the cluster. Removing the cluster from the grid leaves them
   running but unmanaged (`preserveResourcesOnDeletion` on the models
@@ -346,7 +365,7 @@ after the version, and answers the first rule that refuses:
 | # | Rule | Code |
 | --- | --- | --- |
 | 1 | A role the body sets or changes must be `ingress`, `inference` or `combined`. No role is allowed. A role the cluster already has and the body sends back unchanged isn't judged again. | `InvalidArgument` (`3`) |
-| 2 | A grid member that serves ingress stops serving it (its role changes to one without ingress, or it is removed from the grid) while the Git catalog has any subscription (`catalog/subscriptions/<id>.yaml`). The message counts the subscriptions and names up to five; delete them first. | `FailedPrecondition` (`9`) |
+| 2 | A grid member that serves ingress stops serving it (its role changes to one without ingress, or it is removed from the grid) while it serves ingress for any subscription: a `MaaSSubscription` ACM Search indexes on the cluster (kind `MaaSSubscription`, apigroup `maas.opendatahub.io`, cluster `<name>`), whoever delivered it, or, when Search has none there, a subscription in the Git catalog (`catalog/subscriptions/<id>.yaml`). The message counts the subscriptions of whichever source found them, names up to five, says what the change would do (above), and says where to delete them: in the console for those with a catalog file of their name, in the GitOps repository that delivers them for the others (an organization's own, which `Subscriptions/List` and `Delete` don't see). | `FailedPrecondition` (`9`) |
 | 3 | A grid member that serves ingress stops serving it while no other grid member serves ingress, and the grid keeps a member: the cluster itself on a role change, any other cluster on a removal. Users reach models through ingress clusters; give another cluster role `ingress` or `combined` first. The grid's last member may be removed: that retires the grid and strands no one. | `FailedPrecondition` (`9`) |
 | 4 | A grid member stops serving inference (its role changes from `inference` or `combined` to one without inference), or is removed from the grid whatever its role, while the Git catalog places models on it (`catalog/clusters/<name>/kustomization.yaml`). The message counts the models and names up to five; move them to other clusters first. | `FailedPrecondition` (`9`) |
 
@@ -361,21 +380,41 @@ Notes:
   and an update that keeps a member in the grid with its role (other
   labels, annotations, `hub_accepts_client`) aren't checked.
 - So retiring an ingress cluster, by a role change or a removal, needs
-  every subscription deleted first. That revokes their keys too, but as a
-  step the admin chooses, not as a side effect of a cluster change.
+  every subscription on it deleted first, an organization's included. That
+  revokes their keys too, but as a step the admin chooses, not as a side
+  effect of a cluster change. An organization's subscription isn't in the
+  catalog, so the console can neither list nor delete it: it is removed, or
+  moved, in the GitOps repository that delivers it, and until then it holds
+  every ingress cluster.
+- Rule 2 tells the subscriptions Search finds apart by the catalog: one
+  with a file `catalog/subscriptions/<name>.yaml` is the console's, any
+  other is managed outside it. Without a catalog, every one is outside it.
+  When the catalog can't be read, the PATCH is still refused with
+  `FailedPrecondition`, and the message doesn't say which is managed where.
+- Search is asked once per PATCH that rule 2 applies to, without a cache.
+  It indexes a cluster's resources on its collector's schedule, so a
+  subscription delivered a moment ago may not show yet; the catalog fallback
+  covers the catalog's own. A Search query that fails (unreachable, an HTTP
+  error, GraphQL errors, a token it refuses) answers `Unavailable` (`14`).
+  A backend with `--search-api-url=off` (Kind) checks the catalog only.
 - The catalog is read once per PATCH, on the remote's head, not on the
   backend's read cache (`AI_GRID_GIT_READ_MAX_AGE`), so a model placed or a
   subscription created by another writer a moment ago counts. A backend
-  without `AI_GRID_GIT_URL` has no catalog, so no subscription or model
-  refuses a PATCH; one whose repository isn't cloned yet, or can't be
-  fetched, answers `Unavailable` (`14`) for a PATCH rules 2 or 4 apply to.
+  without `AI_GRID_GIT_URL` has no catalog, so no catalog subscription or
+  model refuses a PATCH; one whose repository isn't cloned yet, or can't be
+  fetched, answers `Unavailable` (`14`) for a PATCH rules 2 or 4 apply to
+  and need the catalog for (rule 2 needs it only when Search finds no
+  subscription on the cluster).
 - The checks and the write are not atomic: a subscription created, a model
   placed on the cluster, or another cluster's role or membership changed,
   between the check and the write is not refused.
 - Messages, for example:
   - `label "ai-grid/role" must be ingress, inference or combined, got "gateway"`
-  - `Cluster "site-a" serves ingress, and 3 subscriptions exist (sub-a, sub-b, sub-c). When a cluster stops serving ingress, the API keys of every subscription are revoked on all clusters. Delete the subscriptions first, or keep the ingress or combined role.`
-  - `Cluster "site-a" serves ingress, and 1 subscription exists (sub-a). When a cluster stops serving ingress, the API keys of every subscription are revoked on all clusters. Delete the subscription first, or keep the cluster in AI Grid.` (a removal)
+  - `Cluster "site-a" serves ingress for 3 subscriptions (sub-a, sub-b, sub-c). Changing its role turns MaaS off there, which can revoke every API key in AI Grid. Delete the subscriptions first, or keep the ingress or combined role.` (all in the catalog)
+  - `Cluster "site-a" serves ingress for 1 subscription (tenant-42c3e46f-2477-44d7-a85b-d3b43f6b31fa-users). Removing it from AI Grid deletes its copy of that subscription, and its API keys are then revoked on every cluster. The subscription isn't managed in the console: first remove it in the GitOps repository that delivers it, or keep the cluster in AI Grid.` (a removal; an organization's subscription, not in the catalog)
+  - `Cluster "site-a" serves ingress for 2 subscriptions (sub-a, sub-b). Removing its role deletes its copies of those subscriptions, and their API keys are then revoked on every cluster. Delete the subscriptions first, or keep the ingress or combined role.` (the role removed, the cluster kept in the grid)
+  - `Cluster "site-a" serves ingress for 3 subscriptions: 2 managed in the console (sub-a, sub-b) and 1 managed outside it (tenant-42c3e46f-2477-44d7-a85b-d3b43f6b31fa-users). Changing its role turns MaaS off there, which can revoke every API key in AI Grid. First delete those in the console, and remove the other in the GitOps repository that delivers it, or keep the ingress or combined role.` (both)
+  - `Cluster "site-a" serves ingress for 2 subscriptions (sub-a, tenant-42c3e46f-2477-44d7-a85b-d3b43f6b31fa-users). Removing it from AI Grid deletes its copies of those subscriptions, and their API keys are then revoked on every cluster. Delete the subscriptions first, where each is managed (in the console, or in the GitOps repository that delivers it), or keep the cluster in AI Grid.` (the catalog can't be read)
   - `Cluster "site-a" is the only AI Grid cluster that serves ingress, and users reach models through ingress clusters. Give another cluster the ingress or combined role first.`
   - `Cluster "site-a" has 2 models placed on it (model-a, model-b). Move them to other clusters before changing it to a role without inference.`
   - `Cluster "site-b" has 2 models placed on it (model-a, model-b). Move them to other clusters before removing it from AI Grid.`

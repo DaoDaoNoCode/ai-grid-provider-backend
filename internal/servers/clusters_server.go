@@ -51,6 +51,7 @@ type ClustersServerBuilder struct {
 	readyPolicy string
 	gpus        clusterGPUSource
 	catalog     catalogReader
+	search      resourceSearch
 }
 
 // ClustersServer implements ai_grid.v1.Clusters against hub ManagedCluster CRs.
@@ -62,6 +63,7 @@ type ClustersServer struct {
 	readyPolicyName      string
 	gpus                 clusterGPUSource
 	catalog              catalogReader
+	search               resourceSearch
 }
 
 var _ aigridv1connect.ClustersHandler = (*ClustersServer)(nil)
@@ -113,11 +115,22 @@ func (b *ClustersServerBuilder) SetGPUInventory(inventory clusterGPUSource) *Clu
 // SetCatalog sets the Git catalog the Models and Subscriptions servers commit
 // to, which Update reads for the subscriptions before a cluster stops serving
 // ingress, and for the models placed on a cluster before it stops serving
-// inference or leaves the grid. Optional; without it no subscription or
-// placed model refuses an update, as with a backend started without
-// AI_GRID_GIT_URL: there is no catalog either could be written to.
+// inference or leaves the grid. Optional; without it no catalog subscription
+// or placed model refuses an update, as with a backend started without
+// AI_GRID_GIT_URL: there is no catalog either could be written to. The
+// subscriptions ACM Search finds on the cluster still do
+// (SetSubscriptionSearch).
 func (b *ClustersServerBuilder) SetCatalog(catalog catalogReader) *ClustersServerBuilder {
 	b.catalog = catalog
+	return b
+}
+
+// SetSubscriptionSearch sets where Update finds the MaaSSubscriptions on a
+// cluster before it stops serving ingress: ACM Search in production.
+// Optional; without it (--search-api-url=off) only the catalog's
+// subscriptions refuse an update.
+func (b *ClustersServerBuilder) SetSubscriptionSearch(search resourceSearch) *ClustersServerBuilder {
+	b.search = search
 	return b
 }
 
@@ -134,7 +147,7 @@ func (b *ClustersServerBuilder) Build() (*ClustersServer, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &ClustersServer{logger: logger, client: b.client, readyPolicyNamespace: namespace, readyPolicyName: name, gpus: b.gpus, catalog: b.catalog}, nil
+	return &ClustersServer{logger: logger, client: b.client, readyPolicyNamespace: namespace, readyPolicyName: name, gpus: b.gpus, catalog: b.catalog, search: b.search}, nil
 }
 
 // List returns ManagedCluster objects from the Kubernetes API.
@@ -223,8 +236,8 @@ func (s *ClustersServer) Create(ctx context.Context, req *aigridv1.ClustersCreat
 //
 // An ai-grid/role the update writes must be ingress, inference or combined
 // (checkRoleValue). A cluster in the grid may not stop serving ingress, by a
-// role change or by leaving the grid, while subscriptions exist or while it
-// is the grid's last ingress cluster, nor stop serving inference or leave the
+// role change or by leaving the grid, while it serves ingress for any
+// subscription or while it is the grid's last ingress cluster, nor stop serving inference or leave the
 // grid while models are placed on it (checkRoleChange, which gives the order
 // and says why a change made meanwhile isn't refused).
 func (s *ClustersServer) Update(ctx context.Context, req *aigridv1.ClustersUpdateRequest) (*aigridv1.ClustersUpdateResponse, error) {

@@ -2,7 +2,9 @@ package hub
 
 // A fake of ACM Search's GraphQL API (stolostron/search-v2-api), only as far
 // as the backend uses it: the `search` query over Node items, filtered by
-// kind, cluster, name and label. The real API is a separate Service
+// kind, apigroup, cluster, name and label. It indexes Nodes only, so a query
+// for another kind, such as the role checks' MaaSSubscriptions, finds none,
+// as on a hub whose clusters have none. The real API is a separate Service
 // (search-search-api in open-cluster-management, /searchapi/graphql); the
 // fake serves the same path on the fake hub's port, so make dev-fake needs no
 // other listener.
@@ -119,6 +121,9 @@ func searchMatches(node SearchNode, filters []searchFilter) (bool, error) {
 			switch f.Property {
 			case "kind":
 				matched = matched || v == "Node"
+			case "apigroup":
+				// A Node is in the core group, which Search indexes
+				// without an apigroup, so no apigroup filter matches it.
 			case "cluster":
 				matched = matched || v == node.Cluster
 			case "name":

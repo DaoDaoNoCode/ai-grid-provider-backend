@@ -4,7 +4,8 @@
 // /searchapi/graphql, that indexes the resources of every managed cluster.
 // The backend uses it for what the hub's own objects don't carry: a managed
 // cluster's nodes with all their labels (ManagedClusterInfo keeps only the
-// instance type, region, zone and node-role labels of each node).
+// instance type, region, zone and node-role labels of each node), and the
+// resources of one kind on a managed cluster, such as its MaaSSubscriptions.
 package acmsearch
 
 import (
@@ -24,7 +25,7 @@ const DefaultURL = "https://search-search-api.open-cluster-management.svc:4010/s
 
 // maxResponseBytes caps a Search answer. A node item is about 3 KiB with
 // GPU Feature Discovery's labels, so this is room for about 5000 GPU nodes.
-// Decoding keeps only four fields of each item and the labels the caller
+// Decoding keeps only five fields of each item and the labels the caller
 // names (GPUNodes), so reading and decoding an answer allocate a few times
 // its size, whatever its items hold: about 70 MiB at this cap.
 const maxResponseBytes = 16 << 20
@@ -40,6 +41,16 @@ type Node struct {
 	Labels map[string]string
 	// Ready is true when the node's Ready condition is True.
 	Ready bool
+}
+
+// Resource is one resource of a managed cluster as Search indexes it.
+type Resource struct {
+	// Cluster is the managed cluster's name.
+	Cluster string
+	// Namespace is the resource's namespace, empty for a cluster-scoped one.
+	Namespace string
+	// Name is the resource's name.
+	Name string
 }
 
 // Client queries Search with a fixed bearer credential. Its http.Client
@@ -93,12 +104,13 @@ func New(url string, httpClient *http.Client) *Client {
 	return &Client{url: url, http: &c}
 }
 
-// gpuNodesQuery asks for every Node with GPU Feature Discovery's
-// nvidia.com/gpu.present=true label on every managed cluster the caller may
-// see. A label filter takes "key=value" (search-v2-api
-// pkg/resolver/searchHelper.go, label operands), and a limit of -1 returns
-// every match instead of the default 1000 (setLimit, same file).
-const gpuNodesQuery = `query mySearch($input: [SearchInput]) { searchResult: search(input: $input) { items } }`
+// searchQuery asks for the items matching one SearchInput: every filter must
+// match, and a filter matches when any of its values does. A label filter
+// takes "key=value" (search-v2-api pkg/resolver/searchHelper.go, label
+// operands), and a limit of -1 returns every match instead of the default
+// 1000 (setLimit, same file). Search answers only for the managed clusters
+// the caller may see.
+const searchQuery = `query mySearch($input: [SearchInput]) { searchResult: search(input: $input) { items } }`
 
 type searchFilter struct {
 	Property string   `json:"property"`
@@ -128,13 +140,14 @@ type graphQLResponse struct {
 	} `json:"errors"`
 }
 
-// searchItem is the part of a Search item of kind Node the backend reads:
-// `cluster`, `name`, `label` as "k=v; k=v" and `condition` as
-// "DiskPressure=False; ...; Ready=True" (the shape search-v2's collector
-// indexes, as an ACM hub answered it). Every other key of the item is
-// skipped while decoding, without being kept.
+// searchItem is the part of a Search item the backend reads: `cluster`,
+// `namespace` and `name` of any kind, and of a Node `label` as "k=v; k=v"
+// and `condition` as "DiskPressure=False; ...; Ready=True" (the shape
+// search-v2's collector indexes, as an ACM hub answered it). Every other key
+// of the item is skipped while decoding, without being kept.
 type searchItem struct {
 	Cluster   text `json:"cluster"`
+	Namespace text `json:"namespace"`
 	Name      text `json:"name"`
 	Label     text `json:"label"`
 	Condition text `json:"condition"`
@@ -158,15 +171,77 @@ func (t *text) UnmarshalJSON(b []byte) error {
 // its cluster, so keeping only the ones the caller reads bounds what a node
 // with thousands of labels costs.
 func (c *Client) GPUNodes(ctx context.Context, labelKeys ...string) ([]Node, error) {
+	items, err := c.search(ctx, []searchFilter{
+		{Property: "kind", Values: []string{"Node"}},
+		{Property: "label", Values: []string{"nvidia.com/gpu.present=true"}},
+	})
+	if err != nil {
+		return nil, err
+	}
+	keep := make(map[string]bool, len(labelKeys))
+	for _, k := range labelKeys {
+		keep[k] = true
+	}
+	var nodes []Node
+	for _, item := range items {
+		node := Node{
+			Cluster: string(item.Cluster),
+			Name:    string(item.Name),
+			Labels:  parsePairs(string(item.Label), keep),
+			Ready:   conditionTrue(parsePairs(string(item.Condition), map[string]bool{"Ready": true})["Ready"]),
+		}
+		if node.Cluster == "" || node.Name == "" {
+			continue
+		}
+		nodes = append(nodes, node)
+	}
+	sort.Slice(nodes, func(i, j int) bool {
+		if nodes[i].Cluster != nodes[j].Cluster {
+			return nodes[i].Cluster < nodes[j].Cluster
+		}
+		return nodes[i].Name < nodes[j].Name
+	})
+	return nodes, nil
+}
+
+// Resources returns every resource of kind in apigroup that Search knows on
+// the managed cluster named cluster, sorted by namespace and then by name.
+// Search filters on exact values, so the kind is as the API names it (for
+// example MaaSSubscription) and apigroup is the group without its version
+// (for example maas.opendatahub.io). An error, Search's own included, is
+// never an empty list: a caller deciding on what the cluster holds must not
+// read a failed query as "nothing there".
+func (c *Client) Resources(ctx context.Context, kind, apigroup, cluster string) ([]Resource, error) {
+	items, err := c.search(ctx, []searchFilter{
+		{Property: "kind", Values: []string{kind}},
+		{Property: "apigroup", Values: []string{apigroup}},
+		{Property: "cluster", Values: []string{cluster}},
+	})
+	if err != nil {
+		return nil, err
+	}
+	out := []Resource{}
+	for _, item := range items {
+		r := Resource{Cluster: string(item.Cluster), Namespace: string(item.Namespace), Name: string(item.Name)}
+		if r.Cluster == "" || r.Name == "" {
+			continue
+		}
+		out = append(out, r)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Namespace != out[j].Namespace {
+			return out[i].Namespace < out[j].Namespace
+		}
+		return out[i].Name < out[j].Name
+	})
+	return out, nil
+}
+
+// search runs searchQuery with filters and no limit, and returns the items.
+func (c *Client) search(ctx context.Context, filters []searchFilter) ([]searchItem, error) {
 	var req graphQLRequest
-	req.Query = gpuNodesQuery
-	req.Variables.Input = []searchInput{{
-		Filters: []searchFilter{
-			{Property: "kind", Values: []string{"Node"}},
-			{Property: "label", Values: []string{"nvidia.com/gpu.present=true"}},
-		},
-		Limit: -1,
-	}}
+	req.Query = searchQuery
+	req.Variables.Input = []searchInput{{Filters: filters, Limit: -1}}
 	body, err := json.Marshal(req)
 	if err != nil {
 		return nil, fmt.Errorf("encode search query: %w", err)
@@ -203,32 +278,11 @@ func (c *Client) GPUNodes(ctx context.Context, labelKeys ...string) ([]Node, err
 		}
 		return nil, &GraphQLError{Messages: msgs}
 	}
-	keep := make(map[string]bool, len(labelKeys))
-	for _, k := range labelKeys {
-		keep[k] = true
-	}
-	var nodes []Node
+	var items []searchItem
 	for _, result := range out.Data.SearchResult {
-		for _, item := range result.Items {
-			node := Node{
-				Cluster: string(item.Cluster),
-				Name:    string(item.Name),
-				Labels:  parsePairs(string(item.Label), keep),
-				Ready:   conditionTrue(parsePairs(string(item.Condition), map[string]bool{"Ready": true})["Ready"]),
-			}
-			if node.Cluster == "" || node.Name == "" {
-				continue
-			}
-			nodes = append(nodes, node)
-		}
+		items = append(items, result.Items...)
 	}
-	sort.Slice(nodes, func(i, j int) bool {
-		if nodes[i].Cluster != nodes[j].Cluster {
-			return nodes[i].Cluster < nodes[j].Cluster
-		}
-		return nodes[i].Name < nodes[j].Name
-	})
-	return nodes, nil
+	return items, nil
 }
 
 // conditionTrue reads a Node condition's status as Search renders it, the
