@@ -49,6 +49,15 @@ func TestSubscriptionsGitCRUD(t *testing.T) {
 	if sub.GetNamespace() != "models-as-a-service" || sub.GetAnnotations()[gitVersionAnnotation] != "1" {
 		t.Fatalf("file MaaSSubscription namespace = %q, annotations = %v", sub.GetNamespace(), sub.GetAnnotations())
 	}
+	if sub.GetAnnotations()[retainAPIKeysOnDeleteAnnotation] != "true" {
+		t.Fatalf("file MaaSSubscription annotations = %v, want %s: \"true\"", sub.GetAnnotations(), retainAPIKeysOnDeleteAnnotation)
+	}
+	if _, ok := policy.GetAnnotations()[retainAPIKeysOnDeleteAnnotation]; ok {
+		t.Fatalf("file MaaSAuthPolicy annotations = %v, want no %s", policy.GetAnnotations(), retainAPIKeysOnDeleteAnnotation)
+	}
+	if _, ok := created.GetObject().GetMetadata().GetAnnotations()[retainAPIKeysOnDeleteAnnotation]; ok {
+		t.Fatal("Create returned the retain-api-keys annotation")
+	}
 	if policy.GetName() != "team-a-policy" || policy.GetNamespace() != "models-as-a-service" || policy.GetLabels()[managedByLabelKey] != managedByLabelValue {
 		t.Fatalf("file policy name = %q, namespace = %q, labels = %v", policy.GetName(), policy.GetNamespace(), policy.GetLabels())
 	}
@@ -83,6 +92,9 @@ func TestSubscriptionsGitCRUD(t *testing.T) {
 	}
 	if updated.GetObject().GetMetadata().GetVersion() != 2 || updated.GetObject().GetSpec().GetPriority() != 20 {
 		t.Fatalf("Update version = %d, priority = %d", updated.GetObject().GetMetadata().GetVersion(), updated.GetObject().GetSpec().GetPriority())
+	}
+	if sub, _ := readGitSubscriptionFile(t, writer, "team-a"); sub.GetAnnotations()[retainAPIKeysOnDeleteAnnotation] != "true" {
+		t.Fatalf("file MaaSSubscription annotations after Update = %v, want %s: \"true\"", sub.GetAnnotations(), retainAPIKeysOnDeleteAnnotation)
 	}
 
 	_, err = srv.Update(ctx, &aigridv1.SubscriptionsUpdateRequest{Object: update, Lock: true})
@@ -654,7 +666,7 @@ func TestSubscriptionsGitMetadataKeyAllowlist(t *testing.T) {
 	for _, key := range []string{
 		"helm.sh/resource-policy", "argocd.argoproj.io/sync-options", "argocd.argoproj.io/compare-options",
 		"kubectl.kubernetes.io/last-applied-configuration", "app.kubernetes.io/instance", "app.kubernetes.io/managed-by",
-		"ai-grid/version", "ai-grid/clusters",
+		"ai-grid/version", "ai-grid/clusters", "maas.opendatahub.io/retain-api-keys-on-delete",
 	} {
 		labels := gitSampleSubscription("team-b")
 		labels.Metadata.Labels = map[string]string{key: "x"}
