@@ -284,6 +284,20 @@ For subscriptions:
   repeats are dropped.
 - The policy lives in the subscription's file, so Argo CD prunes both
   together; it has no ownerReference.
+- Every write sets `maas.opendatahub.io/retain-api-keys-on-delete: "true"` on
+  the `MaaSSubscription`, so deleting one ingress cluster's copy doesn't revoke
+  the subscription's API keys on every cluster: the clusters share one
+  maas-api database, and MaaS revokes by tenant and subscription name
+  ([models-as-a-service#1841](https://github.com/opendatahub-io/models-as-a-service/pull/1841)).
+  Deleting the subscription therefore revokes no keys either. The backend
+  can't revoke them in 3.6: it runs on the hub. MaaS's internal revoke
+  endpoints are spoke-local (the cleanup ServiceAccount), and the public
+  bulk-revoke (`POST /v1/api-keys/bulk-revoke` through a spoke's gateway) needs
+  a spoke admin identity and a subscription that still exists, so neither helps
+  after the subscription is deleted everywhere. Keys match a subscription by
+  name only, and the backend doesn't block re-creating a deleted
+  subscription's name; if one is re-created, the old keys work again. That's
+  an accepted risk in 3.6.
 - A model ref without a namespace gets the subscription's namespace
   (`models-as-a-service` by default). A ref in that namespace must name a
   model in the repository, or Create and Update answer `FailedPrecondition`;

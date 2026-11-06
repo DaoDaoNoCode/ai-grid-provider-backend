@@ -33,6 +33,17 @@ const (
 	// gitVersionAnnotation counts the changes to a file. metadata.version
 	// reads it, as it would read a resourceVersion from a cluster.
 	gitVersionAnnotation = "ai-grid/version"
+
+	// retainAPIKeysOnDeleteAnnotation tells maas-controller not to revoke the
+	// subscription's API keys when this copy of the MaaSSubscription is
+	// deleted. Every ingress cluster gets its own copy, but they share one
+	// maas-api database, and the revocation is keyed by tenant and
+	// subscription name, so removing one cluster's copy (for example when the
+	// cluster leaves the ingress placement) would revoke the keys on every
+	// cluster (RHAI-20306). MaaS honours the annotation from
+	// opendatahub-io/models-as-a-service#1841. The writer sets it on every
+	// file it writes and the API never shows it.
+	retainAPIKeysOnDeleteAnnotation = "maas.opendatahub.io/retain-api-keys-on-delete"
 )
 
 func subscriptionGitPath(id string) string {
@@ -565,7 +576,8 @@ func qualifiedOwnerGroups(spec *aigridv1.SubscriptionSpec) ([]string, error) {
 }
 
 // renderSubscriptionDoc renders the subscription file: the MaaSSubscription,
-// with the version annotation, and its managed MaaSAuthPolicy. Owner groups
+// with the version and retain-api-keys annotations, and its managed
+// MaaSAuthPolicy. Owner groups
 // are qualified with the organization in both. A model ref without a
 // namespace gets the subscription's namespace, where the Models API writes
 // each model's MaaSModelRef.
@@ -591,6 +603,7 @@ func renderSubscriptionDoc(object *aigridv1.Subscription, namespace string, vers
 		annotations = map[string]string{}
 	}
 	annotations[gitVersionAnnotation] = strconv.FormatInt(int64(version), 10)
+	annotations[retainAPIKeysOnDeleteAnnotation] = "true"
 	sub.SetAnnotations(annotations)
 
 	data, err := marshalYAMLDocs(sub, authPolicyFromSubscription(qualified, namespace))
@@ -613,8 +626,8 @@ func readSubscriptionDoc(head gitops.Snapshot, id string) (*subscriptionDoc, err
 }
 
 // parseSubscriptionDoc reverses renderSubscriptionDoc: it moves the version
-// annotation to metadata.version and strips the organization from owner
-// groups.
+// annotation to metadata.version, drops the retain-api-keys annotation, and
+// strips the organization from owner groups.
 func parseSubscriptionDoc(id string, data []byte) (*subscriptionDoc, error) {
 	docs, err := unmarshalYAMLDocs(data)
 	if err != nil {
@@ -640,6 +653,7 @@ func parseSubscriptionDoc(id string, data []byte) (*subscriptionDoc, error) {
 	}
 	meta.Version = int32(version)
 	delete(meta.Annotations, gitVersionAnnotation)
+	delete(meta.Annotations, retainAPIKeysOnDeleteAnnotation)
 	if len(meta.Annotations) == 0 {
 		meta.Annotations = nil
 	}
