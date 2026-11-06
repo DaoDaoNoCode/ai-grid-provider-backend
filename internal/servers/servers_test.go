@@ -848,6 +848,10 @@ func TestCreateTenant(t *testing.T) {
 		if !store.idps["acme"].TrustEmail {
 			t.Fatal("keycloak idp trustEmail = false, want true")
 		}
+		// The sign-in page must not list this organization's IdP to users of no organization.
+		if store.idps["acme"].Config["kc.org.broker.login.hide-when-org-unknown"] != "true" {
+			t.Fatalf("keycloak idp config = %+v, want kc.org.broker.login.hide-when-org-unknown true", store.idps["acme"].Config)
+		}
 		if store.mappers["acme"].Config["attribute.value"] != got.GetObject().GetId() {
 			t.Fatalf("mapper value = %q, want org id", store.mappers["acme"].Config["attribute.value"])
 		}

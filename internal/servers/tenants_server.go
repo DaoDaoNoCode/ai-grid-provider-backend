@@ -862,17 +862,26 @@ func (s *TenantsServer) ensureIdentityProviderUnchanged(current keycloak.Organiz
 	return nil
 }
 
+// hideWhenOrganizationUnknown is the IdP config key of Keycloak's "Hide on login page when
+// organization not resolved" (OrganizationModel.HIDE_IDP_ON_LOGIN_WHEN_ORGANIZATION_UNKNOWN,
+// Keycloak 26). Without it, the realm's sign-in page lists every organization's IdP to anyone
+// whose email domain belongs to no organization, so every tenant's IdP title is shown to every
+// visitor. Users at an organization's domains still reach its IdP: domain routing, configured
+// on the organization's domains, doesn't read this key.
+const hideWhenOrganizationUnknown = "kc.org.broker.login.hide-when-org-unknown"
+
 func oidcConfigForKeycloak(cfg *aigridv1.OidcConfig, clientSecret []byte) map[string]string {
 	out := map[string]string{
-		"clientId":          cfg.GetClientId(),
-		"clientSecret":      string(clientSecret),
-		"issuer":            cfg.GetIssuer(),
-		"authorizationUrl":  cfg.GetAuthorizationUrl(),
-		"tokenUrl":          cfg.GetTokenUrl(),
-		"defaultScope":      cfg.GetDefaultScopes(),
-		"validateSignature": boolString(cfg.GetValidateSignature()),
-		"syncMode":          "FORCE",
-		"clientAuthMethod":  "client_secret_post",
+		"clientId":                  cfg.GetClientId(),
+		"clientSecret":              string(clientSecret),
+		"issuer":                    cfg.GetIssuer(),
+		"authorizationUrl":          cfg.GetAuthorizationUrl(),
+		"tokenUrl":                  cfg.GetTokenUrl(),
+		"defaultScope":              cfg.GetDefaultScopes(),
+		"validateSignature":         boolString(cfg.GetValidateSignature()),
+		"syncMode":                  "FORCE",
+		hideWhenOrganizationUnknown: "true",
+		"clientAuthMethod":          "client_secret_post",
 	}
 	if v := cfg.GetUserInfoUrl(); v != "" {
 		out["userInfoUrl"] = v

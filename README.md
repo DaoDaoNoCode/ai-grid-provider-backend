@@ -567,6 +567,11 @@ The backend creates the IdP with `trustEmail` on, so Keycloak takes each user's
 response when `config.user_info_url` is set: Keycloak reads an email in
 userinfo without `email_verified` as unverified. With `email_verified` false,
 the MaaS Portal's oauth2-proxy rejects the user's token.
+The backend also sets the IdP's `kc.org.broker.login.hide-when-org-unknown` (Keycloak's
+**Hide on login page when organization not resolved**). Without it, the realm's sign-in page
+lists every organization's IdP to anyone whose email domain belongs to no organization, which
+shows every tenant's IdP title to every visitor. Users at an organization's domains still go
+straight to its IdP: that routing is set on the organization's domains.
 The IdP is immutable after Create. Client secrets are **not** stored
 in the API: put them in namespace `ai-grid-idp-secrets` (env
 `AI_GRID_IDP_SECRET_NAMESPACE`) as a Secret whose name is
@@ -588,6 +593,11 @@ Admin REST API, `GET` `/admin/realms/<realm>/identity-provider/instances/<alias>
 set `"trustEmail": true` in the response, and `PUT` it back to the same path; the
 masked `clientSecret` in the response keeps the stored secret. The change applies
 from each user's next login, as long as the IdP sends `email_verified`.
+
+IdPs created by an earlier build also lack `kc.org.broker.login.hide-when-org-unknown`. To fix
+one, turn on **Hide on login page when organization not resolved** in the IdP's **Settings**,
+section **Organization settings**, or with the Admin REST API, add the key with value `"true"`
+to `config` in the same `GET` and `PUT`.
 
 ## Local architecture
 
