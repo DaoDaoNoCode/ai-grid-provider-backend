@@ -1,6 +1,7 @@
 package servers
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"log/slog"
@@ -89,6 +90,7 @@ const (
 	kindMaaSModelRef        = "MaaSModelRef"
 	kindMaaSSubscription    = "MaaSSubscription"
 	kindMaaSAuthPolicy      = "MaaSAuthPolicy"
+	kindNetworkPolicy       = "NetworkPolicy"
 )
 
 // CatalogStatusReader reads what the spoke clusters report about the objects
@@ -207,6 +209,26 @@ func (r *CatalogStatusReader) Read(ctx context.Context, set CatalogSet, kind str
 	if r == nil {
 		return nil, nil
 	}
+	items, err := r.listApplications(ctx)
+	if items == nil || err != nil {
+		return nil, err
+	}
+	appSet := r.apps.name(set)
+	out := ObjectReports{}
+	for _, app := range items {
+		cluster, ok := clusterOf(app, appSet)
+		if !ok {
+			continue
+		}
+		out[cluster] = applicationReports(app, kind)
+	}
+	return out, nil
+}
+
+// listApplications lists the Applications in the catalog's namespace. A
+// missing or forbidden list (Argo CD isn't installed, or the ServiceAccount
+// can't read Applications) returns none, warning once per process.
+func (r *CatalogStatusReader) listApplications(ctx context.Context) ([]unstructured.Unstructured, error) {
 	list, err := r.client.Resource(applicationsResource).Namespace(r.apps.Namespace).List(ctx, metav1.ListOptions{})
 	if apierrors.IsNotFound(err) || apierrors.IsForbidden(err) {
 		// Once per process: every model then shows saved to Git, which is
@@ -220,16 +242,82 @@ func (r *CatalogStatusReader) Read(ctx context.Context, set CatalogSet, kind str
 	if err != nil {
 		return nil, fmt.Errorf("list Applications in %s: %w", r.apps.Namespace, err)
 	}
-	appSet := r.apps.name(set)
-	out := ObjectReports{}
-	for _, app := range list.Items {
-		cluster, ok := clusterOf(app, appSet)
-		if !ok {
+	if list.Items == nil {
+		return []unstructured.Unstructured{}, nil
+	}
+	return list.Items, nil
+}
+
+// ObjectKey names one namespaced object by kind.
+type ObjectKey struct {
+	Kind      string
+	Namespace string
+	Name      string
+}
+
+// SharedResource is an object a model would write that an Application outside
+// the catalog already delivers.
+type SharedResource struct {
+	Object      ObjectKey
+	Application string
+	// Pruning: the Application no longer wants the object, but Argo CD hasn't
+	// pruned it, so it still carries that Application's tracking.
+	Pruning bool
+}
+
+// SharedResources returns the objects that an Application in the catalog's
+// namespace lists while none of the catalog's ApplicationSets own it, such
+// as a sample model a GitOps repository deploys. The catalog's Applications
+// set FailOnSharedResource, so Argo CD would refuse their copy. Only the
+// catalog's namespace is read, and status.resources names no cluster, so an
+// object delivered to another cluster still counts. A missing or forbidden
+// list reports none, as Read does.
+func (r *CatalogStatusReader) SharedResources(ctx context.Context, objects []ObjectKey) ([]SharedResource, error) {
+	if r == nil || len(objects) == 0 {
+		return nil, nil
+	}
+	items, err := r.listApplications(ctx)
+	if err != nil {
+		return nil, err
+	}
+	var out []SharedResource
+	for _, app := range items {
+		if r.isCatalogApp(app) {
 			continue
 		}
-		out[cluster] = applicationReports(app, kind)
+		resources, _, _ := unstructured.NestedSlice(app.Object, "status", "resources")
+		for _, raw := range resources {
+			res, _ := raw.(map[string]interface{})
+			kind, _ := res["kind"].(string)
+			namespace, _ := res["namespace"].(string)
+			name, _ := res["name"].(string)
+			key := ObjectKey{Kind: kind, Namespace: namespace, Name: name}
+			if slices.Contains(objects, key) {
+				pruning, _ := res["requiresPruning"].(bool)
+				out = append(out, SharedResource{Object: key, Application: app.GetName(), Pruning: pruning})
+			}
+		}
 	}
+	slices.SortFunc(out, func(a, b SharedResource) int {
+		return cmp.Or(
+			strings.Compare(a.Application, b.Application),
+			strings.Compare(a.Object.Kind, b.Object.Kind),
+			strings.Compare(a.Object.Namespace, b.Object.Namespace),
+			strings.Compare(a.Object.Name, b.Object.Name),
+		)
+	})
 	return out, nil
+}
+
+// isCatalogApp reports whether one of the catalog's ApplicationSets
+// generated app.
+func (r *CatalogStatusReader) isCatalogApp(app unstructured.Unstructured) bool {
+	for _, set := range []CatalogSet{ModelsSet, IngressSet, SubscriptionsSet} {
+		if _, ok := clusterOf(app, r.apps.name(set)); ok {
+			return true
+		}
+	}
+	return false
 }
 
 // clusterOf returns the cluster an Application of ApplicationSet appSet is
