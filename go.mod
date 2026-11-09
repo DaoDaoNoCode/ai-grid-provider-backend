@@ -5,22 +5,22 @@ go 1.26.3
 require (
 	buf.build/gen/go/bufbuild/protovalidate/protocolbuffers/go v1.36.12-20260825204119-511051f7f437.2
 	buf.build/go/protovalidate v1.4.0
-	cel.dev/cel-go v0.32.0
+	cel.dev/cel-go v0.33.2
 	connectrpc.com/connect/v2 v2.0.2
 	connectrpc.com/grpchealth/v2 v2.0.0
 	connectrpc.com/grpcreflect/v2 v2.0.0
 	connectrpc.com/vanguard v0.5.0
 	github.com/go-git/go-billy/v5 v5.9.2
 	github.com/go-git/go-git/v5 v5.19.3
-	github.com/grpc-ecosystem/grpc-gateway/v2 v2.32.0
-	google.golang.org/genproto/googleapis/api v0.0.0-20261012220534-4341edf3f941
-	google.golang.org/genproto/googleapis/rpc v0.0.0-20261005182115-fad411399dd8
-	google.golang.org/grpc v1.84.0
+	github.com/grpc-ecosystem/grpc-gateway/v2 v2.33.0
+	google.golang.org/genproto/googleapis/api v0.0.0-20261026165753-2ffab32bce7e
+	google.golang.org/genproto/googleapis/rpc v0.0.0-20261019180522-ce908d29299b
+	google.golang.org/grpc v1.85.0
 	google.golang.org/protobuf v1.36.12
 	gopkg.in/evanphx/json-patch.v4 v4.13.0
-	k8s.io/api v0.37.1
-	k8s.io/apimachinery v0.37.1
-	k8s.io/client-go v0.37.1
+	k8s.io/api v0.37.2
+	k8s.io/apimachinery v0.37.2
+	k8s.io/client-go v0.37.2
 	sigs.k8s.io/yaml v1.6.0
 )
 
@@ -38,8 +38,8 @@ require (
 	github.com/fxamacker/cbor/v2 v2.9.1 // indirect
 	github.com/go-git/gcfg v1.5.1-0.20230307220236-3a3c6141e376 // indirect
 	github.com/go-logr/logr v1.4.4 // indirect
-	github.com/go-openapi/jsonpointer v1.0.1 // indirect
-	github.com/go-openapi/jsonreference v1.0.2 // indirect
+	github.com/go-openapi/jsonpointer v1.0.2 // indirect
+	github.com/go-openapi/jsonreference v1.0.3 // indirect
 	github.com/go-openapi/swag v0.29.2 // indirect
 	github.com/go-openapi/swag/cmdutils v0.29.2 // indirect
 	github.com/go-openapi/swag/conv v0.29.2 // indirect
