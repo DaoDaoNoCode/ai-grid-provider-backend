@@ -1,12 +1,17 @@
 # Weekly update PRs for what CI and the image build pin: action SHAs, the Containerfile's base
 # images (tag and digest) and the Go modules. Minor and patch updates are grouped per
-# ecosystem; a major update gets its own PR.
+# ecosystem. Major updates are ignored during the RHOAI 3.6 code freeze; upgrade a major by
+# hand in its own PR. Base images are the exception: UBI tags are build numbers, so every UBI
+# update reads as a major, and ignoring majors would stop them.
 version: 2
 updates:
   - package-ecosystem: github-actions
     directory: /
     schedule:
       interval: weekly
+    ignore:
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]
     groups:
       actions:
         patterns: ["*"]
@@ -22,6 +27,9 @@ updates:
     directory: /
     schedule:
       interval: weekly
+    ignore:
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]
     groups:
       go:
         update-types: [minor, patch]
