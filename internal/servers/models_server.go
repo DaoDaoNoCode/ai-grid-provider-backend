@@ -32,6 +32,7 @@ import (
 // *CatalogStatusReader.
 type catalogStatusReader interface {
 	Read(ctx context.Context, set CatalogSet, kind string) (ObjectReports, error)
+	SharedResources(ctx context.Context, objects []ObjectKey) ([]SharedResource, error)
 }
 
 // ModelsServerBuilder configures a ModelsServer.

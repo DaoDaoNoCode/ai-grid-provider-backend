@@ -132,11 +132,63 @@ func (s *ModelsServer) gitCreate(ctx context.Context, object *aigridv1.Model) (*
 		if err := s.checkPlacementClusters(ctx, clusters); err != nil {
 			return err
 		}
+		if err := s.checkSharedResources(ctx, id); err != nil {
+			return err
+		}
 		var err error
 		created, err = s.gitCommitModel(ctx, head, "create", proto.CloneOf(object), 1, nil, clusters)
 		return err
 	})
 	return created, err
+}
+
+// modelNetworkPolicyName is the NetworkPolicy renderModelDeployment writes
+// beside a model's LLMInferenceService.
+func modelNetworkPolicyName(id string) string { return id + "-grid" }
+
+// modelObjects are the objects the catalog writes for model id: the
+// deployment in the models namespace and the MaaS objects in the
+// subscription namespace.
+func (s *ModelsServer) modelObjects(id string) []ObjectKey {
+	return []ObjectKey{
+		{Kind: kindLLMInferenceService, Namespace: s.namespace, Name: id},
+		{Kind: kindNetworkPolicy, Namespace: s.namespace, Name: modelNetworkPolicyName(id)},
+		{Kind: kindExternalModel, Namespace: s.subscriptionNamespace, Name: id},
+		{Kind: kindMaaSModelRef, Namespace: s.subscriptionNamespace, Name: id},
+	}
+}
+
+// checkSharedResources refuses a model whose objects an Argo CD Application
+// outside the catalog already delivers. Argo CD would refuse the catalog's
+// copies as shared resources after the commit, leaving the model saved but
+// never published; this names the owner before anything is written.
+func (s *ModelsServer) checkSharedResources(ctx context.Context, id string) error {
+	if s.status == nil {
+		return nil
+	}
+	owners, err := s.status.SharedResources(ctx, s.modelObjects(id))
+	if err != nil {
+		return connect.Errorf(connect.CodeUnavailable, "could not check the Argo CD Applications for model %q; try again", id).WithCause(err)
+	}
+	if len(owners) == 0 {
+		return nil
+	}
+	parts := make([]string, 0, len(owners))
+	pruning := false
+	for _, owner := range owners {
+		part := fmt.Sprintf("%s %s/%s (Application %s", owner.Object.Kind, owner.Object.Namespace, owner.Object.Name, owner.Application)
+		if owner.Pruning {
+			part += ", waiting to be pruned"
+			pruning = true
+		}
+		parts = append(parts, part+")")
+	}
+	next := "Remove it from the Application that deploys it, or choose another id"
+	if pruning {
+		next = "Remove it from the Application that deploys it and let Argo CD prune it, or choose another id"
+	}
+	return connect.Errorf(connect.CodeAlreadyExists, "Model %q is already deployed outside the catalog: %s. %s",
+		id, strings.Join(parts, ", "), next)
 }
 
 func (s *ModelsServer) gitUpdate(ctx context.Context, req *aigridv1.ModelsUpdateRequest) (*aigridv1.Model, error) {
@@ -955,7 +1007,7 @@ func (s *ModelsServer) renderModelDeployment(object *aigridv1.Model, version int
 		"apiVersion": "networking.k8s.io/v1",
 		"kind":       "NetworkPolicy",
 		"metadata": map[string]interface{}{
-			"name":      id + "-grid",
+			"name":      modelNetworkPolicyName(id),
 			"namespace": s.namespace,
 			"labels":    stringMapToInterfaceMap(map[string]string{modelLabelKey: id, managedByLabelKey: managedByLabelValue}),
 		},
