@@ -12,10 +12,12 @@ import (
 const (
 	// IdentityProviderOrgIDMapperName names the mapper this backend puts on every IdP it
 	// creates; an IdP without it was made outside this API.
-	IdentityProviderOrgIDMapperName   = "AI Grid org id"
-	identityProviderOrgNameMapperName = "AI Grid org name"
-	identityProviderGroupsMapperName  = "AI Grid groups"
-	identityProviderRolesMapperName   = "AI Grid roles"
+	IdentityProviderOrgIDMapperName             = "AI Grid org id"
+	identityProviderOrgNameMapperName           = "AI Grid org name"
+	identityProviderGroupsMapperName            = "AI Grid groups"
+	identityProviderRolesMapperName             = "AI Grid roles"
+	identityProviderUsernameMapperName          = "AI Grid local username"
+	identityProviderPreferredUsernameMapperName = "AI Grid preferred username"
 )
 
 // IdentityProvider is a realm-level identity provider instance. TrustEmail is Keycloak's
@@ -267,10 +269,11 @@ func (c *Client) ConfigureOrganizationIdentityProvider(ctx context.Context, orgI
 }
 
 // UpsertIdentityProviderMapper creates or updates the broker mappers that put the AI Grid
-// identity claims on a tenant user: the organization id and name (fixed per IdP), and the
-// tenant IdP's groups and roles claims, copied on every login (FORCE). The realm's client
-// scopes turn the maas_* user attributes into the flat org_id, org_name, groups and roles
-// token claims (ODH-ADR-MS-0007).
+// identity claims on a tenant user. The organization id and name are fixed per IdP. The
+// tenant IdP's groups, roles, and preferred username claims are copied on every login
+// (FORCE). The local username is generated once when Keycloak imports the user (IMPORT).
+// The realm's client scopes turn the maas_* user attributes into the flat org_id, org_name,
+// groups, and roles token claims (ODH-ADR-MS-0007).
 func (c *Client) UpsertIdentityProviderMapper(ctx context.Context, alias, organizationID, organizationName string) error {
 	if alias == "" || organizationID == "" {
 		return fmt.Errorf("identity provider alias and organization id are required")
@@ -285,6 +288,11 @@ func (c *Client) UpsertIdentityProviderMapper(ctx context.Context, alias, organi
 	var existing []IdentityProviderMapper
 	if err := c.doJSON(ctx, http.MethodGet, c.idpMappersURL(alias), token, nil, &existing, "list identity provider mappers"); err != nil {
 		return err
+	}
+	for _, current := range existing {
+		if current.IdentityProviderMapper == "oidc-username-idp-mapper" && current.Name != identityProviderUsernameMapperName {
+			return fmt.Errorf("identity provider %q has unexpected username mapper %q", alias, current.Name)
+		}
 	}
 	for _, mapper := range identityProviderMappers(alias, organizationID, organizationName) {
 		method, url, op := http.MethodPost, c.idpMappersURL(alias), "create identity provider mapper"
@@ -324,6 +332,12 @@ func identityProviderMappers(alias, organizationID, organizationName string) []I
 		hardcoded(identityProviderOrgNameMapperName, "maas_org_name", organizationName),
 		fromClaim(identityProviderGroupsMapperName, "groups", "maas_groups"),
 		fromClaim(identityProviderRolesMapperName, "roles", "maas_roles"),
+		{
+			Name: identityProviderUsernameMapperName, IdentityProviderAlias: alias,
+			IdentityProviderMapper: "oidc-username-idp-mapper",
+			Config:                 map[string]string{"template": "${UUID}", "target": "LOCAL", "syncMode": "IMPORT"},
+		},
+		fromClaim(identityProviderPreferredUsernameMapperName, "preferred_username", "maas_preferred_username"),
 	}
 }
 
