@@ -272,6 +272,9 @@ prereqs: ## Check CI tooling pins (Go/buf/golangci) and Kind toolchain (Podman, 
 kind-test: ## Full Kind integration test
 	bash hack/test-kind.sh
 
+test-tenant-identity-isolation: ## Run the tenant broker identity-isolation regression
+	bash hack/test-tenant-identity-isolation.sh
+
 clean-kind: ## Delete the Kind cluster
 	kind delete cluster --name "$${KIND_CLUSTER_NAME:-ai-grid-hub}"
 

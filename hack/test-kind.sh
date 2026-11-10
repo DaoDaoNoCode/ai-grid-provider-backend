@@ -28,3 +28,9 @@ for _ in $(seq 1 30); do
 done
 
 AI_GRID_GRPC_ADDRESS=127.0.0.1:18080 go test ./integration -count=1 -run 'Test(Ping|List(Clusters|Tenants))$' -v
+
+kill "$port_forward_pid" 2>/dev/null || true
+wait "$port_forward_pid" 2>/dev/null || true
+port_forward_pid=""
+
+bash hack/test-tenant-identity-isolation.sh

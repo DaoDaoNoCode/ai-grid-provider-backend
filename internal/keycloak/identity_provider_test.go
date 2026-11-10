@@ -57,9 +57,9 @@ func TestCreateIdentityProviderRequiresFirstBrokerLoginFlow(t *testing.T) {
 		var gotBody map[string]any
 		server := httptest.NewServer(tokenThen(func(w http.ResponseWriter, r *http.Request) {
 			switch {
-			case r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/authentication/flows/"):
+			case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/authentication/flows"):
 				gotFlowPath = r.URL.Path
-				_ = json.NewEncoder(w).Encode(map[string]string{"alias": FirstBrokerLoginFlowAlias})
+				_ = json.NewEncoder(w).Encode([]authenticationFlow{{Alias: FirstBrokerLoginFlowAlias}})
 			case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/identity-provider/instances"):
 				body, _ := io.ReadAll(r.Body)
 				_ = json.Unmarshal(body, &gotBody)
@@ -75,7 +75,7 @@ func TestCreateIdentityProviderRequiresFirstBrokerLoginFlow(t *testing.T) {
 		if err != nil {
 			t.Fatalf("CreateIdentityProvider: %v", err)
 		}
-		if !strings.HasSuffix(gotFlowPath, "/authentication/flows/"+FirstBrokerLoginFlowAlias) {
+		if !strings.HasSuffix(gotFlowPath, "/authentication/flows") {
 			t.Fatalf("flow path = %q", gotFlowPath)
 		}
 		if gotBody["firstBrokerLoginFlowAlias"] != FirstBrokerLoginFlowAlias {
@@ -87,8 +87,8 @@ func TestCreateIdentityProviderRequiresFirstBrokerLoginFlow(t *testing.T) {
 		posts := 0
 		server := httptest.NewServer(tokenThen(func(w http.ResponseWriter, r *http.Request) {
 			switch {
-			case r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/authentication/flows/"):
-				http.Error(w, "missing flow", http.StatusNotFound)
+			case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/authentication/flows"):
+				_ = json.NewEncoder(w).Encode([]authenticationFlow{})
 			case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/identity-provider/instances"):
 				posts++
 			default:

@@ -766,6 +766,22 @@ The script:
 The sample resources are defined in
 [deploy/kind/sample-managedclusters.yaml](deploy/kind/sample-managedclusters.yaml).
 
+## Run the tenant identity-isolation regression
+
+From the repository root:
+
+```sh
+make test-tenant-identity-isolation
+```
+
+The target uses the Kind Keycloak 26.8.0 deployment and a local backend process. It creates a
+disposable target realm and two disposable upstream realms. It then creates tenants through the
+real onboarding path and logs in through the broker authorization-code flow. The regression
+checks that two companies can both use the profile username `alice`, that repeat logins keep
+their broker identities, and that upstream renames do not change local handles or provider
+links. It also checks missing profile data, matching-email conflicts, and legacy local
+usernames.
+
 ## Run the environment manually
 
 Create the cluster, build the image, and deploy the workloads:

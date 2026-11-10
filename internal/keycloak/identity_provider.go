@@ -66,6 +66,10 @@ type IdentityProviderMapper struct {
 	Config                 map[string]string `json:"config"`
 }
 
+type authenticationFlow struct {
+	Alias string `json:"alias"`
+}
+
 // OrganizationIdentityProviderLink configures an org↔IdP association.
 type OrganizationIdentityProviderLink struct {
 	AutoMembership bool   `json:"autoMembership"`
@@ -79,9 +83,23 @@ func (c *Client) CreateIdentityProvider(ctx context.Context, idp IdentityProvide
 		return err
 	}
 	if idp.FirstBrokerLoginFlowAlias != "" {
-		err := c.doJSON(ctx, http.MethodGet, c.authenticationFlowURL(idp.FirstBrokerLoginFlowAlias), token, nil, nil, "read authentication flow")
-		if err != nil {
+		var flows []authenticationFlow
+		if err := c.doJSON(ctx, http.MethodGet, c.authenticationFlowsURL(), token, nil, &flows, "list authentication flows"); err != nil {
 			return err
+		}
+		found := false
+		for _, flow := range flows {
+			if flow.Alias == idp.FirstBrokerLoginFlowAlias {
+				found = true
+				break
+			}
+		}
+		if !found {
+			return &APIError{
+				Op:         "list authentication flows",
+				StatusCode: http.StatusNotFound,
+				Body:       "authentication flow " + idp.FirstBrokerLoginFlowAlias + " not found",
+			}
 		}
 	}
 	payload, err := json.Marshal(idp)
@@ -359,8 +377,8 @@ func (c *Client) idpImportConfigURL() string {
 	return c.baseURL + "/admin/realms/" + url.PathEscape(c.realm) + "/identity-provider/import-config"
 }
 
-func (c *Client) authenticationFlowURL(alias string) string {
-	return c.baseURL + "/admin/realms/" + url.PathEscape(c.realm) + "/authentication/flows/" + url.PathEscape(alias)
+func (c *Client) authenticationFlowsURL() string {
+	return c.baseURL + "/admin/realms/" + url.PathEscape(c.realm) + "/authentication/flows"
 }
 
 func (c *Client) idpInstanceURL(alias string) string {
