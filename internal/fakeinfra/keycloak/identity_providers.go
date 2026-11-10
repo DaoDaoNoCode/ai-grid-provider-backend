@@ -17,13 +17,14 @@ import (
 // the others (hideOnLogin, firstBrokerLoginFlowAlias, storeToken, linkOnly and the rest) are
 // kept in extra and returned as written, as Keycloak stores and returns them.
 type identityProvider struct {
-	Alias       string            `json:"alias"`
-	DisplayName string            `json:"displayName,omitempty"`
-	ProviderID  string            `json:"providerId"`
-	Enabled     bool              `json:"enabled"`
-	TrustEmail  bool              `json:"trustEmail"`
-	Config      map[string]string `json:"config"`
-	extra       map[string]json.RawMessage
+	Alias                     string            `json:"alias"`
+	DisplayName               string            `json:"displayName,omitempty"`
+	ProviderID                string            `json:"providerId"`
+	Enabled                   bool              `json:"enabled"`
+	TrustEmail                bool              `json:"trustEmail"`
+	FirstBrokerLoginFlowAlias string            `json:"firstBrokerLoginFlowAlias,omitempty"`
+	Config                    map[string]string `json:"config"`
+	extra                     map[string]json.RawMessage
 }
 
 type identityProviderFields identityProvider

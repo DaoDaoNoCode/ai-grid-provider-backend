@@ -49,6 +49,65 @@ func TestCreateIdentityProvider(t *testing.T) {
 	}
 }
 
+func TestCreateIdentityProviderRequiresFirstBrokerLoginFlow(t *testing.T) {
+	t.Parallel()
+	t.Run("existing flow is sent on create", func(t *testing.T) {
+		t.Parallel()
+		var gotFlowPath string
+		var gotBody map[string]any
+		server := httptest.NewServer(tokenThen(func(w http.ResponseWriter, r *http.Request) {
+			switch {
+			case r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/authentication/flows/"):
+				gotFlowPath = r.URL.Path
+				_ = json.NewEncoder(w).Encode(map[string]string{"alias": FirstBrokerLoginFlowAlias})
+			case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/identity-provider/instances"):
+				body, _ := io.ReadAll(r.Body)
+				_ = json.Unmarshal(body, &gotBody)
+				w.WriteHeader(http.StatusCreated)
+			default:
+				http.NotFound(w, r)
+			}
+		}))
+		t.Cleanup(server.Close)
+		err := testClient(server).CreateIdentityProvider(context.Background(), IdentityProvider{
+			Alias: "acme", ProviderID: "oidc", FirstBrokerLoginFlowAlias: FirstBrokerLoginFlowAlias,
+		})
+		if err != nil {
+			t.Fatalf("CreateIdentityProvider: %v", err)
+		}
+		if !strings.HasSuffix(gotFlowPath, "/authentication/flows/"+FirstBrokerLoginFlowAlias) {
+			t.Fatalf("flow path = %q", gotFlowPath)
+		}
+		if gotBody["firstBrokerLoginFlowAlias"] != FirstBrokerLoginFlowAlias {
+			t.Fatalf("body = %#v", gotBody)
+		}
+	})
+	t.Run("absent flow stops the create", func(t *testing.T) {
+		t.Parallel()
+		posts := 0
+		server := httptest.NewServer(tokenThen(func(w http.ResponseWriter, r *http.Request) {
+			switch {
+			case r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/authentication/flows/"):
+				http.Error(w, "missing flow", http.StatusNotFound)
+			case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/identity-provider/instances"):
+				posts++
+			default:
+				http.NotFound(w, r)
+			}
+		}))
+		t.Cleanup(server.Close)
+		err := testClient(server).CreateIdentityProvider(context.Background(), IdentityProvider{
+			Alias: "acme", ProviderID: "oidc", FirstBrokerLoginFlowAlias: FirstBrokerLoginFlowAlias,
+		})
+		if !IsNotFound(err) {
+			t.Fatalf("CreateIdentityProvider error = %v, want not found", err)
+		}
+		if posts != 0 {
+			t.Fatalf("posts = %d, want 0", posts)
+		}
+	})
+}
+
 func TestDeleteIdentityProvider(t *testing.T) {
 	t.Parallel()
 	t.Run("ok", func(t *testing.T) {

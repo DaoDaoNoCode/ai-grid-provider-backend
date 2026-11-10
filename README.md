@@ -557,11 +557,15 @@ dedicated service account with organization manage/query roles instead of these
 credentials outside local testing.
 
 Optional `spec.identity_provider` on Create configures a realm OIDC IdP linked
-to the Organization and upserts four broker mappers (sync mode `FORCE`):
-`maas_org_id` and `maas_org_name` hold the organization's UUID and name, and
-`maas_groups` and `maas_roles` copy the tenant IdP's `groups` and `roles`
-claims on every login. The realm's client mappers turn these attributes into
-the flat `org_id`, `org_name`, `groups` and `roles` claims (ODH-ADR-MS-0007).
+to the Organization. The IdP uses the shared `ai-grid-first-broker-login`
+flow. The GitOps realm must provide that flow before onboarding creates an
+IdP. The backend upserts six broker mappers. `maas_org_id` and
+`maas_org_name` hold the organization's UUID and name, and `maas_groups`,
+`maas_roles`, and `maas_preferred_username` copy the tenant IdP's `groups`,
+`roles`, and `preferred_username` claims on every login (`FORCE`). The local
+username mapper generates a UUID once at import (`IMPORT`). The realm's client
+mappers turn these attributes into the flat `org_id`, `org_name`, `groups`
+and `roles` claims (ODH-ADR-MS-0007).
 The backend creates the IdP with `trustEmail` on, so Keycloak takes each user's
 `email_verified` from the tenant IdP, on every login. The tenant IdP must send
 `email_verified: true` for its users in the ID token, and also in the userinfo
@@ -671,6 +675,11 @@ IdPs created by an earlier build also lack `kc.org.broker.login.hide-when-org-un
 an Update that changes the IdP also sets. To fix one otherwise, turn on **Hide on login page when organization not resolved** in the IdP's **Settings**,
 section **Organization settings**, or with the Admin REST API, add the key with value `"true"`
 to `config` in the same `GET` and `PUT`.
+
+IdPs created by an earlier build also lack `firstBrokerLoginFlowAlias`. Reconcile them with the
+reviewed GitOps script for the shared realm. Set the field to
+`ai-grid-first-broker-login`, and install the two new username mappers. This reconciliation
+does not rewrite user records, provider links, groups, or organization attributes.
 
 ## Local architecture
 

@@ -986,12 +986,13 @@ func (s *TenantsServer) checkSigningKeys(ctx context.Context, alias string, cfg 
 // with it on or off.
 func keycloakIdentityProvider(alias string, idp *aigridv1.IdentityProvider, clientSecret []byte) keycloak.IdentityProvider {
 	return keycloak.IdentityProvider{
-		Alias:       alias,
-		DisplayName: idp.GetTitle(),
-		ProviderID:  "oidc",
-		Enabled:     idp.GetEnabled(),
-		TrustEmail:  true,
-		Config:      oidcConfigForKeycloak(idp.GetConfig(), clientSecret),
+		Alias:                     alias,
+		DisplayName:               idp.GetTitle(),
+		ProviderID:                "oidc",
+		Enabled:                   idp.GetEnabled(),
+		TrustEmail:                true,
+		FirstBrokerLoginFlowAlias: keycloak.FirstBrokerLoginFlowAlias,
+		Config:                    oidcConfigForKeycloak(idp.GetConfig(), clientSecret),
 	}
 }
 

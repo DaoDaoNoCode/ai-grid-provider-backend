@@ -20,18 +20,22 @@ const (
 	identityProviderPreferredUsernameMapperName = "AI Grid preferred username"
 )
 
+// FirstBrokerLoginFlowAlias is the shared realm flow used by platform-managed IdPs.
+const FirstBrokerLoginFlowAlias = "ai-grid-first-broker-login"
+
 // IdentityProvider is a realm-level identity provider instance. TrustEmail is Keycloak's
 // trustEmail: with it on, Keycloak takes a brokered user's email_verified from the IdP instead
 // of setting it to false. Keys this type doesn't model (hideOnLogin, the first broker login
 // flow and others) are kept in Extra, so a GET→modify→PUT writes them back unchanged.
 type IdentityProvider struct {
-	Alias       string                     `json:"alias"`
-	DisplayName string                     `json:"displayName,omitempty"`
-	ProviderID  string                     `json:"providerId"`
-	Enabled     bool                       `json:"enabled"`
-	TrustEmail  bool                       `json:"trustEmail"`
-	Config      map[string]string          `json:"config"`
-	Extra       map[string]json.RawMessage `json:"-"`
+	Alias                     string                     `json:"alias"`
+	DisplayName               string                     `json:"displayName,omitempty"`
+	ProviderID                string                     `json:"providerId"`
+	Enabled                   bool                       `json:"enabled"`
+	TrustEmail                bool                       `json:"trustEmail"`
+	FirstBrokerLoginFlowAlias string                     `json:"firstBrokerLoginFlowAlias,omitempty"`
+	Config                    map[string]string          `json:"config"`
+	Extra                     map[string]json.RawMessage `json:"-"`
 }
 
 type identityProviderFields IdentityProvider
@@ -73,6 +77,12 @@ func (c *Client) CreateIdentityProvider(ctx context.Context, idp IdentityProvide
 	token, err := c.token(ctx)
 	if err != nil {
 		return err
+	}
+	if idp.FirstBrokerLoginFlowAlias != "" {
+		err := c.doJSON(ctx, http.MethodGet, c.authenticationFlowURL(idp.FirstBrokerLoginFlowAlias), token, nil, nil, "read authentication flow")
+		if err != nil {
+			return err
+		}
 	}
 	payload, err := json.Marshal(idp)
 	if err != nil {
@@ -347,6 +357,10 @@ func (c *Client) idpInstancesURL() string {
 
 func (c *Client) idpImportConfigURL() string {
 	return c.baseURL + "/admin/realms/" + url.PathEscape(c.realm) + "/identity-provider/import-config"
+}
+
+func (c *Client) authenticationFlowURL(alias string) string {
+	return c.baseURL + "/admin/realms/" + url.PathEscape(c.realm) + "/authentication/flows/" + url.PathEscape(alias)
 }
 
 func (c *Client) idpInstanceURL(alias string) string {
