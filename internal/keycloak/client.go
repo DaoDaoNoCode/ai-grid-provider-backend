@@ -93,12 +93,13 @@ func (d OrganizationDomain) MarshalJSON() ([]byte, error) {
 // Fields match the Admin API brief/full user representation used by
 // GET /admin/realms/{realm}/organizations/{id}/members.
 type OrganizationMember struct {
-	ID        string `json:"id,omitempty"`
-	Username  string `json:"username,omitempty"`
-	Email     string `json:"email,omitempty"`
-	FirstName string `json:"firstName,omitempty"`
-	LastName  string `json:"lastName,omitempty"`
-	Enabled   bool   `json:"enabled,omitempty"`
+	ID         string              `json:"id,omitempty"`
+	Username   string              `json:"username,omitempty"`
+	Email      string              `json:"email,omitempty"`
+	FirstName  string              `json:"firstName,omitempty"`
+	LastName   string              `json:"lastName,omitempty"`
+	Enabled    bool                `json:"enabled,omitempty"`
+	Attributes map[string][]string `json:"attributes,omitempty"`
 }
 
 // Organization is a Keycloak Organization in the configured realm.
@@ -420,7 +421,7 @@ func (c *Client) ListOrganizationMembers(ctx context.Context, orgID string) ([]O
 	if err != nil {
 		return nil, err
 	}
-	return listAll(ctx, c, c.orgMembersURL(orgID), token, "list organization members",
+	return listAll(ctx, c, c.orgMembersURL(orgID)+"?briefRepresentation=false", token, "list organization members",
 		func(m OrganizationMember) string { return m.ID })
 }
 

@@ -1,0 +1,26 @@
+{
+  "3f1c9a72-5b6e-4d2a-8c01-2d3e4f5a6b7c": [
+    {
+      "id": "d0e1f2a3-b4c5-4d6e-8f90-a1b2c3d4e5f6",
+      "username": "11111111-2222-4333-8444-555555555555",
+      "attributes": {
+        "maas_preferred_username": [
+          "alice"
+        ]
+      }
+    },
+    {
+      "id": "e1f2a3b4-c5d6-4e7f-8901-b2c3d4e5f6a7",
+      "username": "66666666-7777-4888-9999-aaaaaaaaaaaa",
+      "attributes": {
+        "maas_preferred_username": [
+          "alice"
+        ]
+      }
+    },
+    {
+      "id": "f2a3b4c5-d6e7-4f80-8912-c3d4e5f6a7b8",
+      "username": "bbbbbbbb-cccc-4ddd-8eee-ffffffffffff"
+    }
+  ]
+}

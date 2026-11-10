@@ -527,6 +527,19 @@ func createTargetRealm(t *testing.T, admin adminContext, env identityIsolationEn
 			DefaultClientScopes:       []string{"basic", "profile", "email", "roles", "web-origins"},
 			ProtocolMappers: []keycloakProtocolMapper{
 				{
+					Name:           "AI Grid preferred username",
+					Protocol:       "openid-connect",
+					ProtocolMapper: "oidc-usermodel-attribute-mapper",
+					Config: map[string]string{
+						"user.attribute":       "maas_preferred_username",
+						"claim.name":           "preferred_username",
+						"jsonType.label":       "String",
+						"id.token.claim":       "true",
+						"userinfo.token.claim": "true",
+						"access.token.claim":   "true",
+					},
+				},
+				{
 					Name:           "MaaS org id",
 					Protocol:       "openid-connect",
 					ProtocolMapper: "oidc-usermodel-attribute-mapper",
@@ -590,7 +603,6 @@ func createTargetRealm(t *testing.T, admin adminContext, env identityIsolationEn
 	}
 	postRealm(t, admin, realm)
 	requireAuthenticationFlow(t, admin, env.TargetRealm, "ai-grid-first-broker-login")
-	configureProfileScope(t, admin, env.TargetRealm, "maas_preferred_username", "oidc-usermodel-attribute-mapper")
 }
 
 func requireAuthenticationFlow(t *testing.T, admin adminContext, realm, alias string) {

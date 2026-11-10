@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -207,6 +208,48 @@ func TestAdminAuthAndRealms(t *testing.T) {
 	f.clock.Advance(60 * time.Second)
 	if code, _, _ := f.do(t, http.MethodGet, orgs, ""); code != http.StatusUnauthorized {
 		t.Fatalf("expired token = %d", code)
+	}
+}
+
+func TestOrganizationMembers(t *testing.T) {
+	members, err := LoadMemberFixtures(filepath.Join("..", "..", "..", "fixtures", "default"))
+	if err != nil {
+		t.Fatalf("LoadMemberFixtures() error = %v", err)
+	}
+	if len(members[acmeID]) != 3 {
+		t.Fatalf("acme members = %+v", members[acmeID])
+	}
+	f := start(t, func(s *Server) {
+		if err := s.SeedMembers(members); err != nil {
+			t.Fatalf("SeedMembers() error = %v", err)
+		}
+	})
+
+	code, body, _ := f.do(t, http.MethodGet, orgs+"/"+acmeID+"/members?first=0&max=10&briefRepresentation=false", "")
+	if code != http.StatusOK {
+		t.Fatalf("list members = %d %s", code, body)
+	}
+	var full []OrganizationMember
+	if err := json.Unmarshal([]byte(body), &full); err != nil {
+		t.Fatalf("list members body %s: %v", body, err)
+	}
+	if len(full) != 3 {
+		t.Fatalf("list members = %+v", full)
+	}
+	if full[0].Attributes == nil || (*full[0].Attributes)["maas_preferred_username"][0] != "alice" {
+		t.Fatalf("full member attributes = %+v", full[0].Attributes)
+	}
+
+	code, body, _ = f.do(t, http.MethodGet, orgs+"/"+acmeID+"/members?first=0&max=10&briefRepresentation=true", "")
+	if code != http.StatusOK {
+		t.Fatalf("list brief members = %d %s", code, body)
+	}
+	var brief []OrganizationMember
+	if err := json.Unmarshal([]byte(body), &brief); err != nil {
+		t.Fatalf("list brief members body %s: %v", body, err)
+	}
+	if brief[0].Attributes != nil {
+		t.Fatalf("brief member attributes = %+v", brief[0].Attributes)
 	}
 }
 

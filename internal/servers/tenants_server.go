@@ -718,13 +718,18 @@ func staleTenantError(op, id string) *connect.Error {
 }
 
 func tenantMemberFromOrganizationMember(member keycloak.OrganizationMember) *aigridv1.TenantMember {
+	preferredUsername := ""
+	if values := member.Attributes["maas_preferred_username"]; len(values) > 0 {
+		preferredUsername = values[0]
+	}
 	return &aigridv1.TenantMember{
-		Id:        member.ID,
-		Username:  member.Username,
-		Email:     member.Email,
-		FirstName: member.FirstName,
-		LastName:  member.LastName,
-		Enabled:   member.Enabled,
+		Id:                member.ID,
+		Username:          member.Username,
+		Email:             member.Email,
+		FirstName:         member.FirstName,
+		LastName:          member.LastName,
+		Enabled:           member.Enabled,
+		PreferredUsername: preferredUsername,
 	}
 }
 

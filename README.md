@@ -564,8 +564,10 @@ IdP. The backend upserts six broker mappers. `maas_org_id` and
 `maas_roles`, and `maas_preferred_username` copy the tenant IdP's `groups`,
 `roles`, and `preferred_username` claims on every login (`FORCE`). The local
 username mapper generates a UUID once at import (`IMPORT`). The realm's client
-mappers turn these attributes into the flat `org_id`, `org_name`, `groups`
-and `roles` claims (ODH-ADR-MS-0007).
+mappers turn these attributes into the flat `org_id`, `org_name`, `groups`,
+and `roles` claims, and the client mapper emits `preferred_username`
+(ODH-ADR-MS-0007). The shared realm keeps Keycloak's built-in `profile` and
+`email` client scopes unchanged.
 The backend creates the IdP with `trustEmail` on, so Keycloak takes each user's
 `email_verified` from the tenant IdP, on every login. The tenant IdP must send
 `email_verified: true` for its users in the ID token, and also in the userinfo

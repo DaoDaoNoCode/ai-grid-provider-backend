@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"reflect"
 	"strings"
 	"sync"
@@ -284,6 +285,7 @@ func TestOrganizationDomainNames(t *testing.T) {
 func TestListOrganizationMembers(t *testing.T) {
 	t.Parallel()
 
+	queries := make(chan url.Values, 1)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.Contains(r.URL.Path, "/token") {
 			_ = json.NewEncoder(w).Encode(map[string]string{"access_token": "test-token"})
@@ -293,8 +295,12 @@ func TestListOrganizationMembers(t *testing.T) {
 			http.NotFound(w, r)
 			return
 		}
+		queries <- r.URL.Query()
 		_ = json.NewEncoder(w).Encode([]OrganizationMember{
-			{ID: "u1", Username: "alice", Email: "alice@example.com", Enabled: true},
+			{
+				ID: "u1", Username: "alice", Email: "alice@example.com", Enabled: true,
+				Attributes: map[string][]string{"maas_preferred_username": {"alice-profile"}},
+			},
 			{ID: "u2", Username: "bob", FirstName: "Bob", LastName: "Builder"},
 		})
 	}))
@@ -310,6 +316,13 @@ func TestListOrganizationMembers(t *testing.T) {
 	}
 	if len(got) != 2 || got[0].Username != "alice" || got[1].Username != "bob" {
 		t.Fatalf("ListOrganizationMembers() = %+v", got)
+	}
+	if got[0].Attributes["maas_preferred_username"][0] != "alice-profile" {
+		t.Fatalf("member attributes = %+v", got[0].Attributes)
+	}
+	query := <-queries
+	if query.Get("briefRepresentation") != "false" {
+		t.Fatalf("list query = %v, want briefRepresentation=false", query)
 	}
 }
 

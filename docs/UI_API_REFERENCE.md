@@ -468,6 +468,13 @@ Organization **members** can be listed via `GET .../tenants/{id}:listMembers`.
 Full user CRUD remains out of scope for this API today; the org's own identity
 provider is `spec.identity_provider`.
 
+For a member, `id` names the Keycloak user UUID, `username` names the local
+Keycloak login handle, and `preferred_username` names the optional profile
+label from the upstream identity provider. Use `preferred_username` for
+labels. Use `id` to select a member in the configured realm. Canonical MaaS
+ownership still requires the broker issuer and subject. Never construct that
+issuer from an internal administration URL.
+
 | Field | Meaning for UI |
 | --- | --- |
 | `id` | Keycloak organization **UUID** (server-assigned on create) |
@@ -685,7 +692,8 @@ Optional query: `offset`, `limit` (same semantics as other List RPCs).
   "items": [
     {
       "id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
-      "username": "alice",
+      "username": "11111111-2222-4333-8444-555555555555",
+      "preferred_username": "alice",
       "email": "alice@acme.example.com",
       "first_name": "Alice",
       "last_name": "Admin",
@@ -693,7 +701,8 @@ Optional query: `offset`, `limit` (same semantics as other List RPCs).
     },
     {
       "id": "b2c3d4e5-f6a7-8901-bcde-f12345678901",
-      "username": "bob",
+      "username": "66666666-7777-4888-9999-aaaaaaaaaaaa",
+      "preferred_username": "bob",
       "email": "bob@acme.example.com",
       "first_name": "Bob",
       "last_name": "Builder",

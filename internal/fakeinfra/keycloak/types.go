@@ -14,6 +14,7 @@ import (
 // OrganizationRepresentation, exactly what
 // GET /admin/realms/{realm}/organizations?briefRepresentation=false returns.
 const OrganizationsFile = "organizations.json"
+const MembersFile = "members.json"
 
 // Organization is Keycloak's OrganizationRepresentation
 // (core/src/main/java/org/keycloak/representations/idm/OrganizationRepresentation.java)
@@ -41,6 +42,15 @@ type Domain struct {
 	Verified              bool   `json:"verified"`
 	IdentityProviderAlias string `json:"identityProviderAlias,omitempty"`
 	AutoRedirect          bool   `json:"autoRedirect"`
+}
+
+// OrganizationMember is the part of UserRepresentation that the
+// organization members endpoint returns. The full form carries attributes;
+// the brief form omits them.
+type OrganizationMember struct {
+	ID         string               `json:"id,omitempty"`
+	Username   string               `json:"username,omitempty"`
+	Attributes *map[string][]string `json:"attributes,omitempty"`
 }
 
 // representation is ModelToRepresentation.toRepresentation(organization,
@@ -86,4 +96,31 @@ func LoadFixtures(dir string) ([]Organization, error) {
 		return nil, fmt.Errorf("%s: %w", OrganizationsFile, err)
 	}
 	return orgs, nil
+}
+
+// LoadMemberFixtures reads members.json from dir. The file maps an
+// organization ID to its members. A missing file means a realm without
+// organization members.
+func LoadMemberFixtures(dir string) (map[string][]OrganizationMember, error) {
+	info, err := os.Stat(dir)
+	if err != nil {
+		return nil, fmt.Errorf("fixtures directory: %w", err)
+	}
+	if !info.IsDir() {
+		return nil, fmt.Errorf("fixtures directory %s is not a directory", dir)
+	}
+	raw, err := os.ReadFile(filepath.Join(dir, MembersFile))
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	dec.DisallowUnknownFields()
+	var members map[string][]OrganizationMember
+	if err := dec.Decode(&members); err != nil {
+		return nil, fmt.Errorf("%s: %w", MembersFile, err)
+	}
+	return members, nil
 }

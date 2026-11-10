@@ -99,10 +99,17 @@ func run(logger *slog.Logger, cfg config) error {
 	if err != nil {
 		return fmt.Errorf("load Keycloak fixtures: %w", err)
 	}
+	members, err := keycloak.LoadMemberFixtures(cfg.fixtures)
+	if err != nil {
+		return fmt.Errorf("load Keycloak member fixtures: %w", err)
+	}
 	cfg.keycloak.Logger = logger.With("component", "keycloak")
 	fakeKeycloak, err := keycloak.New(cfg.keycloak, organizations)
 	if err != nil {
 		return fmt.Errorf("build fake Keycloak: %w", err)
+	}
+	if err := fakeKeycloak.SeedMembers(members); err != nil {
+		return fmt.Errorf("seed fake Keycloak members: %w", err)
 	}
 
 	var fakeDraft *draft.Server

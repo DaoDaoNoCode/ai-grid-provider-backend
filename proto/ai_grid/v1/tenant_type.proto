@@ -105,7 +105,7 @@ message TenantMember {
   // Keycloak user id (UUID).
   string id = 1;
 
-  // Login username.
+  // Local Keycloak username generated for this broker account.
   string username = 2;
 
   // Email address when present on the user.
@@ -116,4 +116,8 @@ message TenantMember {
 
   // Whether the Keycloak user is enabled.
   bool enabled = 6;
+
+  // Optional profile label from the upstream identity provider. It can repeat
+  // across members or be empty. Do not use it as a member identity.
+  string preferred_username = 7;
 }

@@ -216,6 +216,8 @@ func TestListOrganizationMembersReadsEveryPage(t *testing.T) {
 	for i := range 250 {
 		all = append(all, OrganizationMember{ID: fmt.Sprintf("user-%03d", i), Username: fmt.Sprintf("user%03d", i)})
 	}
+	all[0].Attributes = map[string][]string{"maas_preferred_username": {"alice-a"}}
+	all[249].Attributes = map[string][]string{"maas_preferred_username": {"alice-b"}}
 	client, queries := listServer(t, func(query url.Values) (int, any) {
 		return http.StatusOK, keycloakPage(all, query)
 	}, nil)
@@ -229,6 +231,15 @@ func TestListOrganizationMembersReadsEveryPage(t *testing.T) {
 	}
 	if got := firsts(queries()); !slices.Equal(got, []string{"0", "100", "200"}) {
 		t.Fatalf("requested first = %v, want [0 100 200]", got)
+	}
+	for _, query := range queries() {
+		if query.Get("max") != strconv.Itoa(listPageSize) || query.Get("briefRepresentation") != "false" {
+			t.Fatalf("list query = %v, want max=%d and briefRepresentation=false", query, listPageSize)
+		}
+	}
+	if got[0].Attributes["maas_preferred_username"][0] != "alice-a" ||
+		got[249].Attributes["maas_preferred_username"][0] != "alice-b" {
+		t.Fatalf("paged member attributes = %+v and %+v", got[0].Attributes, got[249].Attributes)
 	}
 }
 

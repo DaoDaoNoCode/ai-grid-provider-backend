@@ -1594,6 +1594,70 @@ func TestUpdateTenant(t *testing.T) {
 	})
 }
 
+func TestTenantMemberSeparatesIdentityAndUsernames(t *testing.T) {
+	t.Parallel()
+
+	store := newFakeOrganizationStore(
+		keycloak.Organization{ID: "org-1", Name: "acme"},
+	)
+	store.members["org-1"] = []keycloak.OrganizationMember{
+		{
+			ID: "user-alice-a", Username: "local-uuid-a", Enabled: true,
+			Attributes: map[string][]string{"maas_preferred_username": {"alice"}},
+		},
+		{
+			ID: "user-alice-b", Username: "local-uuid-b", Enabled: true,
+			Attributes: map[string][]string{"maas_preferred_username": {"alice"}},
+		},
+	}
+	server := mustTenantsServer(t, store)
+	got, err := server.ListMembers(context.Background(), &aigridv1.TenantsListMembersRequest{Id: "org-1"})
+	if err != nil {
+		t.Fatalf("ListMembers() error = %v", err)
+	}
+	if len(got.GetItems()) != 2 {
+		t.Fatalf("ListMembers() items = %+v", got.GetItems())
+	}
+	members := []struct {
+		id       string
+		username string
+	}{
+		{id: "user-alice-a", username: "local-uuid-a"},
+		{id: "user-alice-b", username: "local-uuid-b"},
+	}
+	for i, want := range members {
+		item := got.GetItems()[i]
+		if item.GetId() != want.id || item.GetUsername() != want.username {
+			t.Fatalf("member %d identity = %+v", i, item)
+		}
+		if item.GetPreferredUsername() != "alice" {
+			t.Fatalf("member %d preferred username = %q, want alice", i, item.GetPreferredUsername())
+		}
+	}
+
+	missing := tenantMemberFromOrganizationMember(keycloak.OrganizationMember{
+		ID: "user-missing", Username: "local-uuid-missing",
+	})
+	if missing.GetPreferredUsername() != "" {
+		t.Fatalf("missing profile username = %q, want empty", missing.GetPreferredUsername())
+	}
+
+	before := keycloak.OrganizationMember{
+		ID: "user-renamed", Username: "local-uuid-renamed",
+		Attributes: map[string][]string{"maas_preferred_username": {"alice"}},
+	}
+	after := before
+	after.Attributes = map[string][]string{"maas_preferred_username": {"alice-renamed"}}
+	beforeMember := tenantMemberFromOrganizationMember(before)
+	afterMember := tenantMemberFromOrganizationMember(after)
+	if beforeMember.GetId() != afterMember.GetId() || beforeMember.GetUsername() != afterMember.GetUsername() {
+		t.Fatalf("rename changed identity: before=%+v after=%+v", beforeMember, afterMember)
+	}
+	if afterMember.GetPreferredUsername() != "alice-renamed" {
+		t.Fatalf("renamed profile username = %q, want alice-renamed", afterMember.GetPreferredUsername())
+	}
+}
+
 func TestListTenantMembers(t *testing.T) {
 	t.Parallel()
 
