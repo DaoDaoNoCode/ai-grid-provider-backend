@@ -738,7 +738,8 @@ func TestModelsGitDeleteWithoutVersionAndUpdateNeedsMask(t *testing.T) {
 }
 
 // Labels and annotations reach the files Argo CD applies: only keys without
-// a prefix and the console's two openshift.io annotations are allowed, and
+// a prefix, the console's two openshift.io annotations and the capabilities
+// annotation (TestModelsGitCapabilitiesAnnotation) are allowed, and
 // the backend's own labels don't show, so a read-modify-write of the
 // metadata round-trips.
 func TestModelsGitMetadataKeyAllowlist(t *testing.T) {

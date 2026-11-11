@@ -202,7 +202,7 @@ The repository holds:
 catalog/
   subscriptions/<id>.yaml                 # MaaSSubscription <id> and MaaSAuthPolicy <id>-policy (AI_GRID_SUBSCRIPTION_NAMESPACE)
   models/<id>/deployment/                 # LLMInferenceService <id> and NetworkPolicy <id>-grid (AI_GRID_MODELS_NAMESPACE)
-  models/<id>/catalog/                    # ExternalModel <id> (to grid-provider) and MaaSModelRef <id> (AI_GRID_SUBSCRIPTION_NAMESPACE)
+  models/<id>/catalog/                    # ExternalModel <id> (to grid-provider, path from the capabilities) and MaaSModelRef <id> (AI_GRID_SUBSCRIPTION_NAMESPACE)
   clusters/<name>/kustomization.yaml      # the deployments placed on ManagedCluster <name>
   ingress/kustomization.yaml              # every model's catalog entry
 ```
@@ -263,7 +263,8 @@ For both models and subscriptions:
   next write to that object.
 - Labels and annotations go into the files Argo CD applies, so a request may
   set only keys without a prefix, such as `team`, and the annotations
-  `openshift.io/display-name` and `openshift.io/description`. Any other
+  `openshift.io/display-name` and `openshift.io/description`; a Model may
+  also set `opendatahub.io/model-capabilities` (see Models). Any other
   prefixed key, such as one of Argo CD's, Helm's or `ai-grid/`, is
   `InvalidArgument`, and so is a key or value Kubernetes would reject. The backend adds its own keys, and a read doesn't return
   them.
@@ -365,7 +366,26 @@ For models:
   the id, Update also takes the name a read returned, and any other value is
   `InvalidArgument`. A human-readable name goes in annotation
   `openshift.io/display-name`.
-- **Models saved before this rule** may serve another name, such as
+- Annotation `opendatahub.io/model-capabilities` says what the model can do,
+  as RHOAI's deploy wizard writes it: a JSON array of strings, such as
+  `["Chat"]`, `["Text completion"]` or `["Vision","Chat"]`. Anything else, or
+  an empty or blank string in it, is `InvalidArgument`. The backend copies it, as sent, onto the
+  `LLMInferenceService` and the `MaaSModelRef`, from which MaaS answers it as
+  the model's `modelCapabilities`. It also chooses the `ExternalModel`'s
+  `path`, because when the tenant's `MaaSTenantConfig` enables API
+  translation (`spec.apiTranslation.enabled`), as it does on AI Grid's ingress
+  clusters, MaaS sends every request for the model to that path, whatever
+  path the client called (with translation off, the client's path is kept and
+  this has no effect): a completion-only model (`Text completion` is the
+  only well-known capability it has, none of `Chat`, `Vision` and
+  `Transcription`, matched trimmed and case-insensitively; other values
+  don't count) gets `/v1/completions`;
+  every other model, one without the annotation included, gets
+  `/v1/chat/completions`. `apiFormat` is `openai-chat` either way, which MaaS
+  passes through unchanged. Changing the annotation rewrites the path. Create
+  and Update refuse a value that doesn't parse, so only a value hand-edited in
+  Git can be one; such a model keeps the chat path until a successful update.
+- **Models saved before the id-as-served-name rule** may serve another name, such as
   `facebook/opt-125m`. Until such a model is rewritten, a read returns the
   name it actually serves. Its next update, whatever it changes (a replica
   count, a display name), switches it to serve the id: vLLM's served name
@@ -999,7 +1019,7 @@ make dev-fake                         # terminal 1
 # terminal 2: a model on two sites, then a subscription to it
 curl -s -X POST http://127.0.0.1:9092/api/v1/models -H 'Content-Type: application/json' -d '{
   "id": "granite-3b",
-  "metadata": {"annotations": {"openshift.io/display-name": "Granite 3B"}},
+  "metadata": {"annotations": {"openshift.io/display-name": "Granite 3B", "opendatahub.io/model-capabilities": "[\"Chat\"]"}},
   "spec": {"model": {"uri": "hf://ibm-granite/granite-3b"}, "replicas": 1,
     "placement": {"label_selector": {"match_expressions": [{"key": "name", "operator": "In", "values": ["site-paris-1", "site-madrid-1"]}]}}}}'
 curl -s -X POST http://127.0.0.1:9092/api/v1/subscriptions -H 'Content-Type: application/json' -d '{

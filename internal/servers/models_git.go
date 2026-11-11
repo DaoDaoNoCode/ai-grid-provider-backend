@@ -115,7 +115,7 @@ func (s *ModelsServer) gitGet(ctx context.Context, id string) (*aigridv1.Model, 
 
 func (s *ModelsServer) gitCreate(ctx context.Context, object *aigridv1.Model) (*aigridv1.Model, error) {
 	id := object.GetId()
-	if err := validateGitMetadata(object.GetMetadata()); err != nil {
+	if err := validateGitMetadata(object.GetMetadata(), modelGitAnnotations); err != nil {
 		return nil, err
 	}
 	clusters, err := gitPlacementClusters(object.GetSpec())
@@ -227,7 +227,7 @@ func (s *ModelsServer) gitUpdateOn(ctx context.Context, head gitops.Snapshot, ob
 		return nil, err
 	}
 	merged.Status = nil
-	if err := validateGitMetadata(merged.GetMetadata()); err != nil {
+	if err := validateGitMetadata(merged.GetMetadata(), modelGitAnnotations); err != nil {
 		return nil, err
 	}
 	normalizeModelResources(merged.GetSpec().GetMain())
@@ -1035,7 +1035,12 @@ func (s *ModelsServer) renderModelDeployment(object *aigridv1.Model, version int
 }
 
 // renderModelCatalog renders the ingress side: an ExternalModel routed to the
-// grid provider, and the MaaSModelRef that lists it in MaaS.
+// grid provider, and the MaaSModelRef that lists it in MaaS. The
+// ExternalModel's path is the endpoint the model serves (modelExternalPath),
+// because MaaS sends every request to that path when the tenant enables API
+// translation, as AI Grid's ingress clusters do; its apiFormat stays
+// openai-chat, which MaaS passes through unchanged, as it has no completions
+// format.
 func (s *ModelsServer) renderModelCatalog(object *aigridv1.Model) ([]byte, error) {
 	id := object.GetId()
 	target := servedModelName(object)
@@ -1051,7 +1056,7 @@ func (s *ModelsServer) renderModelCatalog(object *aigridv1.Model) ([]byte, error
 			"externalProviderRefs": []interface{}{map[string]interface{}{
 				"ref":         map[string]interface{}{"name": gridProviderName},
 				"apiFormat":   "openai-chat",
-				"path":        "/v1/chat/completions",
+				"path":        modelExternalPath(object),
 				"targetModel": target,
 				"weight":      int64(1),
 			}},

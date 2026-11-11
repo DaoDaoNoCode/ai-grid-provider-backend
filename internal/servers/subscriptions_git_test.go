@@ -667,6 +667,8 @@ func TestSubscriptionsGitMetadataKeyAllowlist(t *testing.T) {
 		"helm.sh/resource-policy", "argocd.argoproj.io/sync-options", "argocd.argoproj.io/compare-options",
 		"kubectl.kubernetes.io/last-applied-configuration", "app.kubernetes.io/instance", "app.kubernetes.io/managed-by",
 		"ai-grid/version", "ai-grid/clusters", "maas.opendatahub.io/retain-api-keys-on-delete",
+		// A Model's capabilities annotation, not a Subscription's.
+		annotationModelCapabilities,
 	} {
 		labels := gitSampleSubscription("team-b")
 		labels.Metadata.Labels = map[string]string{key: "x"}

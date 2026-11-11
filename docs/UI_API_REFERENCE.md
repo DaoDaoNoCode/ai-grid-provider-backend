@@ -723,8 +723,25 @@ because an empty image in the model doesn't override theirs: with no
 here replaces any preset's. A blank image, or one with a space or tab, is
 `InvalidArgument`. A `base_refs` item must be a
 name with no whitespace; an empty one is `InvalidArgument`. Labels and
-annotations take only unprefixed keys plus `openshift.io/display-name` and
-`openshift.io/description`.
+annotations take only unprefixed keys plus `openshift.io/display-name`,
+`openshift.io/description` and, as an annotation only,
+`opendatahub.io/model-capabilities`.
+
+`opendatahub.io/model-capabilities` is what the model can do, as RHOAI's
+deploy wizard writes it: a JSON array of strings, such as `["Chat"]`,
+`["Text completion"]` or `["Vision","Chat"]`. A value that isn't one, or has an
+empty or blank string, is `InvalidArgument`. It is stored and read back as sent, and copied onto the
+`LLMInferenceService` and the `MaaSModelRef`, so MaaS shows it as the model's
+`modelCapabilities`. It also chooses the endpoint the grid routes the model's
+requests to, because MaaS sends every request for the model to its
+`ExternalModel`'s path when the tenant enables API translation, as AI Grid's
+ingress clusters do: a completion-only model (`Text completion` is the only
+well-known capability it has, none of `Chat`, `Vision` and `Transcription`, matched trimmed
+and case-insensitively; other values don't count) gets `/v1/completions`; any other, one
+without the annotation included, gets `/v1/chat/completions`. Create and
+Update refuse a value that doesn't parse, so only a value hand-edited in Git
+can be one; such a model keeps the chat path until a successful update. To change it,
+update `metadata.annotations` with the whole map.
 
 | Method | Path | Notes |
 | --- | --- | --- |
@@ -744,7 +761,8 @@ annotations take only unprefixed keys plus `openshift.io/display-name` and
   "metadata": {
     "name": "facebook-opt-125m",
     "annotations": {
-      "openshift.io/display-name": "Facebook OPT 125M"
+      "openshift.io/display-name": "Facebook OPT 125M",
+      "opendatahub.io/model-capabilities": "[\"Text completion\"]"
     }
   },
   "spec": {

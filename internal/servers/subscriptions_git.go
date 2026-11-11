@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"path"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -319,7 +320,7 @@ func gitModelRegistrations(sub *aigridv1.Subscription, namespace string, modelRe
 
 func (s *SubscriptionsServer) gitCreate(ctx context.Context, object *aigridv1.Subscription) (*aigridv1.SubscriptionsCreateResponse, error) {
 	id := subscriptionID(object)
-	if err := validateGitMetadata(object.GetMetadata()); err != nil {
+	if err := validateGitMetadata(object.GetMetadata(), subscriptionGitAnnotations); err != nil {
 		return nil, err
 	}
 	if _, err := qualifiedOwnerGroups(object.GetSpec()); err != nil {
@@ -397,7 +398,7 @@ func (s *SubscriptionsServer) gitUpdateOn(ctx context.Context, head gitops.Snaps
 
 	candidate := mergeSubscriptionUpdate(current.sub, object, paths)
 	candidate.Status = nil
-	if err := validateGitMetadata(candidate.GetMetadata()); err != nil {
+	if err := validateGitMetadata(candidate.GetMetadata(), subscriptionGitAnnotations); err != nil {
 		return nil, err
 	}
 	var read []string
@@ -502,22 +503,42 @@ func (s *SubscriptionsServer) gitCommit(ctx context.Context, base, op string, ob
 	return doc, nil
 }
 
+// gitAnnotations are the prefixed annotation keys a caller may set on one
+// kind of object in git mode, each with the check its value must pass, nil
+// for none. A check's error says what is wrong with the value.
+type gitAnnotations map[string]func(value string) error
+
+// subscriptionGitAnnotations are the console's display name and description.
+var subscriptionGitAnnotations = gitAnnotations{
+	annotationDisplayName: nil,
+	annotationDescription: nil,
+}
+
+// keys returns the allowed keys, sorted.
+func (allowed gitAnnotations) keys() []string {
+	keys := make([]string, 0, len(allowed))
+	for key := range allowed {
+		keys = append(keys, key)
+	}
+	slices.Sort(keys)
+	return keys
+}
+
 // validateGitMetadata allows only the labels and annotations a caller may
 // set in git mode, because what the backend commits is applied as is: keys
-// without a prefix, such as team or env, and the console's
-// openshift.io/display-name and openshift.io/description annotations. Any
-// other prefixed key, such as Argo CD's, Helm's, kubectl's or the backend's
-// own ai-grid/ keys, is InvalidArgument. The backend adds its own keys after
-// this check.
-func validateGitMetadata(meta *aigridv1.Metadata) error {
+// without a prefix, such as team or env, and the prefixed annotations in
+// allowed, whose values must pass allowed's checks. Any other prefixed key,
+// such as Argo CD's, Helm's, kubectl's or the backend's own ai-grid/ keys, is
+// InvalidArgument. The backend adds its own keys after this check.
+func validateGitMetadata(meta *aigridv1.Metadata, allowed gitAnnotations) error {
 	for key := range meta.GetLabels() {
 		if strings.Contains(key, "/") {
 			return connect.Errorf(connect.CodeInvalidArgument, "metadata.labels key %q is not allowed: only keys without a prefix", key)
 		}
 	}
 	for key := range meta.GetAnnotations() {
-		if strings.Contains(key, "/") && key != annotationDisplayName && key != annotationDescription {
-			return connect.Errorf(connect.CodeInvalidArgument, "metadata.annotations key %q is not allowed: only keys without a prefix, %s and %s", key, annotationDisplayName, annotationDescription)
+		if _, ok := allowed[key]; strings.Contains(key, "/") && !ok {
+			return connect.Errorf(connect.CodeInvalidArgument, "metadata.annotations key %q is not allowed: only keys without a prefix and %s", key, strings.Join(allowed.keys(), ", "))
 		}
 	}
 	// Argo CD applies the file as is, so the keys and values must be ones
@@ -532,6 +553,14 @@ func validateGitMetadata(meta *aigridv1.Metadata) error {
 	}
 	if errs := apivalidation.ValidateAnnotations(meta.GetAnnotations(), field.NewPath("metadata", "annotations")); len(errs) > 0 {
 		return connect.Errorf(connect.CodeInvalidArgument, "%v", errs.ToAggregate())
+	}
+	for _, key := range allowed.keys() {
+		value, ok := meta.GetAnnotations()[key]
+		if check := allowed[key]; ok && check != nil {
+			if err := check(value); err != nil {
+				return connect.Errorf(connect.CodeInvalidArgument, "metadata.annotations[%s] %v", key, err)
+			}
+		}
 	}
 	return nil
 }
