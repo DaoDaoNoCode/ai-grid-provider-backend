@@ -253,7 +253,7 @@ func TestModelsGitLegacyServedNameIsUnavailableInMaaS(t *testing.T) {
 		t.Fatalf("Commit() error = %v", err)
 	}
 
-	const fragment = `serves "facebook/opt-125m" until its next update, while MaaS lists it as "granite"`
+	const fragment = `serves "facebook/opt-125m" while MaaS lists it as "granite"; update the model to serve it as its id`
 	list, err := srv.List(ctx, &aigridv1.ModelsListRequest{})
 	if err != nil {
 		t.Fatalf("List() error = %v", err)
@@ -274,7 +274,7 @@ func TestModelsGitLegacyServedNameIsUnavailableInMaaS(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("Update() error = %v", err)
 	}
-	if st := maas(); st.GetMaas() != aigridv1.ModelMaasState_MODEL_MAAS_STATE_AVAILABLE || strings.Contains(st.GetMessage(), "until its next update") {
+	if st := maas(); st.GetMaas() != aigridv1.ModelMaasState_MODEL_MAAS_STATE_AVAILABLE || strings.Contains(st.GetMessage(), "facebook/opt-125m") {
 		t.Errorf("after update MaaS = %v, message = %q; want AVAILABLE with no served-name fragment", st.GetMaas(), st.GetMessage())
 	}
 }

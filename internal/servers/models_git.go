@@ -628,12 +628,13 @@ func (r modelReports) apply(current *gitModel) {
 	// MaaS forwards the id tenants send, so a deployment still serving an older name serves no one.
 	servesID := servesItsID(current.model)
 	if !servesID {
-		served := fmt.Sprintf("serves %q until its next update, while MaaS lists it as %q",
+		served := fmt.Sprintf("serves %q while MaaS lists it as %q; update the model to serve it as its id",
 			current.model.GetSpec().GetModel().GetName(), id)
-		if status.Message != "" {
-			served = "; " + served
+		if status.Message == "" {
+			status.Message = strings.ToUpper(served[:1]) + served[1:]
+		} else {
+			status.Message += "; " + served
 		}
-		status.Message += served
 	}
 	if len(failures) > 0 {
 		status.Message += ". " + strings.Join(failures, "; ")
