@@ -10,7 +10,9 @@ import (
 )
 
 const (
-	identityProviderOrgIDMapperName   = "AI Grid org id"
+	// IdentityProviderOrgIDMapperName names the mapper this backend puts on every IdP it
+	// creates; an IdP without it was made outside this API.
+	IdentityProviderOrgIDMapperName   = "AI Grid org id"
 	identityProviderOrgNameMapperName = "AI Grid org name"
 	identityProviderGroupsMapperName  = "AI Grid groups"
 	identityProviderRolesMapperName   = "AI Grid roles"
@@ -18,14 +20,35 @@ const (
 
 // IdentityProvider is a realm-level identity provider instance. TrustEmail is Keycloak's
 // trustEmail: with it on, Keycloak takes a brokered user's email_verified from the IdP instead
-// of setting it to false.
+// of setting it to false. Keys this type doesn't model (hideOnLogin, the first broker login
+// flow and others) are kept in Extra, so a GET→modify→PUT writes them back unchanged.
 type IdentityProvider struct {
-	Alias       string            `json:"alias"`
-	DisplayName string            `json:"displayName,omitempty"`
-	ProviderID  string            `json:"providerId"`
-	Enabled     bool              `json:"enabled"`
-	TrustEmail  bool              `json:"trustEmail"`
-	Config      map[string]string `json:"config"`
+	Alias       string                     `json:"alias"`
+	DisplayName string                     `json:"displayName,omitempty"`
+	ProviderID  string                     `json:"providerId"`
+	Enabled     bool                       `json:"enabled"`
+	TrustEmail  bool                       `json:"trustEmail"`
+	Config      map[string]string          `json:"config"`
+	Extra       map[string]json.RawMessage `json:"-"`
+}
+
+type identityProviderFields IdentityProvider
+
+// UnmarshalJSON keeps the keys IdentityProvider doesn't model in Extra.
+func (p *IdentityProvider) UnmarshalJSON(data []byte) error {
+	var fields identityProviderFields
+	extra, err := unmarshalWithExtra(data, &fields)
+	if err != nil {
+		return err
+	}
+	*p = IdentityProvider(fields)
+	p.Extra = extra
+	return nil
+}
+
+// MarshalJSON writes Extra back beside the modelled keys.
+func (p IdentityProvider) MarshalJSON() ([]byte, error) {
+	return marshalWithExtra(identityProviderFields(p), p.Extra)
 }
 
 // IdentityProviderMapper is an IdP mapper representation.
@@ -72,6 +95,140 @@ func (c *Client) DeleteIdentityProvider(ctx context.Context, alias string) error
 		return nil
 	}
 	return err
+}
+
+// GetIdentityProvider returns a realm-level identity provider by alias. Keycloak masks the
+// client secret in the answer as "**********" (StripSecretsUtils); a PUT that sends that value
+// back keeps the stored secret (IdentityProviderResource.updateIdpFromRep).
+func (c *Client) GetIdentityProvider(ctx context.Context, alias string) (IdentityProvider, error) {
+	if alias == "" {
+		return IdentityProvider{}, fmt.Errorf("identity provider alias is required")
+	}
+	token, err := c.token(ctx)
+	if err != nil {
+		return IdentityProvider{}, err
+	}
+	var idp IdentityProvider
+	if err := c.doJSON(ctx, http.MethodGet, c.idpInstanceURL(alias), token, nil, &idp, "get identity provider"); err != nil {
+		return IdentityProvider{}, err
+	}
+	return idp, nil
+}
+
+// GetOrganizationIdentityProvider returns the realm IdP with alias when it is linked to the
+// organization (GET .../organizations/{id}/identity-providers/{alias}); Keycloak answers 404
+// for an alias that names no IdP or one not linked to this organization.
+func (c *Client) GetOrganizationIdentityProvider(ctx context.Context, orgID, alias string) (IdentityProvider, error) {
+	if orgID == "" || alias == "" {
+		return IdentityProvider{}, fmt.Errorf("organization id and identity provider alias are required")
+	}
+	token, err := c.token(ctx)
+	if err != nil {
+		return IdentityProvider{}, err
+	}
+	var idp IdentityProvider
+	if err := c.doJSON(ctx, http.MethodGet, c.orgIdpAliasURL(orgID, alias), token, nil, &idp, "get organization identity provider"); err != nil {
+		return IdentityProvider{}, err
+	}
+	return idp, nil
+}
+
+// UpdateIdentityProvider replaces a realm-level identity provider's representation
+// (PUT .../identity-provider/instances/{alias}). Keycloak keeps the provider's internal id,
+// its organization link and its mappers, and drops the signing keys it cached for it.
+func (c *Client) UpdateIdentityProvider(ctx context.Context, idp IdentityProvider) error {
+	if idp.Alias == "" {
+		return fmt.Errorf("identity provider alias is required")
+	}
+	token, err := c.token(ctx)
+	if err != nil {
+		return err
+	}
+	payload, err := json.Marshal(idp)
+	if err != nil {
+		return fmt.Errorf("marshal identity provider: %w", err)
+	}
+	return c.doJSON(ctx, http.MethodPut, c.idpInstanceURL(idp.Alias), token, payload, nil, "update identity provider")
+}
+
+// ImportIdentityProviderConfig asks Keycloak to read an OIDC discovery document
+// (POST .../identity-provider/import-config with providerId oidc and fromUrl) and returns the
+// identity provider config Keycloak derives from it: issuer, authorizationUrl, tokenUrl,
+// jwksUrl and the other endpoints. Keycloak fetches the document itself, with its own HTTP
+// client (no redirects, bounded response size), and answers 500 when it can't read it.
+func (c *Client) ImportIdentityProviderConfig(ctx context.Context, fromURL string) (map[string]string, error) {
+	if fromURL == "" {
+		return nil, fmt.Errorf("discovery document URL is required")
+	}
+	token, err := c.token(ctx)
+	if err != nil {
+		return nil, err
+	}
+	payload, err := json.Marshal(map[string]string{"providerId": "oidc", "fromUrl": fromURL})
+	if err != nil {
+		return nil, fmt.Errorf("marshal import-config request: %w", err)
+	}
+	var config map[string]string
+	if err := c.doJSON(ctx, http.MethodPost, c.idpImportConfigURL(), token, payload, &config, "import identity provider config"); err != nil {
+		return nil, err
+	}
+	return config, nil
+}
+
+// ReloadIdentityProviderKeys asks Keycloak to load an identity provider's signing keys from
+// its jwksUrl now (GET .../instances/{alias}/reload-keys), as it does at sign-in. Keycloak
+// answers 500 when it can't load them, and false when it didn't try: the provider has no
+// jwksUrl, or Keycloak loaded its keys less than minTimeBetweenRequests (10 s) ago.
+func (c *Client) ReloadIdentityProviderKeys(ctx context.Context, alias string) (bool, error) {
+	if alias == "" {
+		return false, fmt.Errorf("identity provider alias is required")
+	}
+	token, err := c.token(ctx)
+	if err != nil {
+		return false, err
+	}
+	var reloaded bool
+	if err := c.doJSON(ctx, http.MethodGet, c.idpInstanceURL(alias)+"/reload-keys", token, nil, &reloaded, "reload identity provider keys"); err != nil {
+		return false, err
+	}
+	return reloaded, nil
+}
+
+// ListIdentityProviderMappers lists an identity provider's mappers
+// (GET .../identity-provider/instances/{alias}/mappers).
+func (c *Client) ListIdentityProviderMappers(ctx context.Context, alias string) ([]IdentityProviderMapper, error) {
+	if alias == "" {
+		return nil, fmt.Errorf("identity provider alias is required")
+	}
+	token, err := c.token(ctx)
+	if err != nil {
+		return nil, err
+	}
+	var mappers []IdentityProviderMapper
+	if err := c.doJSON(ctx, http.MethodGet, c.idpMappersURL(alias), token, nil, &mappers, "list identity provider mappers"); err != nil {
+		return nil, err
+	}
+	return mappers, nil
+}
+
+// CountIdentityProviderUsers counts the realm's users with a federated identity link to an
+// identity provider (GET /admin/realms/{realm}/users/count?idpAlias={alias},
+// UsersResource.getUsersCount). It needs query-users, and counts every such user, not only
+// those the caller may view, unless Keycloak's fine-grained admin permissions are enabled.
+func (c *Client) CountIdentityProviderUsers(ctx context.Context, alias string) (int, error) {
+	if alias == "" {
+		return 0, fmt.Errorf("identity provider alias is required")
+	}
+	token, err := c.token(ctx)
+	if err != nil {
+		return 0, err
+	}
+	endpoint := c.baseURL + "/admin/realms/" + url.PathEscape(c.realm) + "/users/count?idpAlias=" + url.QueryEscape(alias)
+	var count int
+	if err := c.doJSON(ctx, http.MethodGet, endpoint, token, nil, &count, "count identity provider users"); err != nil {
+		return 0, err
+	}
+	return count, nil
 }
 
 // LinkOrganizationIdentityProvider associates a realm IdP with an organization.
@@ -163,7 +320,7 @@ func identityProviderMappers(alias, organizationID, organizationName string) []I
 		}
 	}
 	return []IdentityProviderMapper{
-		hardcoded(identityProviderOrgIDMapperName, "maas_org_id", organizationID),
+		hardcoded(IdentityProviderOrgIDMapperName, "maas_org_id", organizationID),
 		hardcoded(identityProviderOrgNameMapperName, "maas_org_name", organizationName),
 		fromClaim(identityProviderGroupsMapperName, "groups", "maas_groups"),
 		fromClaim(identityProviderRolesMapperName, "roles", "maas_roles"),
@@ -172,6 +329,10 @@ func identityProviderMappers(alias, organizationID, organizationName string) []I
 
 func (c *Client) idpInstancesURL() string {
 	return c.baseURL + "/admin/realms/" + url.PathEscape(c.realm) + "/identity-provider/instances"
+}
+
+func (c *Client) idpImportConfigURL() string {
+	return c.baseURL + "/admin/realms/" + url.PathEscape(c.realm) + "/identity-provider/import-config"
 }
 
 func (c *Client) idpInstanceURL(alias string) string {

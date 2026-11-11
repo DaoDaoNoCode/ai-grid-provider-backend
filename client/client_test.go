@@ -412,6 +412,13 @@ type organizationClient interface {
 	LinkOrganizationIdentityProvider(ctx context.Context, orgID, alias string) error
 	ConfigureOrganizationIdentityProvider(ctx context.Context, orgID, alias string) error
 	UpsertIdentityProviderMapper(ctx context.Context, alias, organizationID, organizationName string) error
+	GetIdentityProvider(ctx context.Context, alias string) (keycloak.IdentityProvider, error)
+	GetOrganizationIdentityProvider(ctx context.Context, orgID, alias string) (keycloak.IdentityProvider, error)
+	UpdateIdentityProvider(ctx context.Context, idp keycloak.IdentityProvider) error
+	ImportIdentityProviderConfig(ctx context.Context, fromURL string) (map[string]string, error)
+	ReloadIdentityProviderKeys(ctx context.Context, alias string) (bool, error)
+	ListIdentityProviderMappers(ctx context.Context, alias string) ([]keycloak.IdentityProviderMapper, error)
+	CountIdentityProviderUsers(ctx context.Context, alias string) (int, error)
 }
 
 type mutableOrganizationStore struct {
@@ -486,6 +493,27 @@ func (f *mutableOrganizationStore) ConfigureOrganizationIdentityProvider(context
 }
 func (f *mutableOrganizationStore) UpsertIdentityProviderMapper(context.Context, string, string, string) error {
 	return nil
+}
+func (f *mutableOrganizationStore) ListIdentityProviderMappers(context.Context, string) ([]keycloak.IdentityProviderMapper, error) {
+	return nil, errors.New("ListIdentityProviderMappers not implemented in organization-only fake")
+}
+func (f *mutableOrganizationStore) CountIdentityProviderUsers(context.Context, string) (int, error) {
+	return 0, errors.New("CountIdentityProviderUsers not implemented in organization-only fake")
+}
+func (f *mutableOrganizationStore) GetIdentityProvider(context.Context, string) (keycloak.IdentityProvider, error) {
+	return keycloak.IdentityProvider{}, errors.New("GetIdentityProvider not implemented in organization-only fake")
+}
+func (f *mutableOrganizationStore) GetOrganizationIdentityProvider(context.Context, string, string) (keycloak.IdentityProvider, error) {
+	return keycloak.IdentityProvider{}, errors.New("GetOrganizationIdentityProvider not implemented in organization-only fake")
+}
+func (f *mutableOrganizationStore) UpdateIdentityProvider(context.Context, keycloak.IdentityProvider) error {
+	return errors.New("UpdateIdentityProvider not implemented in organization-only fake")
+}
+func (f *mutableOrganizationStore) ImportIdentityProviderConfig(context.Context, string) (map[string]string, error) {
+	return nil, errors.New("ImportIdentityProviderConfig not implemented in organization-only fake")
+}
+func (f *mutableOrganizationStore) ReloadIdentityProviderKeys(context.Context, string) (bool, error) {
+	return false, errors.New("ReloadIdentityProviderKeys not implemented in organization-only fake")
 }
 
 func startTestClient(t *testing.T, objects []runtime.Object, orgs organizationClient) (*clientpkg.Client, func()) {
@@ -625,6 +653,27 @@ func (f fakeOrganizationLister) ConfigureOrganizationIdentityProvider(context.Co
 }
 func (f fakeOrganizationLister) UpsertIdentityProviderMapper(context.Context, string, string, string) error {
 	return errors.New("UpsertIdentityProviderMapper not implemented in list-only fake")
+}
+func (f fakeOrganizationLister) ListIdentityProviderMappers(context.Context, string) ([]keycloak.IdentityProviderMapper, error) {
+	return nil, errors.New("ListIdentityProviderMappers not implemented in list-only fake")
+}
+func (f fakeOrganizationLister) CountIdentityProviderUsers(context.Context, string) (int, error) {
+	return 0, errors.New("CountIdentityProviderUsers not implemented in list-only fake")
+}
+func (f fakeOrganizationLister) GetIdentityProvider(context.Context, string) (keycloak.IdentityProvider, error) {
+	return keycloak.IdentityProvider{}, errors.New("GetIdentityProvider not implemented in list-only fake")
+}
+func (f fakeOrganizationLister) GetOrganizationIdentityProvider(context.Context, string, string) (keycloak.IdentityProvider, error) {
+	return keycloak.IdentityProvider{}, errors.New("GetOrganizationIdentityProvider not implemented in list-only fake")
+}
+func (f fakeOrganizationLister) UpdateIdentityProvider(context.Context, keycloak.IdentityProvider) error {
+	return errors.New("UpdateIdentityProvider not implemented in list-only fake")
+}
+func (f fakeOrganizationLister) ImportIdentityProviderConfig(context.Context, string) (map[string]string, error) {
+	return nil, errors.New("ImportIdentityProviderConfig not implemented in list-only fake")
+}
+func (f fakeOrganizationLister) ReloadIdentityProviderKeys(context.Context, string) (bool, error) {
+	return false, errors.New("ReloadIdentityProviderKeys not implemented in list-only fake")
 }
 
 func managedCluster(name string, labels map[string]string, accepts bool) *unstructured.Unstructured {

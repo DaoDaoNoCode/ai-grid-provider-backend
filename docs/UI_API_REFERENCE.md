@@ -465,7 +465,8 @@ a Keycloak realm. Admin API paths look like
 segment is the shared realm name, not the tenant id.
 
 Organization **members** can be listed via `GET .../tenants/{id}:listMembers`.
-Full user CRUD and identity providers remain out of scope for this API today.
+Full user CRUD remains out of scope for this API today; the org's own identity
+provider is `spec.identity_provider`.
 
 | Field | Meaning for UI |
 | --- | --- |
@@ -474,6 +475,7 @@ Full user CRUD and identity providers remain out of scope for this API today.
 | `metadata.version` | Optimistic-concurrency version, kept in the organization attribute `ai-grid/resource-version`: 1 on create, bumped by every update through this API. An organization created in Keycloak directly reads as 1. Edits made in Keycloak directly don't bump it. Output only |
 | `metadata.creation_timestamp` | From the attribute `ai-grid/create-time` (RFC 3339), stamped on create; absent for an organization created in Keycloak directly. Output only |
 | `spec.domains` | Email domains for the org (DNS hostnames, ≥2 labels, lowercase) |
+| `spec.identity_provider` | The org's OIDC identity provider (the Secret **name** of its client secret, never the value). Absent when the org has none: its members can't sign in yet, so show "sign-in not configured" |
 | `status` | Empty object today |
 
 UI should treat **`id`** as the stable identifier for Get/Update/Delete, and
@@ -544,6 +546,9 @@ Notes:
 - `metadata.name` is required (RFC 1123 DNS label).
 - `spec.domains` entries must be lowercase DNS hostnames with at least two
   labels (e.g. `acme.example.com`); IPs and single-label names are rejected.
+- `spec.identity_provider` is optional: without it the org is created with
+  sign-in not configured, and a later `PATCH` adds it. With it, Keycloak
+  checks the issuer and the JWKS first, as on `PATCH` below.
 
 **Response `200`**
 
@@ -579,11 +584,54 @@ Notes:
 
 - An empty update mask (gRPC without `update_mask`, or a REST PATCH without
   `?update_mask=`) is inferred from the object: the name when `metadata.name` is
-  set, the domains when `spec` is present.
-- Supported mask paths: `metadata`, `metadata.name`, `spec`, `spec.domains`
-  (optional `object.` prefix). `id`, `metadata.version` and
-  `metadata.creation_timestamp` are accepted and change nothing. Unsupported
+  set, the identity provider when `spec.identity_provider` is set, the domains
+  when `spec` is present and either has domains or no identity provider.
+- Supported mask paths: `metadata`, `metadata.name`, `spec`, `spec.domains`,
+  `spec.identity_provider` (optional `object.` prefix). `id`, `metadata.version`
+  and `metadata.creation_timestamp` are accepted and change nothing. Unsupported
   paths return `InvalidArgument`.
+- `spec.identity_provider` adds an identity provider to an org without one, or
+  changes it in place: the org keeps its id, members and domains. Validation
+  is Create's. Sending the stored value writes nothing; leaving it out under a
+  mask that names it is `400` (`InvalidArgument`): it can't be removed. The
+  client secret is read from the named Secret on every add or change, so to
+  rotate it, use a Secret with a new name.
+- Client id, Secret name, endpoints, scopes, signature settings and title can
+  always change. The issuer can change only while nobody has signed in
+  through the identity provider; after that, an issuer change is `400`
+  (`FailedPrecondition`) and nothing changes. Keycloak links members by the
+  provider alias and the subject the provider sends, so a user of a new issuer
+  with a matching subject would sign in as a member. Show the message: it
+  says to create a new organization, or to remove the members' links in
+  Keycloak first. Whether a request changes the issuer is judged against the
+  issuer Keycloak's identity provider has, which can differ from the tenant's
+  after a `503` or an edit made in Keycloak.
+- Adding an identity provider to an org that already has one this API didn't
+  create (an org made in Keycloak directly, with its own provider under the
+  org's alias) is `400` (`FailedPrecondition`) and changes nothing: that
+  provider is managed in Keycloak.
+- A change also needs the previous client secret, from the Secret the stored
+  identity provider names, to restore it if the change fails; if that Secret
+  is gone or empty, the change is `400` (`FailedPrecondition`) and nothing is
+  written. The message names that old Secret, not the requested one: ask the
+  admin to recreate it with the client secret Keycloak has now.
+- Whenever the issuer is set (Create, an add, a changed issuer), Keycloak reads
+  its discovery document (a change that keeps the issuer doesn't recheck it).
+  On every add or change Keycloak is asked to reload the JWKS: a reload that
+  fails is refused, but one Keycloak skips (it loaded the keys less than 10
+  seconds ago) keeps the change, and the keys load at the next sign-in.
+  Unreadable: `400` (`FailedPrecondition`); a discovery
+  document that names another issuer: `400` (`InvalidArgument`). A Secret
+  that doesn't exist: `404` (`NotFound`); one without a non-empty
+  `client-secret` key: `400` (`FailedPrecondition`). Either way
+  nothing changes, so show the message (it names the URL) and let the admin
+  fix the field. `503` (`Unavailable`) means the change may have been saved
+  but the tenant couldn't be read to tell: reload the tenant, and retry if it
+  doesn't show the change. Sign-in already uses the new configuration then;
+  when the issuer changed, the message says not to test sign-in until a
+  reload shows the tenant with the new issuer. `500` (`Internal`) saying the
+  identity provider is left on the new config means restoring it failed:
+  retry the update.
 - Domains in the body **replace** the domain list when domains are updated.
   Blank/whitespace-only domain entries are rejected (`InvalidArgument`), not dropped.
 - `metadata.version` is required (`400`, `InvalidArgument`, without one) and

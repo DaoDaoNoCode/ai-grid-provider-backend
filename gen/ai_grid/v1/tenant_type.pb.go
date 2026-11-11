@@ -103,10 +103,31 @@ type TenantSpec struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// Email domains associated with this tenant (DNS hostnames, lowercase).
 	Domains []string `protobuf:"bytes,1,rep,name=domains,proto3" json:"domains,omitempty"`
-	// Optional OIDC identity provider for this organization. Set only on Create;
-	// immutable afterward (Update may repeat the same normalized value; add,
-	// change, or remove returns InvalidArgument). The API stores only the
-	// Secret name in config.client_secret_secret_name, never the secret value.
+	// Optional OIDC identity provider for this organization; unset means the
+	// organization has none, so its members can't sign in yet. Create sets it;
+	// Update adds it or changes it in place (the organization, its id and its
+	// members stay), and repeating the stored value writes nothing. Removing it
+	// returns InvalidArgument. config.issuer changes in place only while nobody
+	// has signed in through the identity provider, else FailedPrecondition:
+	// Keycloak links a member by the provider alias and the subject the provider
+	// sends, not by issuer, so a user of a new issuer with a matching subject
+	// would sign in as that member. A wrong issuer lets nobody sign in, so it can
+	// still be corrected. An issuer change is judged against the issuer
+	// Keycloak's identity provider has, which can differ from the stored one
+	// after an unconfirmed write or an edit made in Keycloak. An add finding an
+	// identity provider under the
+	// organization's alias that this API didn't create is FailedPrecondition
+	// too, and changes nothing. Whenever the issuer is set (Create, an
+	// added identity provider, a changed issuer), Keycloak must read its
+	// discovery document (else FailedPrecondition), which must name
+	// config.issuer (else InvalidArgument). On every write Keycloak is asked to
+	// load the signing keys from config.jwks_url when set: a reload that fails
+	// is FailedPrecondition, but one Keycloak skips (for example within 10
+	// seconds of the last) keeps the write, and the keys load at the next
+	// sign-in. A refused write changes nothing. The API stores only the Secret name in
+	// config.client_secret_secret_name, never the secret value; the Secret is
+	// read on every write of the identity provider: a missing Secret is
+	// NotFound, one without a non-empty client-secret key FailedPrecondition.
 	IdentityProvider *IdentityProvider `protobuf:"bytes,2,opt,name=identity_provider,json=identityProvider,proto3" json:"identity_provider,omitempty"`
 	unknownFields    protoimpl.UnknownFields
 	sizeCache        protoimpl.SizeCache

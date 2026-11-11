@@ -99,21 +99,26 @@ echo "$mappers" | jq .
 echo "$mappers" | jq -e --arg id "$org_id" \
   '[.[] | select(.name=="AI Grid org id" and .config.attribute=="maas_org_id" and .config["attribute.value"]==$id)] | length == 1' >/dev/null
 
-echo "==> immutability: changed IdP on Update is InvalidArgument"
-set +e
-upd_err="$(grpcurl -plaintext -d @ "$addr" ai_grid.v1.Tenants/Update 2>&1 <<EOF
+# The new issuer is the master realm: another discovery document the in-cluster Keycloak serves.
+echo "==> Update changes the IdP in place: same org, same IdP alias, new client id and issuer"
+upd_json="$(grpcurl -plaintext -d @ "$addr" ai_grid.v1.Tenants/Update <<EOF
 {
   "object": {
     "id": "${org_id}",
     "metadata": { "version": ${version} },
     "spec": {
       "identityProvider": {
+        "title": "${name}",
         "config": {
           "clientId": "changed-client",
           "clientSecretSecretName": "${secret_name}",
-          "issuer": "${idp_base}/realms/org-idp",
-          "authorizationUrl": "${idp_base}/realms/org-idp/protocol/openid-connect/auth",
-          "tokenUrl": "${idp_base}/realms/org-idp/protocol/openid-connect/token"
+          "issuer": "${idp_base}/realms/master",
+          "authorizationUrl": "${idp_base}/realms/master/protocol/openid-connect/auth",
+          "tokenUrl": "${idp_base}/realms/master/protocol/openid-connect/token",
+          "jwksUrl": "${idp_base}/realms/master/protocol/openid-connect/certs",
+          "logoutUrl": "${idp_base}/realms/master/protocol/openid-connect/logout",
+          "defaultScopes": "openid profile email",
+          "validateSignature": true
         }
       }
     }
@@ -122,10 +127,53 @@ upd_err="$(grpcurl -plaintext -d @ "$addr" ai_grid.v1.Tenants/Update 2>&1 <<EOF
 }
 EOF
 )"
-upd_rc=$?
+echo "$upd_json" | jq -e --arg id "$org_id" '.object.id == $id and .object.spec.identityProvider.config.clientId == "changed-client" and (.object.spec.identityProvider.config.issuer | endswith("/realms/master"))' >/dev/null
+version="$(echo "$upd_json" | jq -r '.object.metadata.version')"
+curl -fsS -H "$auth" "$kc/admin/realms/$realm/identity-provider/instances/${name}" | jq -e '.config.clientId == "changed-client" and (.config.issuer | endswith("/realms/master"))' >/dev/null
+curl -fsS -H "$auth" "$kc/admin/realms/$realm/organizations/${org_id}/identity-providers/${name}" >/dev/null
+
+echo "==> a member linked to the IdP blocks an issuer change"
+# Link a user to the IdP as a first sign-in would (Keycloak's federated-identity admin API).
+member="${name}-member"
+curl -fsS -o /dev/null -X POST "$kc/admin/realms/$realm/users" -H "$auth" -H 'Content-Type: application/json' \
+  -d "{\"username\":\"${member}\",\"enabled\":true}"
+member_id="$(curl -fsS -H "$auth" "$kc/admin/realms/$realm/users?username=${member}&exact=true" | jq -r '.[0].id')"
+curl -fsS -o /dev/null -X POST "$kc/admin/realms/$realm/users/${member_id}/federated-identity/${name}" -H "$auth" \
+  -H 'Content-Type: application/json' -d "{\"identityProvider\":\"${name}\",\"userId\":\"sub-1\",\"userName\":\"sub-1\"}"
+set +e
+issuer_err="$(grpcurl -plaintext -d @ "$addr" ai_grid.v1.Tenants/Update 2>&1 <<EOF
+{
+  "object": {
+    "id": "${org_id}",
+    "metadata": { "version": ${version} },
+    "spec": {
+      "identityProvider": {
+        "title": "${name}",
+        "config": {
+          "clientId": "changed-client",
+          "clientSecretSecretName": "${secret_name}",
+          "issuer": "${idp_base}/realms/org-idp",
+          "authorizationUrl": "${idp_base}/realms/org-idp/protocol/openid-connect/auth",
+          "tokenUrl": "${idp_base}/realms/org-idp/protocol/openid-connect/token",
+          "jwksUrl": "${idp_base}/realms/org-idp/protocol/openid-connect/certs",
+          "defaultScopes": "openid profile email",
+          "validateSignature": true
+        }
+      }
+    }
+  },
+  "updateMask": { "paths": ["spec.identity_provider"] }
+}
+EOF
+)"
+issuer_rc=$?
 set -e
-[[ "$upd_rc" -ne 0 ]] || { echo "error: Update should have failed: $upd_err" >&2; exit 1; }
-echo "$upd_err" | grep -qi 'InvalidArgument\|immutable\|cannot' || echo "(Update failed as expected: $upd_err)"
+if [[ "$issuer_rc" -eq 0 ]] || ! echo "$issuer_err" | grep -q 'FailedPrecondition'; then
+  echo "error: issuer change with a linked member should be FailedPrecondition: $issuer_err" >&2
+  exit 1
+fi
+curl -fsS -H "$auth" "$kc/admin/realms/$realm/identity-provider/instances/${name}" | jq -e '.config.issuer | endswith("/realms/master")' >/dev/null
+curl -fsS -o /dev/null -X DELETE "$kc/admin/realms/$realm/users/${member_id}" -H "$auth"
 
 echo "==> Delete removes IdP then org"
 grpcurl -plaintext -d "{\"id\":\"${org_id}\",\"version\":${version}}" "$addr" ai_grid.v1.Tenants/Delete >/dev/null
