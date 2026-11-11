@@ -632,7 +632,13 @@ func (r modelReports) apply(current *gitModel) {
 	status.Ingress = ingressStatus
 	status.Deployment = deploymentSummary(placedStatus)
 	status.State = modelRollout(placedStatus)
-	status.Maas = maasSummary(ingressStatus, slices.ContainsFunc(placedStatus, func(cluster *aigridv1.ModelClusterStatus) bool {
+	// MaaS forwards the id tenants send, so a deployment still serving an older name serves no one.
+	servesID := servesItsID(current.model)
+	if !servesID {
+		status.Message += fmt.Sprintf("; serves %q until its next update, while MaaS lists it as %q",
+			current.model.GetSpec().GetModel().GetName(), id)
+	}
+	status.Maas = maasSummary(ingressStatus, servesID && slices.ContainsFunc(placedStatus, func(cluster *aigridv1.ModelClusterStatus) bool {
 		return cluster.GetDeployment() == aigridv1.ModelDeploymentState_MODEL_DEPLOYMENT_STATE_RUNNING
 	}))
 	switch {
@@ -1302,6 +1308,13 @@ func renderKustomization(resources []string) []byte {
 
 func modelGitError(op, id string, err error) error {
 	return mapGitopsError("Model", "Models", op, id, err, staleModelError)
+}
+
+// servesItsID reports whether the model's deployment serves its id, the name MaaS lists it under.
+// Only a model saved before models were served as their id can differ.
+func servesItsID(model *aigridv1.Model) bool {
+	name := model.GetSpec().GetModel().GetName()
+	return name == "" || name == model.GetId()
 }
 
 // servedModelName is the name vLLM serves the model as and the ExternalModel

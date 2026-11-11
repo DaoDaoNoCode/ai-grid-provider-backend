@@ -2,6 +2,8 @@ package servers
 
 import (
 	"context"
+	"log/slog"
+	"strings"
 	"testing"
 
 	connect "connectrpc.com/connect/v2"
@@ -201,4 +203,61 @@ func gitTargetModel(t *testing.T, writer gitops.Writer, id string) string {
 	}
 	target, _ := refs[0].(map[string]interface{})["targetModel"].(string)
 	return target
+}
+
+// TestModelsGitLegacyServedNameIsUnavailableInMaaS checks that a running deployment still serving
+// a name other than its id reads as unavailable in MaaS, which lists it under the id.
+func TestModelsGitLegacyServedNameIsUnavailableInMaaS(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	client := newAppClient(
+		application(DefaultCatalogModelsAppSet, "site-a", llmisvc("Synced", "Healthy", "")),
+		readyIngress("hub"), managedCluster("site-a", nil, true),
+	)
+	writer := gitops.NewMemoryWriter(nil)
+	srv, err := NewModelsServer().SetLogger(slog.New(slog.DiscardHandler)).SetWriter(writer).
+		SetCatalogStatus(NewCatalogStatusReader(client, CatalogApps{})).SetDynamicClient(client).Build()
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+	if _, err := srv.Create(ctx, &aigridv1.ModelsCreateRequest{Object: gitSampleModel("granite", "site-a")}); err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	maas := func() *aigridv1.ModelStatus {
+		t.Helper()
+		got, err := srv.Get(ctx, &aigridv1.ModelsGetRequest{Id: "granite"})
+		if err != nil {
+			t.Fatalf("Get() error = %v", err)
+		}
+		return got.GetObject().GetStatus()
+	}
+	if st := maas(); st.GetMaas() != aigridv1.ModelMaasState_MODEL_MAAS_STATE_AVAILABLE {
+		t.Fatalf("MaaS = %v, want AVAILABLE while the deployment serves the id (%s)", st.GetMaas(), st.GetMessage())
+	}
+
+	// Rewrite the deployment the way a backend before served-as-id wrote it.
+	p := "catalog/models/granite/deployment/deployment.yaml"
+	docs := readGitYAMLDocs(t, writer, p)
+	if err := unstructured.SetNestedField(docs[0].Object, "facebook/opt-125m", "spec", "model", "name"); err != nil {
+		t.Fatal(err)
+	}
+	data, err := marshalYAMLDocs(docs...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	head, err := writer.Head(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := writer.Commit(ctx, head.Revision(), gitops.Change{Put: map[string][]byte{p: data}, Message: "old format"}); err != nil {
+		t.Fatalf("Commit() error = %v", err)
+	}
+
+	st := maas()
+	if st.GetMaas() != aigridv1.ModelMaasState_MODEL_MAAS_STATE_UNAVAILABLE {
+		t.Errorf("MaaS = %v, want UNAVAILABLE: MaaS lists granite and the deployment serves facebook/opt-125m", st.GetMaas())
+	}
+	if want := `serves "facebook/opt-125m" until its next update, while MaaS lists it as "granite"`; !strings.Contains(st.GetMessage(), want) {
+		t.Errorf("message = %q, want it to contain %q", st.GetMessage(), want)
+	}
 }
