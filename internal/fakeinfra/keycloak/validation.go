@@ -67,15 +67,16 @@ const (
 	// OrganizationDomainModel (server-spi/.../models/OrganizationDomainModel.java
 	// L59). The cross-organization check is jpa/OrganizationAdapter.java
 	// L304-309, the identity provider lookup L314-327.
-	MsgDomainEmpty          = "Domain name cannot be empty"                                  // jpa/OrganizationAdapter.java L298
-	MsgDomainInvalidFmt     = "Invalid domain format: %s"                                    // Organizations.java L341-342
-	MsgWildcardNoBaseFmt    = "Wildcard domain must specify a base domain: %s"               // Organizations.java L316-317
-	MsgWildcardNotFirst     = "Wildcard domain must start with the wildcard"                 // Organizations.java L320-321
-	MsgWildcardMultipleFmt  = "Multiple wildcards are not allowed: %s"                       // Organizations.java L326-327
-	MsgDomainTooFewPartsFmt = "Domain must have at least 2 parts (e.g. 'example.com'): %s"   // Organizations.java L332-333, MIN_DOMAIN_PARTS L79
-	MsgDomainTooManyParts   = "Domain has too many parts (max 10 allowed): %s"               // Organizations.java L336-337, MAX_DOMAIN_PARTS L80
-	MsgDomainLinkedFmt      = "Domain %s is already linked to organization %s in realm %s"   // jpa/OrganizationAdapter.java L306-308
-	MsgIdPMissingFmt        = "Identity provider with alias '%s' does not exist in realm %s" // jpa/OrganizationAdapter.java L318-320
+	MsgDomainEmpty          = "Domain name cannot be empty"                                   // jpa/OrganizationAdapter.java L298
+	MsgDomainInvalidFmt     = "Invalid domain format: %s"                                     // Organizations.java L341-342
+	MsgWildcardNoBaseFmt    = "Wildcard domain must specify a base domain: %s"                // Organizations.java L316-317
+	MsgWildcardNotFirst     = "Wildcard domain must start with the wildcard"                  // Organizations.java L320-321
+	MsgWildcardMultipleFmt  = "Multiple wildcards are not allowed: %s"                        // Organizations.java L326-327
+	MsgDomainTooFewPartsFmt = "Domain must have at least 2 parts (e.g. 'example.com'): %s"    // Organizations.java L332-333, MIN_DOMAIN_PARTS L79
+	MsgDomainTooManyParts   = "Domain has too many parts (max 10 allowed): %s"                // Organizations.java L336-337, MAX_DOMAIN_PARTS L80
+	MsgDomainLinkedFmt      = "Domain %s is already linked to organization %s in realm %s"    // jpa/OrganizationAdapter.java L306-308
+	MsgIdPMissingFmt        = "Identity provider with alias '%s' does not exist in realm %s"  // jpa/OrganizationAdapter.java L318-320
+	MsgIdPNotLinkedFmt      = "Identity provider '%s' is not associated with organization %s" // jpa/OrganizationAdapter.java L324-326
 
 	// Token endpoint answers (mock/research/keycloak.md 3.5, 26.8.0
 	// ValidatePassword/ValidateUsername use Status.BAD_REQUEST for bad
@@ -316,13 +317,20 @@ func normalizeDomains(in []Domain) ([]Domain, error) {
 // checkIdentityProviders is OrganizationAdapter.resolveIdentityProvider
 // (jpa/OrganizationAdapter.java L314-329), which setDomains calls for every
 // domain that carries an alias (L203, L224) after all domains passed
-// validation (L191-193). The fake realm has no identity providers, so every
-// non-empty alias fails as an unknown one does in Keycloak (L318-320).
-// `autoRedirect` is stored without a check (L204, L225).
-func checkIdentityProviders(domains []Domain, realm string) error {
+// validation (L191-193): the alias must name an identity provider of the
+// realm (L318-320) linked to this organization (L322-326). orgID is empty on
+// create, when nothing is linked yet. `autoRedirect` is stored without a
+// check (L204, L225).
+func (s *Server) checkIdentityProviders(domains []Domain, orgID, orgName string) error {
 	for _, d := range domains {
-		if d.IdentityProviderAlias != "" {
-			return keycloakErrorf(MsgIdPMissingFmt, d.IdentityProviderAlias, realm)
+		if d.IdentityProviderAlias == "" {
+			continue
+		}
+		if _, ok := s.idps[d.IdentityProviderAlias]; !ok {
+			return keycloakErrorf(MsgIdPMissingFmt, d.IdentityProviderAlias, s.cfg.Realm)
+		}
+		if link, ok := s.orgIdPs[orgID]; orgID == "" || !ok || link.alias != d.IdentityProviderAlias {
+			return keycloakErrorf(MsgIdPNotLinkedFmt, d.IdentityProviderAlias, orgName)
 		}
 	}
 	return nil

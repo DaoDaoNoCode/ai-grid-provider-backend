@@ -9,7 +9,8 @@
 #   3. Applies the demo IdP client Secret
 #   4. Port-forwards backend (gRPC + REST) and Keycloak
 #   5. Runs hack/smoke-tenant-idp.sh (create IdP tenant, verify realm IdP, org
-#      link, maas_org_id = generated org UUID, immutability, delete cleanup)
+#      link, maas_org_id = generated org UUID, in-place IdP change, issuer change refused
+#      with a linked member, delete cleanup)
 #   6. REST checks: list tenants, create/list/delete an IdP-less tenant
 #
 # Usage:

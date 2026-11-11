@@ -72,6 +72,8 @@ type Server struct {
 	idps    map[string]*identityProvider
 	orgIdPs map[string]orgIdPLinkState
 	mappers map[string][]*identityProviderMapper
+	// federated is each identity provider alias's linked users: user id to subject.
+	federated map[string]map[string]string
 
 	// readStarted, when non-nil, is signaled (non-blocking, once per call)
 	// the moment the admin wrapper begins reading a request body. A test
@@ -103,7 +105,7 @@ func New(cfg Config, seed []Organization) (*Server, error) {
 		cfg: cfg, clock: cfg.Clock, logger: cfg.Logger,
 		orgs: map[string]*organization{}, tokens: map[string]time.Time{},
 		idps: map[string]*identityProvider{}, orgIdPs: map[string]orgIdPLinkState{},
-		mappers: map[string][]*identityProviderMapper{},
+		mappers: map[string][]*identityProviderMapper{}, federated: map[string]map[string]string{},
 	}
 	if s.clock == nil {
 		s.clock = time.Now
@@ -149,11 +151,16 @@ func (s *Server) Handler() http.Handler {
 	idps := "/admin/realms/{realm}/identity-provider/instances"
 	mux.HandleFunc("POST "+idps, s.admin(s.createIdP))
 	mux.HandleFunc("GET "+idps+"/{alias}", s.admin(s.getIdP))
+	mux.HandleFunc("PUT "+idps+"/{alias}", s.admin(s.updateIdP))
 	mux.HandleFunc("DELETE "+idps+"/{alias}", s.admin(s.deleteIdP))
+	mux.HandleFunc("GET "+idps+"/{alias}/reload-keys", s.admin(s.reloadIdPKeys))
+	mux.HandleFunc("POST /admin/realms/{realm}/identity-provider/import-config", s.admin(s.importIdPConfig))
+	mux.HandleFunc("GET /admin/realms/{realm}/users/count", s.admin(s.countUsers))
 	mux.HandleFunc("GET "+idps+"/{alias}/mappers", s.admin(s.listIdPMappers))
 	mux.HandleFunc("POST "+idps+"/{alias}/mappers", s.admin(s.createIdPMapper))
 	mux.HandleFunc("PUT "+idps+"/{alias}/mappers/{mapperId}", s.admin(s.updateIdPMapper))
 	mux.HandleFunc("POST "+orgs+"/{id}/identity-providers", s.admin(s.linkOrgIdP))
+	mux.HandleFunc("GET "+orgs+"/{id}/identity-providers/{alias}", s.admin(s.getOrgIdP))
 	mux.HandleFunc("PUT "+orgs+"/{id}/identity-providers/{alias}", s.admin(s.configureOrgIdP))
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		// Everything else is a resource this fake does not serve
@@ -569,7 +576,7 @@ func (s *Server) build(rep Organization, cur *organization) (*organization, *htt
 			}
 		}
 	}
-	if err := checkIdentityProviders(org.domains, s.cfg.Realm); err != nil {
+	if err := s.checkIdentityProviders(org.domains, selfID, org.name); err != nil {
 		return nil, &httpError{code: http.StatusBadRequest, msg: err.Error()}
 	}
 	return org, nil

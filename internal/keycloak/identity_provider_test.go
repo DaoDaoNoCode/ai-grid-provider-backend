@@ -3,6 +3,7 @@ package keycloak
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -188,6 +189,141 @@ func TestUpsertIdentityProviderMapper(t *testing.T) {
 			t.Fatalf("path=%s body=%+v posts=%d", updatePath, updateBody, posts)
 		}
 	})
+}
+
+// TestGetAndUpdateIdentityProviderKeepUnmodelledKeys: a GET→PUT writes back the
+// representation's keys IdentityProvider doesn't model.
+func TestGetAndUpdateIdentityProviderKeepUnmodelledKeys(t *testing.T) {
+	t.Parallel()
+	var putMethod, putPath string
+	var putBody map[string]any
+	server := httptest.NewServer(tokenThen(func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodGet:
+			_, _ = io.WriteString(w, `{"alias":"acme","internalId":"i-1","providerId":"oidc","enabled":true,"trustEmail":true,"hideOnLogin":true,"config":{"clientId":"c","clientSecret":"**********"}}`)
+		case http.MethodPut:
+			putMethod, putPath = r.Method, r.URL.Path
+			_ = json.NewDecoder(r.Body).Decode(&putBody)
+			w.WriteHeader(http.StatusNoContent)
+		}
+	}))
+	t.Cleanup(server.Close)
+	client := testClient(server)
+	idp, err := client.GetIdentityProvider(context.Background(), "acme")
+	if err != nil {
+		t.Fatalf("GetIdentityProvider: %v", err)
+	}
+	idp.Config["clientId"] = "c2"
+	if err := client.UpdateIdentityProvider(context.Background(), idp); err != nil {
+		t.Fatalf("UpdateIdentityProvider: %v", err)
+	}
+	if putMethod != http.MethodPut || !strings.HasSuffix(putPath, "/identity-provider/instances/acme") {
+		t.Fatalf("request = %s %s", putMethod, putPath)
+	}
+	cfg, _ := putBody["config"].(map[string]any)
+	if putBody["hideOnLogin"] != true || putBody["internalId"] != "i-1" || cfg["clientId"] != "c2" || cfg["clientSecret"] != "**********" {
+		t.Fatalf("body = %#v", putBody)
+	}
+}
+
+func TestImportIdentityProviderConfig(t *testing.T) {
+	t.Parallel()
+	t.Run("returns the config Keycloak read", func(t *testing.T) {
+		t.Parallel()
+		var gotMethod, gotPath string
+		var gotBody map[string]string
+		server := httptest.NewServer(tokenThen(func(w http.ResponseWriter, r *http.Request) {
+			gotMethod, gotPath = r.Method, r.URL.Path
+			_ = json.NewDecoder(r.Body).Decode(&gotBody)
+			_, _ = io.WriteString(w, `{"issuer":"https://idp.example.com","jwksUrl":"https://idp.example.com/keys","logoutUrl":null}`)
+		}))
+		t.Cleanup(server.Close)
+		got, err := testClient(server).ImportIdentityProviderConfig(context.Background(), "https://idp.example.com/.well-known/openid-configuration")
+		if err != nil {
+			t.Fatalf("ImportIdentityProviderConfig: %v", err)
+		}
+		if gotMethod != http.MethodPost || gotPath != "/admin/realms/ai-grid/identity-provider/import-config" {
+			t.Fatalf("request = %s %s", gotMethod, gotPath)
+		}
+		if gotBody["providerId"] != "oidc" || gotBody["fromUrl"] != "https://idp.example.com/.well-known/openid-configuration" {
+			t.Fatalf("body = %v", gotBody)
+		}
+		if got["issuer"] != "https://idp.example.com" || got["jwksUrl"] != "https://idp.example.com/keys" {
+			t.Fatalf("config = %v", got)
+		}
+	})
+	t.Run("an unreadable document is Keycloak's 500", func(t *testing.T) {
+		t.Parallel()
+		server := httptest.NewServer(tokenThen(func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusInternalServerError)
+			_, _ = io.WriteString(w, `{"error":"unknown_error"}`)
+		}))
+		t.Cleanup(server.Close)
+		_, err := testClient(server).ImportIdentityProviderConfig(context.Background(), "https://idp.example.com/.well-known/openid-configuration")
+		var apiErr *APIError
+		if !errors.As(err, &apiErr) || apiErr.StatusCode != http.StatusInternalServerError {
+			t.Fatalf("error = %v, want APIError 500", err)
+		}
+	})
+}
+
+func TestReloadIdentityProviderKeys(t *testing.T) {
+	t.Parallel()
+	for _, tt := range []struct {
+		body string
+		want bool
+	}{{"true", true}, {"false", false}} {
+		t.Run(tt.body, func(t *testing.T) {
+			t.Parallel()
+			var gotMethod, gotPath string
+			server := httptest.NewServer(tokenThen(func(w http.ResponseWriter, r *http.Request) {
+				gotMethod, gotPath = r.Method, r.URL.Path
+				_, _ = io.WriteString(w, tt.body)
+			}))
+			t.Cleanup(server.Close)
+			got, err := testClient(server).ReloadIdentityProviderKeys(context.Background(), "acme")
+			if err != nil || got != tt.want {
+				t.Fatalf("ReloadIdentityProviderKeys = %v, %v; want %v", got, err, tt.want)
+			}
+			if gotMethod != http.MethodGet || gotPath != "/admin/realms/ai-grid/identity-provider/instances/acme/reload-keys" {
+				t.Fatalf("request = %s %s", gotMethod, gotPath)
+			}
+		})
+	}
+}
+
+func TestCountIdentityProviderUsers(t *testing.T) {
+	t.Parallel()
+	var gotPath, gotAlias string
+	server := httptest.NewServer(tokenThen(func(w http.ResponseWriter, r *http.Request) {
+		gotPath, gotAlias = r.URL.Path, r.URL.Query().Get("idpAlias")
+		_, _ = io.WriteString(w, "3")
+	}))
+	t.Cleanup(server.Close)
+	got, err := testClient(server).CountIdentityProviderUsers(context.Background(), "acme corp")
+	if err != nil || got != 3 {
+		t.Fatalf("CountIdentityProviderUsers = %d, %v; want 3", got, err)
+	}
+	if gotPath != "/admin/realms/ai-grid/users/count" || gotAlias != "acme corp" {
+		t.Fatalf("request = %s idpAlias=%q", gotPath, gotAlias)
+	}
+}
+
+func TestListIdentityProviderMappers(t *testing.T) {
+	t.Parallel()
+	var gotPath string
+	server := httptest.NewServer(tokenThen(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		_ = json.NewEncoder(w).Encode([]IdentityProviderMapper{{ID: "m-1", Name: IdentityProviderOrgIDMapperName}})
+	}))
+	t.Cleanup(server.Close)
+	got, err := testClient(server).ListIdentityProviderMappers(context.Background(), "acme")
+	if err != nil || len(got) != 1 || got[0].Name != IdentityProviderOrgIDMapperName {
+		t.Fatalf("ListIdentityProviderMappers = %+v, %v", got, err)
+	}
+	if gotPath != "/admin/realms/ai-grid/identity-provider/instances/acme/mappers" {
+		t.Fatalf("request path = %s", gotPath)
+	}
 }
 
 func testClient(server *httptest.Server) *Client {

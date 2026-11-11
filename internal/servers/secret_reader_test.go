@@ -50,8 +50,8 @@ func TestKubernetesSecretReader(t *testing.T) {
 			Data:       map[string][]byte{"other": []byte("x")},
 		})
 		_, err := NewKubernetesSecretReader(client, ns).Read(context.Background(), "acme-idp")
-		if err == nil || !strings.Contains(err.Error(), idpClientSecretKey) {
-			t.Fatalf("err = %v, want key name", err)
+		if err == nil || !strings.Contains(err.Error(), idpClientSecretKey) || !IsSecretWithoutClientSecret(err) {
+			t.Fatalf("err = %v, want key name and IsSecretWithoutClientSecret", err)
 		}
 	})
 
@@ -62,8 +62,8 @@ func TestKubernetesSecretReader(t *testing.T) {
 			Data:       map[string][]byte{idpClientSecretKey: {}},
 		})
 		_, err := NewKubernetesSecretReader(client, ns).Read(context.Background(), "acme-idp")
-		if err == nil || !strings.Contains(err.Error(), "empty") {
-			t.Fatalf("err = %v, want empty", err)
+		if err == nil || !strings.Contains(err.Error(), "empty") || !IsSecretWithoutClientSecret(err) {
+			t.Fatalf("err = %v, want empty and IsSecretWithoutClientSecret", err)
 		}
 	})
 }

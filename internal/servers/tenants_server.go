@@ -3,6 +3,7 @@ package servers
 import (
 	"context"
 	"errors"
+	"fmt"
 	"hash/fnv"
 	"log/slog"
 	"maps"
@@ -50,10 +51,17 @@ type organizationClient interface {
 	DeleteOrganization(ctx context.Context, id string) error
 	ListOrganizationMembers(ctx context.Context, orgID string) ([]keycloak.OrganizationMember, error)
 	CreateIdentityProvider(ctx context.Context, idp keycloak.IdentityProvider) error
+	GetIdentityProvider(ctx context.Context, alias string) (keycloak.IdentityProvider, error)
+	GetOrganizationIdentityProvider(ctx context.Context, orgID, alias string) (keycloak.IdentityProvider, error)
+	UpdateIdentityProvider(ctx context.Context, idp keycloak.IdentityProvider) error
 	DeleteIdentityProvider(ctx context.Context, alias string) error
+	ImportIdentityProviderConfig(ctx context.Context, fromURL string) (map[string]string, error)
+	ReloadIdentityProviderKeys(ctx context.Context, alias string) (bool, error)
 	LinkOrganizationIdentityProvider(ctx context.Context, orgID, alias string) error
 	ConfigureOrganizationIdentityProvider(ctx context.Context, orgID, alias string) error
 	UpsertIdentityProviderMapper(ctx context.Context, alias, organizationID, organizationName string) error
+	ListIdentityProviderMappers(ctx context.Context, alias string) ([]keycloak.IdentityProviderMapper, error)
+	CountIdentityProviderUsers(ctx context.Context, alias string) (int, error)
 }
 
 // TenantsServerBuilder configures a TenantsServer.
@@ -120,7 +128,7 @@ func (b *TenantsServerBuilder) SetOrganizationClient(client organizationClient) 
 }
 
 // SetSecretReader sets the reader for IdP client secrets. Required only when a
-// Create request includes an identity provider.
+// Create or Update request writes an identity provider.
 func (b *TenantsServerBuilder) SetSecretReader(reader SecretReader) *TenantsServerBuilder {
 	b.secrets = reader
 	return b
@@ -202,7 +210,9 @@ func (s *TenantsServer) projectTenant(ctx context.Context, organization keycloak
 
 // Create creates a Keycloak Organization for the tenant.
 // metadata.name is required (RFC 1123). Keycloak assigns the organization id.
-// When spec.identity_provider is set, creates and links the realm IdP and mapper.
+// When spec.identity_provider is set, Keycloak first checks the issuer's discovery
+// document, then the realm IdP is created, its signing keys checked, and it is
+// linked with its mappers; any failure removes what was created.
 func (s *TenantsServer) Create(ctx context.Context, req *aigridv1.TenantsCreateRequest) (*aigridv1.TenantsCreateResponse, error) {
 	object := req.GetObject()
 	if object == nil {
@@ -228,6 +238,9 @@ func (s *TenantsServer) Create(ctx context.Context, req *aigridv1.TenantsCreateR
 		}
 		if s.secrets == nil {
 			return nil, connect.Errorf(connect.CodeInternal, "identity provider secret reader is not configured")
+		}
+		if err := s.checkIssuer(ctx, normalizedIdP.GetConfig()); err != nil {
+			return nil, err
 		}
 	}
 
@@ -271,8 +284,11 @@ func (s *TenantsServer) Create(ctx context.Context, req *aigridv1.TenantsCreateR
 	return &aigridv1.TenantsCreateResponse{Object: tenant}, nil
 }
 
-// Update patches tenant name and/or domains according to update_mask.
-// An empty mask updates all mutable fields (name + domains).
+// Update patches tenant name, domains and/or identity provider according to
+// update_mask; an empty mask is inferred from the object (tenantUpdatePaths).
+// An identity provider is added to an organization without one, or changed in
+// place under the same alias, so the organization, its id, its members and
+// their links to the IdP stay. Removing it is refused.
 func (s *TenantsServer) Update(ctx context.Context, req *aigridv1.TenantsUpdateRequest) (*aigridv1.TenantsUpdateResponse, error) {
 	object := req.GetObject()
 	if object == nil {
@@ -306,13 +322,21 @@ func (s *TenantsServer) Update(ctx context.Context, req *aigridv1.TenantsUpdateR
 	if err != nil {
 		return nil, err
 	}
+	storedIdP, err := identityProviderFromOrganizationAttrs(current.Attributes)
+	if err != nil {
+		return nil, connect.Errorf(connect.CodeInternal, "read identity provider: %v", err)
+	}
+	// nextIdP is the identity provider to write: set when the request adds or
+	// changes it, nil when it leaves it as stored.
+	var nextIdP *aigridv1.IdentityProvider
 	if updateIdP {
-		if err := s.ensureIdentityProviderUnchanged(current, object.GetSpec().GetIdentityProvider()); err != nil {
+		nextIdP, err = identityProviderToWrite(current.Name, storedIdP, object.GetSpec().GetIdentityProvider())
+		if err != nil {
 			return nil, err
 		}
 	}
-	if !updateName && !updateDomains {
-		// IdP-only (or identity/version-only) mask: nothing to write.
+	if !updateName && !updateDomains && nextIdP == nil {
+		// An unchanged IdP (or an identity/version-only mask): nothing to write.
 		tenant, err := tenantFromOrganization(current)
 		if err != nil {
 			return nil, connect.Errorf(connect.CodeInternal, "project tenant: %v", err)
@@ -347,10 +371,6 @@ func (s *TenantsServer) Update(ctx context.Context, req *aigridv1.TenantsUpdateR
 		if err := validateTenantDomains(next.Domains); err != nil {
 			return nil, err
 		}
-		storedIdP, err := identityProviderFromOrganizationAttrs(current.Attributes)
-		if err != nil {
-			return nil, connect.Errorf(connect.CodeInternal, "read identity provider: %v", err)
-		}
 		if storedIdP != nil {
 			next.Domains = routeDomainsToIdentityProvider(next.Domains, identityProviderAliasOf(current))
 		}
@@ -364,6 +384,81 @@ func (s *TenantsServer) Update(ctx context.Context, req *aigridv1.TenantsUpdateR
 	}
 	next.Attributes[tenantVersionAttribute] = []string{strconv.FormatInt(nextVersion(organizationVersion(current)), 10)}
 
+	// The identity provider, its mappers included, is written in Keycloak before
+	// the organization, the commit point, and undone if anything up to the
+	// commit fails, so the organization never names an IdP that isn't there, or
+	// one other than the IdP Keycloak signs its users in with.
+	undoIdP := func(err error) error { return err }
+	if nextIdP != nil {
+		if s.secrets == nil {
+			return nil, connect.Errorf(connect.CodeInternal, "identity provider secret reader is not configured")
+		}
+		// The issuer is checked when it is set: here when the IdP is added; for a change,
+		// replaceIdentityProvider checks it against the issuer Keycloak's IdP has now.
+		alias := identityProviderAliasOf(current)
+		if storedIdP == nil {
+			if err := s.checkIssuer(ctx, nextIdP.GetConfig()); err != nil {
+				return nil, err
+			}
+		}
+		if storedIdP == nil {
+			// A realm IdP under the organization's alias and linked to it, which the
+			// organization doesn't name, is what an add leaves when the organization's
+			// save failed and couldn't be read again: write the request over it, as a
+			// change does, so the retry converges. The organization doesn't name it, so
+			// it is undone like a fresh add: deleted, and a retry starts clean. Any other
+			// IdP under the alias makes Create below answer AlreadyExists, as before.
+			_, err := s.tenants.GetOrganizationIdentityProvider(ctx, current.ID, alias)
+			switch {
+			case err == nil:
+				// Only this backend's own leftover is taken over: an organization made
+				// outside this API (imported with its own IdP, say) has a working IdP
+				// that this API must neither overwrite nor delete. This backend's IdPs
+				// carry its org id mapper, which it applies before it saves the
+				// organization; it is matched by name, since another mapper may hold
+				// the same org id.
+				if err := s.ensureOwnIdentityProvider(ctx, alias); err != nil {
+					return nil, err
+				}
+				// The requested Secret is read before the undo is set, so a request that
+				// fails before writing anything deletes nothing.
+				if _, err := s.readIdentityProviderSecret(ctx, nextIdP); err != nil {
+					return nil, err
+				}
+				undoIdP = func(err error) error { return s.cleanupIdentityProviderAdd(ctx, alias, true, err) }
+				if _, err := s.replaceIdentityProvider(ctx, current, next.Name, nil, nextIdP); err != nil {
+					return nil, undoIdP(err)
+				}
+				if err := s.tenants.ConfigureOrganizationIdentityProvider(ctx, current.ID, alias); err != nil {
+					return nil, undoIdP(mapTenantKeycloakError("configure identity provider", alias, err))
+				}
+			case keycloak.IsNotFound(err):
+				// next carries the organization's id and alias, and the name it is
+				// about to have, which the mappers hold.
+				idpCreated, err := s.setupIdentityProvider(ctx, next, nextIdP)
+				if err != nil {
+					return nil, s.cleanupIdentityProviderAdd(ctx, alias, idpCreated, err)
+				}
+				undoIdP = func(err error) error { return s.cleanupIdentityProviderAdd(ctx, alias, true, err) }
+			default:
+				return nil, mapTenantKeycloakError("get organization identity provider", alias, err)
+			}
+			// Only now that the IdP is linked may a domain name it.
+			next.Domains = routeDomainsToIdentityProvider(next.Domains, alias)
+		} else {
+			previous, err := s.replaceIdentityProvider(ctx, current, next.Name, storedIdP, nextIdP)
+			if err != nil {
+				return nil, err
+			}
+			undoIdP = func(err error) error { return s.restoreIdentityProvider(ctx, current, previous, err) }
+		}
+		chunks, err := identityProviderToAttributeValues(nextIdP)
+		if err != nil {
+			return nil, undoIdP(connect.Errorf(connect.CodeInternal, "encode identity provider: %v", err))
+		}
+		next.Attributes[tenantIdentityProviderAttribute] = chunks
+	}
+
 	updated, err := s.tenants.UpdateOrganization(ctx, next)
 	if readBack := (*keycloak.ReadBackError)(nil); errors.As(err, &readBack) {
 		// The write landed; answer with what was written rather than make
@@ -371,13 +466,37 @@ func (s *TenantsServer) Update(ctx context.Context, req *aigridv1.TenantsUpdateR
 		s.logger.WarnContext(ctx, "tenant updated, but reading it back failed", "id", id, "error", readBack.Err)
 		updated, err = readBack.Written, nil
 	}
-	if err != nil {
-		return nil, mapTenantKeycloakError("update", id, err)
+	if err != nil && nextIdP != nil {
+		// Undo the IdP only when the organization surely wasn't saved: if it was (its
+		// answer lost), undoing would leave it naming an IdP config Keycloak no longer
+		// has. This backend alone bumps the version, under the tenant's lock, so the
+		// version it wrote says whether the write landed. When that can't be read, nothing
+		// is undone: Keycloak has the new IdP and the organization is old or new, and a
+		// retry of the same request writes the rest.
+		readCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), identityProviderCleanupTimeout)
+		stored, readErr := s.tenants.GetOrganization(readCtx, id)
+		cancel()
+		switch {
+		case readErr != nil:
+			// Nothing is undone, so Keycloak already signs users in with the new IdP config.
+			issuerNote := ""
+			if storedIdP != nil && nextIdP.GetConfig().GetIssuer() != storedIdP.GetConfig().GetIssuer() {
+				issuerNote = fmt.Sprintf("; sign-in already uses the new issuer %q, so don't test sign-in until a reload shows the tenant with it", nextIdP.GetConfig().GetIssuer())
+			}
+			return nil, connect.Errorf(connect.CodeUnavailable, "update tenant %q: %v; the change may have been saved, and reading the tenant again failed (%v): reload it, and retry if it doesn't show the change%s", id, err, readErr, issuerNote).WithCause(err)
+		case organizationVersion(stored) == organizationVersion(next):
+			s.logger.WarnContext(ctx, "tenant update answered with an error, but it was saved", "id", id, "error", err)
+			updated, err = stored, nil
+		}
 	}
-	if updateName {
+	if err != nil {
+		return nil, undoIdP(mapTenantKeycloakError("update", id, err))
+	}
+	if updateName && nextIdP == nil {
 		// The org name mapper is hardcoded per IdP: refresh it so new logins get the new
 		// org_name. Done on every name update, not only a change, so a retry repairs a
-		// failed refresh.
+		// failed refresh. An added or changed IdP got its mappers, with the new name,
+		// before the organization was written.
 		if err := s.refreshIdentityProviderMappers(ctx, updated); err != nil {
 			return nil, err
 		}
@@ -764,42 +883,134 @@ func mapTenantKeycloakError(op, id string, err error) error {
 	}
 }
 
-func (s *TenantsServer) setupIdentityProvider(ctx context.Context, org keycloak.Organization, idp *aigridv1.IdentityProvider) (idpCreated bool, err error) {
+// refuseIssuerChangeWithLinkedUsers refuses an issuer change once anyone has signed in through
+// the IdP. Keycloak links a member to the IdP by its alias and the subject the IdP sends, not by
+// issuer, so after an issuer change a user of the new issuer whose subject matches a member's
+// link would sign in as that member. A wrong issuer lets nobody sign in, so it has no linked
+// users and can still be corrected.
+func (s *TenantsServer) refuseIssuerChangeWithLinkedUsers(ctx context.Context, alias string) error {
+	linked, err := s.tenants.CountIdentityProviderUsers(ctx, alias)
+	if err != nil {
+		return mapTenantKeycloakError("count identity provider users", alias, err)
+	}
+	if linked > 0 {
+		return connect.Errorf(connect.CodeFailedPrecondition, "spec.identity_provider.config.issuer can't change after members have signed in through identity provider %q (%d linked): Keycloak links a member by the provider alias and the subject the provider sends, so a user of the new issuer with a matching subject would sign in as that member. To correct it, create a new organization, or remove the members' links to the identity provider in Keycloak first", alias, linked)
+	}
+	return nil
+}
+
+// ensureOwnIdentityProvider refuses an IdP this backend didn't create: one without the org id
+// mapper every IdP it creates gets.
+func (s *TenantsServer) ensureOwnIdentityProvider(ctx context.Context, alias string) error {
+	mappers, err := s.tenants.ListIdentityProviderMappers(ctx, alias)
+	if err != nil {
+		return mapTenantKeycloakError("list identity provider mappers", alias, err)
+	}
+	for _, m := range mappers {
+		if m.Name == keycloak.IdentityProviderOrgIDMapperName {
+			return nil
+		}
+	}
+	return connect.Errorf(connect.CodeFailedPrecondition, "the organization already has identity provider %q, which this API didn't create; manage it in Keycloak, or remove it there before adding one here", alias)
+}
+
+// readIdentityProviderSecret reads the client secret an IdP's config names.
+func (s *TenantsServer) readIdentityProviderSecret(ctx context.Context, idp *aigridv1.IdentityProvider) ([]byte, error) {
 	secret, err := s.secrets.Read(ctx, idp.GetConfig().GetClientSecretSecretName())
 	if err != nil {
 		if IsSecretNotFound(err) {
-			return false, connect.Errorf(connect.CodeNotFound, "identity provider secret %q not found", idp.GetConfig().GetClientSecretSecretName()).WithCause(err)
+			return nil, connect.Errorf(connect.CodeNotFound, "identity provider secret %q not found", idp.GetConfig().GetClientSecretSecretName()).WithCause(err)
 		}
-		return false, connect.Errorf(connect.CodeInternal, "read identity provider secret: %v", err).WithCause(err)
+		if IsSecretWithoutClientSecret(err) {
+			return nil, connect.Errorf(connect.CodeFailedPrecondition, "identity provider secret %q has no client secret: %v; put the IdP client's secret under key %q", idp.GetConfig().GetClientSecretSecretName(), err, idpClientSecretKey).WithCause(err)
+		}
+		return nil, connect.Errorf(connect.CodeInternal, "read identity provider secret: %v", err).WithCause(err)
 	}
-	alias := org.Alias
-	if alias == "" {
-		alias = org.Name
+	return secret, nil
+}
+
+// checkIssuer has Keycloak read the issuer's OIDC discovery document, from Keycloak's own
+// network as it does at sign-in, and refuses an issuer the document doesn't name: Keycloak
+// rejects every ID token whose iss isn't the configured issuer. It writes nothing.
+func (s *TenantsServer) checkIssuer(ctx context.Context, cfg *aigridv1.OidcConfig) error {
+	issuer := cfg.GetIssuer()
+	// OpenID Connect Discovery 1.0, section 4: a terminating "/" is removed before appending.
+	discovery := strings.TrimSuffix(issuer, "/") + "/.well-known/openid-configuration"
+	imported, err := s.tenants.ImportIdentityProviderConfig(ctx, discovery)
+	if err != nil {
+		var apiErr *keycloak.APIError
+		if errors.As(err, &apiErr) && !keycloak.IsForbidden(err) {
+			return connect.Errorf(connect.CodeFailedPrecondition, "spec.identity_provider.config.issuer: Keycloak could not read the OIDC discovery document %s; check the issuer URL and that Keycloak can reach it (%v)", discovery, err).WithCause(err)
+		}
+		return mapTenantKeycloakError("check identity provider issuer", issuer, err)
 	}
-	// With TrustEmail on, Keycloak (26.8) sets a brokered user's email_verified from this IdP's
-	// email_verified claim when the claim is present. When it's absent, Keycloak marks the email
-	// verified for a new user or a changed email. With TrustEmail off, email_verified is false and
-	// the MaaS Portal's oauth2-proxy refuses the token. The IdP's sync mode is FORCE
-	// (oidcConfigForKeycloak), so this applies on every login, not only the first.
-	// So a tenant IdP must send email_verified=true for its users: in the ID token, and also in
-	// the userinfo response when the IdP has a userinfo URL. If userinfo returns an email without
-	// email_verified, Keycloak reads the claim as false and TrustEmail doesn't help.
-	// TrustEmail doesn't change account linking: the realm's first broker login flow matches a
-	// brokered login to an existing user by email or username without reading email_verified,
-	// so what a tenant IdP can do by asserting another user's email or username is the same
-	// with it on or off.
-	kcIdP := keycloak.IdentityProvider{
+	if got := imported["issuer"]; got != issuer {
+		return connect.Errorf(connect.CodeInvalidArgument, "spec.identity_provider.config.issuer %q does not match the issuer %q that its discovery document %s names", issuer, got, discovery)
+	}
+	return nil
+}
+
+// checkSigningKeys has Keycloak load the IdP's signing keys from its jwks_url now, as it does
+// at sign-in. The IdP must already be saved in Keycloak; nothing is checked without a jwks_url.
+// Only a reload that fails (an unreachable or malformed JWKS) refuses the write. Keycloak
+// answering false means it didn't try: the IdP is disabled or has no JWKS URL, or it loaded the
+// keys less than minTimeBetweenRequests (10 s) ago, on this node or another. That isn't a bad
+// JWKS, so the write stands and the keys load on the next sign-in.
+func (s *TenantsServer) checkSigningKeys(ctx context.Context, alias string, cfg *aigridv1.OidcConfig) error {
+	if cfg.GetJwksUrl() == "" {
+		return nil
+	}
+	if _, err := s.tenants.ReloadIdentityProviderKeys(ctx, alias); err != nil {
+		var apiErr *keycloak.APIError
+		if errors.As(err, &apiErr) && !keycloak.IsForbidden(err) {
+			return connect.Errorf(connect.CodeFailedPrecondition, "spec.identity_provider.config.jwks_url: Keycloak could not load signing keys from %s; check the JWKS URL and that Keycloak can reach it (%v)", cfg.GetJwksUrl(), err).WithCause(err)
+		}
+		return mapTenantKeycloakError("check identity provider signing keys", alias, err)
+	}
+	return nil
+}
+
+// keycloakIdentityProvider is the realm IdP this backend writes for a tenant's IdP.
+//
+// With TrustEmail on, Keycloak (26.8) sets a brokered user's email_verified from this IdP's
+// email_verified claim when the claim is present. When it's absent, Keycloak marks the email
+// verified for a new user or a changed email. With TrustEmail off, email_verified is false and
+// the MaaS Portal's oauth2-proxy refuses the token. The IdP's sync mode is FORCE
+// (oidcConfigForKeycloak), so this applies on every login, not only the first.
+// So a tenant IdP must send email_verified=true for its users: in the ID token, and also in
+// the userinfo response when the IdP has a userinfo URL. If userinfo returns an email without
+// email_verified, Keycloak reads the claim as false and TrustEmail doesn't help.
+// TrustEmail doesn't change account linking: the realm's first broker login flow matches a
+// brokered login to an existing user by email or username without reading email_verified,
+// so what a tenant IdP can do by asserting another user's email or username is the same
+// with it on or off.
+func keycloakIdentityProvider(alias string, idp *aigridv1.IdentityProvider, clientSecret []byte) keycloak.IdentityProvider {
+	return keycloak.IdentityProvider{
 		Alias:       alias,
 		DisplayName: idp.GetTitle(),
 		ProviderID:  "oidc",
 		Enabled:     idp.GetEnabled(),
 		TrustEmail:  true,
-		Config:      oidcConfigForKeycloak(idp.GetConfig(), secret),
+		Config:      oidcConfigForKeycloak(idp.GetConfig(), clientSecret),
 	}
-	if err := s.tenants.CreateIdentityProvider(ctx, kcIdP); err != nil {
+}
+
+// setupIdentityProvider creates the organization's realm IdP, checks Keycloak can load its
+// signing keys, links it to the organization with managed membership and applies the
+// mappers. idpCreated reports whether the IdP exists in Keycloak, for the caller's cleanup.
+func (s *TenantsServer) setupIdentityProvider(ctx context.Context, org keycloak.Organization, idp *aigridv1.IdentityProvider) (idpCreated bool, err error) {
+	secret, err := s.readIdentityProviderSecret(ctx, idp)
+	if err != nil {
+		return false, err
+	}
+	alias := identityProviderAliasOf(org)
+	if err := s.tenants.CreateIdentityProvider(ctx, keycloakIdentityProvider(alias, idp, secret)); err != nil {
 		return false, mapTenantKeycloakError("create identity provider", alias, err)
 	}
 	idpCreated = true
+	if err := s.checkSigningKeys(ctx, alias, idp.GetConfig()); err != nil {
+		return idpCreated, err
+	}
 	if err := s.tenants.LinkOrganizationIdentityProvider(ctx, org.ID, alias); err != nil {
 		return idpCreated, mapTenantKeycloakError("link identity provider", alias, err)
 	}
@@ -838,28 +1049,144 @@ func (s *TenantsServer) cleanupIdentityProviderCreate(ctx context.Context, orgID
 	return connect.Errorf(connect.CodeInternal, "identity provider setup failed (%v); organization cleanup also failed: %v", setupErr, orgCleanupErr)
 }
 
-func (s *TenantsServer) ensureIdentityProviderUnchanged(current keycloak.Organization, request *aigridv1.IdentityProvider) error {
-	stored, err := identityProviderFromOrganizationAttrs(current.Attributes)
+// cleanupIdentityProviderAdd deletes the IdP an Update added when a later step failed.
+// Keycloak drops the IdP's organization link and mappers with it; the organization stays.
+func (s *TenantsServer) cleanupIdentityProviderAdd(ctx context.Context, alias string, idpCreated bool, setupErr error) error {
+	if !idpCreated {
+		return setupErr
+	}
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), identityProviderCleanupTimeout)
+	defer cancel()
+	if err := s.tenants.DeleteIdentityProvider(ctx, alias); err != nil {
+		return connect.Errorf(connect.CodeInternal, "identity provider setup failed (%v); identity provider cleanup also failed: %v", setupErr, err)
+	}
+	return setupErr
+}
+
+// replaceIdentityProvider writes a changed IdP over the organization's realm IdP, under the
+// same alias, so Keycloak keeps its organization link and its users' federated links. Keys
+// this backend doesn't own are written back as read. It re-reads the client secret the new
+// config names, checks Keycloak can load the new signing keys and re-applies the mappers with
+// the organization's id and new name, restoring the previous IdP when any of that fails. It
+// returns the IdP as it was, with its client secret, for restoreIdentityProvider.
+//
+// stored is nil when an add takes over an IdP the organization doesn't name: there is no
+// previous IdP of the tenant to restore, so a failure is returned as it is, and the caller
+// deletes the IdP as it does a fresh add's.
+func (s *TenantsServer) replaceIdentityProvider(ctx context.Context, current keycloak.Organization, name string, stored, idp *aigridv1.IdentityProvider) (keycloak.IdentityProvider, error) {
+	alias := identityProviderAliasOf(current)
+	previous, err := s.tenants.GetIdentityProvider(ctx, alias)
+	if keycloak.IsNotFound(err) {
+		return keycloak.IdentityProvider{}, connect.Errorf(connect.CodeFailedPrecondition, "identity provider %q is missing in Keycloak; it was deleted outside this API", alias).WithCause(err)
+	}
 	if err != nil {
-		return connect.Errorf(connect.CodeInternal, "read identity provider: %v", err)
+		return keycloak.IdentityProvider{}, mapTenantKeycloakError("get identity provider", alias, err)
 	}
-	if stored == nil && request == nil {
-		return nil
+	// Whether the issuer changes is judged against the issuer Keycloak's IdP has now, not the
+	// one the organization names: they differ after an answer that left the write unconfirmed,
+	// a failed restore, or an edit in Keycloak, and Keycloak signs users in with its own. A
+	// change that keeps that issuer isn't checked again, so an issuer whose discovery document
+	// stopped answering doesn't block a correction of the rest. An add checked it already.
+	if idp.GetConfig().GetIssuer() != previous.Config["issuer"] {
+		if err := s.refuseIssuerChangeWithLinkedUsers(ctx, alias); err != nil {
+			return keycloak.IdentityProvider{}, err
+		}
+		if stored != nil {
+			if err := s.checkIssuer(ctx, idp.GetConfig()); err != nil {
+				return keycloak.IdentityProvider{}, err
+			}
+		}
 	}
-	if stored == nil && request != nil {
-		return connect.Errorf(connect.CodeInvalidArgument, "spec.identity_provider cannot be added after create")
-	}
-	if stored != nil && request == nil {
-		return connect.Errorf(connect.CodeInvalidArgument, "spec.identity_provider cannot be removed")
-	}
-	normalized, err := normalizeIdentityProvider(current.Name, request)
+	secret, err := s.readIdentityProviderSecret(ctx, idp)
 	if err != nil {
-		return err
+		return keycloak.IdentityProvider{}, err
 	}
-	if !proto.Equal(stored, normalized) {
-		return connect.Errorf(connect.CodeInvalidArgument, "spec.identity_provider is immutable after create")
+	// Keycloak never returns the client secret, so the one to restore on failure is read now,
+	// from the Secret the stored IdP names, before anything is written.
+	var previousSecret []byte
+	if stored != nil {
+		previousSecret, err = s.secrets.Read(ctx, stored.GetConfig().GetClientSecretSecretName())
+		if err != nil {
+			code := connect.CodeInternal
+			if IsSecretNotFound(err) || IsSecretWithoutClientSecret(err) {
+				code = connect.CodeFailedPrecondition
+			}
+			// Not the requested Secret (that one missing is NotFound): the one the stored IdP
+			// names, which holds the previous client secret a failed change restores.
+			return keycloak.IdentityProvider{}, connect.Errorf(code, "the previous client secret, needed to restore the identity provider if this change fails, can't be read from Secret %q, which the stored identity provider names: %v; nothing was changed. Recreate Secret %q with the client secret Keycloak has now, under key %q, then retry", stored.GetConfig().GetClientSecretSecretName(), err, stored.GetConfig().GetClientSecretSecretName(), idpClientSecretKey).WithCause(err)
+		}
 	}
-	return nil
+	owned := keycloakIdentityProvider(alias, idp, secret)
+	next := previous
+	next.DisplayName, next.ProviderID, next.Enabled, next.TrustEmail = owned.DisplayName, owned.ProviderID, owned.Enabled, owned.TrustEmail
+	next.Config = maps.Clone(previous.Config)
+	if next.Config == nil {
+		next.Config = map[string]string{}
+	}
+	for _, key := range oidcOptionalConfigKeys {
+		delete(next.Config, key)
+	}
+	maps.Copy(next.Config, owned.Config)
+	previous.Config = maps.Clone(previous.Config)
+	if previous.Config == nil {
+		previous.Config = map[string]string{}
+	}
+	previous.Config["clientSecret"] = string(previousSecret)
+	restore := func(err error) error {
+		if stored == nil {
+			return err
+		}
+		return s.restoreIdentityProvider(ctx, current, previous, err)
+	}
+	if err := s.tenants.UpdateIdentityProvider(ctx, next); err != nil {
+		return keycloak.IdentityProvider{}, mapTenantKeycloakError("update identity provider", alias, err)
+	}
+	if err := s.checkSigningKeys(ctx, alias, idp.GetConfig()); err != nil {
+		return keycloak.IdentityProvider{}, restore(err)
+	}
+	if err := s.tenants.UpsertIdentityProviderMapper(ctx, alias, current.ID, name); err != nil {
+		return keycloak.IdentityProvider{}, restore(mapTenantKeycloakError("upsert identity provider mapper", alias, err))
+	}
+	return previous, nil
+}
+
+// restoreIdentityProvider writes the IdP an Update replaced back as it was, with the client
+// secret replaceIdentityProvider read before the change, and its mappers with the
+// organization's current id and name, when a later step failed.
+func (s *TenantsServer) restoreIdentityProvider(ctx context.Context, current keycloak.Organization, previous keycloak.IdentityProvider, cause error) error {
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), identityProviderCleanupTimeout)
+	defer cancel()
+	if err := s.tenants.UpdateIdentityProvider(ctx, previous); err != nil {
+		return connect.Errorf(connect.CodeInternal, "identity provider update failed (%v); restoring the previous identity provider also failed (%v), so the realm identity provider %q is left on the new config while the organization wasn't saved: retry the update, or revert the identity provider in Keycloak", cause, err, previous.Alias)
+	}
+	if err := s.tenants.UpsertIdentityProviderMapper(ctx, previous.Alias, current.ID, current.Name); err != nil {
+		return connect.Errorf(connect.CodeInternal, "identity provider update failed (%v); the previous identity provider was restored, but restoring its mappers failed: %v", cause, err)
+	}
+	return cause
+}
+
+// identityProviderToWrite returns the requested IdP, validated and normalized as Create does,
+// when Update must write it: when it adds one or changes the stored one. It returns nil when
+// the request repeats the stored IdP or neither has one.
+//
+// Removing an IdP is refused: Keycloak would delete every member's link to it with it, and
+// the organization's members, who have no other way to sign in, would be locked out.
+// Correct it in place instead.
+func identityProviderToWrite(tenantName string, stored, request *aigridv1.IdentityProvider) (*aigridv1.IdentityProvider, error) {
+	if request == nil {
+		if stored != nil {
+			return nil, connect.Errorf(connect.CodeInvalidArgument, "spec.identity_provider cannot be removed: the organization's members sign in through it; change it instead")
+		}
+		return nil, nil
+	}
+	normalized, err := normalizeIdentityProvider(tenantName, request)
+	if err != nil {
+		return nil, err
+	}
+	if stored != nil && proto.Equal(stored, normalized) {
+		return nil, nil
+	}
+	return normalized, nil
 }
 
 // hideWhenOrganizationUnknown is the IdP config key of Keycloak's "Hide on login page when
@@ -869,6 +1196,10 @@ func (s *TenantsServer) ensureIdentityProviderUnchanged(current keycloak.Organiz
 // visitor. Users at an organization's domains still reach its IdP: domain routing, configured
 // on the organization's domains, doesn't read this key.
 const hideWhenOrganizationUnknown = "kc.org.broker.login.hide-when-org-unknown"
+
+// oidcOptionalConfigKeys are the keys oidcConfigForKeycloak writes only when the tenant's IdP
+// has a value for them, so a changed IdP without one must drop them.
+var oidcOptionalConfigKeys = []string{"userInfoUrl", "jwksUrl", "useJwksUrl", "logoutUrl"}
 
 func oidcConfigForKeycloak(cfg *aigridv1.OidcConfig, clientSecret []byte) map[string]string {
 	out := map[string]string{

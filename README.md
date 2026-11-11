@@ -572,21 +572,93 @@ The backend also sets the IdP's `kc.org.broker.login.hide-when-org-unknown` (Key
 lists every organization's IdP to anyone whose email domain belongs to no organization, which
 shows every tenant's IdP title to every visitor. Users at an organization's domains still go
 straight to its IdP: that routing is set on the organization's domains.
-The IdP is immutable after Create. Client secrets are **not** stored
+An organization may be created without an IdP: its members can't sign in until it has
+one, and its Tenant has no `spec.identity_provider`, which is how a client tells. Update
+adds the IdP later, set up as Create sets it up, or changes it in place: the realm IdP
+keeps its alias (the organization's alias), so the organization, its id, its members and
+their links to the IdP stay; the backend writes the new config over the IdP (keys it
+doesn't own, such as a first broker login flow, stay as they were), reads the client
+Secret again, and re-applies the mappers. An Update that repeats the stored IdP writes
+nothing, so to rotate the client secret, put the new one in a Secret with a new name and
+change `config.client_secret_secret_name`. Removing the IdP is refused: Keycloak would
+drop every member's link to it, and members have no other way to sign in.
+
+The client id, the Secret name, the endpoints, the scopes, the signature settings and the
+title change in place at any time. The issuer changes in place only while nobody has signed
+in through the IdP: once a user is linked to it
+(`GET /admin/realms/<realm>/users/count?idpAlias=<alias>` is more than 0), an issuer change
+is `FailedPrecondition` and nothing is written. Whether a request changes the issuer is
+judged against the issuer Keycloak's IdP has, not the one the organization names: they
+differ after an unconfirmed write, a failed restore or an edit made in Keycloak, and
+Keycloak signs users in with its own. Keycloak links a member to an IdP by the
+IdP's alias and the subject the IdP sends, not by issuer, so after an issuer change a user of
+the new issuer whose subject matches a member's link would sign in as that member. A wrong
+issuer lets nobody sign in, so it has no linked users and can still be corrected. To move an
+organization whose members have signed in to another issuer, create a new organization, or
+remove the members' links to the IdP in Keycloak first.
+
+Before a change is written, the backend reads the previous client secret, from the Secret
+the stored IdP names, and keeps it to restore the IdP if a later step fails. When that
+Secret is missing or has no `client-secret` value, the change is refused
+(`FailedPrecondition`, naming that old Secret, not the requested one) and nothing is
+written: recreate it with the client secret Keycloak has now, then retry.
+The IdP and then its mappers are written before the organization, and restored if either
+fails. When saving the organization answers with an error, the backend reads it again: if
+the save landed (its answer was lost), the update succeeds; if it surely didn't, the IdP is
+restored; if the organization can't be read, nothing is undone and the answer is
+`Unavailable`: the change may have landed, so reload the tenant and retry if it doesn't show
+it. Keycloak already signs users in with the new IdP config then; when the change was a new
+issuer, the message says not to test sign-in until a reload shows the tenant with it. If
+restoring the IdP itself fails, the answer (`Internal`) says the realm IdP is left on the
+new config while the organization wasn't saved: retry the update, or revert the IdP in
+Keycloak. A retry of the same request then writes what's missing, or answers `Aborted` when the
+first one was saved. For an add, the retry finds the realm IdP the first attempt created
+and linked to the organization, and writes the request over it rather than answering
+`AlreadyExists`; if that takeover fails after the requested Secret was read, the IdP is
+deleted, as a fresh add's is, so the next retry starts clean. Only this API's own IdP is
+taken over, one carrying its `AI Grid org id` mapper. An organization made outside this API
+with its own linked IdP under its alias, such as an imported example organization, gets
+`FailedPrecondition` and nothing is changed: manage that IdP in Keycloak, or remove it there
+before adding one here. An IdP under the organization's alias that isn't linked to it is
+still `AlreadyExists`. An IdP write that fails is returned as is; a retry writes it again.
+
+Keycloak checks the IdP before the tenant is written. Whenever the issuer is set (Create,
+an IdP added by Update, a changed issuer), it reads the issuer's OIDC discovery document
+(`POST /admin/realms/<realm>/identity-provider/import-config`), which must name
+`config.issuer` exactly. A change that keeps the issuer Keycloak's IdP has doesn't read it
+again, so an issuer
+whose document stopped answering doesn't block a correction of the rest.
+On every IdP write it loads the signing keys from `config.jwks_url`
+(`GET .../identity-provider/instances/<alias>/reload-keys`); only a reload that fails is
+refused. Keycloak answering that it didn't reload (it loaded the keys less than 10 seconds
+ago, or the IdP has no JWKS URL) isn't a bad JWKS: the write stands and the keys load on
+the next sign-in. Keycloak makes these requests
+itself, from its own network and with its own trust store, without following redirects,
+as it does at sign-in. An unreadable discovery document or JWKS is `FailedPrecondition`, an
+issuer the document doesn't name is `InvalidArgument`, and either way nothing is created or
+changed: Create removes what it made, and Update restores the IdP it replaced. Both calls
+need `manage-identity-providers`, which the backend already has.
+
+Client secrets are **not** stored
 in the API: put them in namespace `ai-grid-idp-secrets` (env
 `AI_GRID_IDP_SECRET_NAMESPACE`) as a Secret whose name is
-`config.client_secret_secret_name` and whose key is `client-secret`. Do **not**
+`config.client_secret_secret_name` and whose key is `client-secret`. A Secret that doesn't
+exist is `NotFound`; one without that key, or with it empty, is `FailedPrecondition`. During a
+change, the Secret the stored IdP names is read too, to restore it; that one missing is
+`FailedPrecondition` as well. Do **not**
 put those Secrets in the backend namespace. The ServiceAccount may only `get`
 Secrets in that namespace. Production Keycloak credentials need the
-`realm-management` roles `manage-organizations`, `view-identity-providers` and
-`manage-identity-providers`: Keycloak checks both the organization and the
+`realm-management` roles `manage-organizations`, `view-identity-providers`,
+`manage-identity-providers` and `query-users` (the linked-users count before an issuer
+change, which counts every linked user without the fine-grained admin permissions feature;
+with it, the backend's user must be allowed to view every user of the realm): Keycloak checks both the organization and the
 identity-provider permission on every organization IdP call, so without the
 identity-provider roles a Create with `spec.identity_provider` gets 403.
 `manage-identity-providers` is realm-wide: it lets the backend edit any IdP in
 the realm, not only its organizations'.
 
-Tenants created by an earlier build have IdPs without `trustEmail`, and the
-backend doesn't update existing IdPs. To fix one, turn on **Trust email** on
+Tenants created by an earlier build have IdPs without `trustEmail`. An Update that changes
+the tenant's IdP sets it; otherwise, to fix one, turn on **Trust email** on
 the IdP (its alias is the tenant's IdP alias, or the organization name) in the
 Keycloak admin console, under the realm's **Identity providers**. Or, with the
 Admin REST API, `GET` `/admin/realms/<realm>/identity-provider/instances/<alias>`,
@@ -594,8 +666,8 @@ set `"trustEmail": true` in the response, and `PUT` it back to the same path; th
 masked `clientSecret` in the response keeps the stored secret. The change applies
 from each user's next login, as long as the IdP sends `email_verified`.
 
-IdPs created by an earlier build also lack `kc.org.broker.login.hide-when-org-unknown`. To fix
-one, turn on **Hide on login page when organization not resolved** in the IdP's **Settings**,
+IdPs created by an earlier build also lack `kc.org.broker.login.hide-when-org-unknown`, which
+an Update that changes the IdP also sets. To fix one otherwise, turn on **Hide on login page when organization not resolved** in the IdP's **Settings**,
 section **Organization settings**, or with the Admin REST API, add the key with value `"true"`
 to `config` in the same `GET` and `PUT`.
 
@@ -896,6 +968,9 @@ make dev-fake
 │   │                                  the catalog's Argo CD Applications (fixtures/default/applications.json)
 │   │                                  and a fake ACM Search at /searchapi/graphql (GPU nodes)
 │   ├── fake Keycloak  127.0.0.1:9093  token endpoint + Organizations Admin API
+│   │                                  and the organization IdP calls, which fetch the IdP's
+│   │                                  discovery document and JWKS as Keycloak does, so a
+│   │                                  tenant IdP must point at an issuer that answers
 │   └── draft fake     127.0.0.1:9094  gRPC ai_grid.draft.v1, the console's draft API (own state)
 ├── bin/dev-catalog.git                bare Git repository Models and Subscriptions commit to
 └── bin/ai-grid-provider-backend --kubeconfig bin/fake-kubeconfig
