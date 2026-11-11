@@ -253,11 +253,28 @@ func TestModelsGitLegacyServedNameIsUnavailableInMaaS(t *testing.T) {
 		t.Fatalf("Commit() error = %v", err)
 	}
 
-	st := maas()
-	if st.GetMaas() != aigridv1.ModelMaasState_MODEL_MAAS_STATE_UNAVAILABLE {
-		t.Errorf("MaaS = %v, want UNAVAILABLE: MaaS lists granite and the deployment serves facebook/opt-125m", st.GetMaas())
+	const fragment = `serves "facebook/opt-125m" until its next update, while MaaS lists it as "granite"`
+	list, err := srv.List(ctx, &aigridv1.ModelsListRequest{})
+	if err != nil {
+		t.Fatalf("List() error = %v", err)
 	}
-	if want := `serves "facebook/opt-125m" until its next update, while MaaS lists it as "granite"`; !strings.Contains(st.GetMessage(), want) {
-		t.Errorf("message = %q, want it to contain %q", st.GetMessage(), want)
+	for op, st := range map[string]*aigridv1.ModelStatus{"Get": maas(), "List": list.GetItems()[0].GetStatus()} {
+		if st.GetMaas() != aigridv1.ModelMaasState_MODEL_MAAS_STATE_UNAVAILABLE {
+			t.Errorf("%s MaaS = %v, want UNAVAILABLE: MaaS lists granite and the deployment serves facebook/opt-125m", op, st.GetMaas())
+		}
+		if !strings.Contains(st.GetMessage(), fragment) {
+			t.Errorf("%s message = %q, want it to contain %q", op, st.GetMessage(), fragment)
+		}
+	}
+
+	// Its next update serves the id, and MaaS reads it as available again.
+	if _, err := srv.Update(ctx, &aigridv1.ModelsUpdateRequest{
+		Object:     gitSampleModel("granite", "site-a"),
+		UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.replicas"}},
+	}); err != nil {
+		t.Fatalf("Update() error = %v", err)
+	}
+	if st := maas(); st.GetMaas() != aigridv1.ModelMaasState_MODEL_MAAS_STATE_AVAILABLE || strings.Contains(st.GetMessage(), "until its next update") {
+		t.Errorf("after update MaaS = %v, message = %q; want AVAILABLE with no served-name fragment", st.GetMaas(), st.GetMessage())
 	}
 }

@@ -1507,7 +1507,9 @@ type ModelStatus struct {
 	// AWAITING_SUBSCRIPTION_AND_BACKEND; CONFIGURING_ROUTING (also while one
 	// hasn't reported); AWAITING_SUBSCRIPTION; AVAILABLE. AVAILABLE and
 	// CONFIGURING_ROUTING become UNAVAILABLE when no placed cluster serves the
-	// model (no `clusters[].deployment` is RUNNING). A failed sync doesn't
+	// model (no `clusters[].deployment` is RUNNING), or when its deployment serves
+	// a name other than its id, as a model saved before models were served as their
+	// id can until its next update; `message` then names that name. A failed sync doesn't
 	// stop a previous revision that is still running. UNSPECIFIED while none has reported. Each
 	// `ingress` entry keeps MaaS's own message. Output only.
 	Maas ModelMaasState `protobuf:"varint,11,opt,name=maas,proto3,enum=ai_grid.v1.ModelMaasState" json:"maas,omitempty"`
