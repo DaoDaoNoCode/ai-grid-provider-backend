@@ -136,15 +136,31 @@ safe.
   `object.metadata.name`. The expand and migrate steps were skipped under the API owner's
   explicit 2026-11-12 tech-preview waiver for this behavior; no compatibility window is
   required. The Go client returns the response object and its tests use the returned
-  identifier. The console's one Create caller at backend pin `9a449bb6` (commit
-  `9a449bb659163e82d4884c83c30d7b53d8b48276`) discards the Create response and navigates
-  to the list, so it does not assume its requested id is final. Its current form still
-  allows 56-character bases, so the console pin and form limit must advance with this
-  change (49 characters for a Create base).
+  identifier. The console's backend pin is `cd03b7f`
+  (`cd03b7fab706e4e4836eac98f9dd0935ab85e734`). Its Create caller discards the response
+  and navigates to the list, but its notification entry still keeps the requested id and
+  uses it both for the active-subscription watch and for the lost-answer `readBack`; those
+  paths, the 49-character Create form limit, and the subscription-active e2e test must
+  move to the returned `object.id` with this change.
   **Condition:** every Create caller uses the returned `object.id` (or metadata name) for
   subsequent operations and keeps the human-readable name in the display-name annotation.
   A caller that assumes its requested id is the final id cannot Get, Update, or Delete the
-  new Subscription.
+  new Subscription. The generated name is a technical identity; user-facing UIs should
+  prefer the display-name annotation.
+- **`Subscriptions/Create` request token and REST body (2026-11-12).** Create now accepts
+  an optional `request_token`, a lower-case UUIDv4, for retrying a Create whose answer was
+  lost. The REST body changed from the bare Subscription to the request wrapper
+  `{"request_token": "...", "object": {...}}`; the no-compatibility tech-preview waiver
+  above covers this REST shape change as well. The backend stores only SHA-256 hashes of
+  the token and of an equivalent-create payload fingerprint, never the raw token, and
+  returns them to no caller. A retry with the same token and an equivalent payload
+  returns the existing Subscription (including any later Updates); a different payload
+  with the same token is `AlreadyExists`; concurrent same-token creates produce one
+  Subscription. Omitting the token keeps Create non-idempotent. Equivalence ignores the
+  requested base id/name, system metadata, and output-only model-ref fields, and treats a
+  same-organization qualified owner group and an omitted subscription-namespace model ref
+  as their defaulted forms. Delete removes the token record, so the same token may create
+  a new Subscription afterwards.
 
 ### 2. Unstable areas
 

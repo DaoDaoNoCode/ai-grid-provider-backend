@@ -597,12 +597,11 @@
         },
         "parameters": [
           {
-            "name": "object",
-            "description": "The backend appends a short generated suffix to object.id (or\nobject.metadata.name, or \"sub\" when both are empty) and returns the final\nSubscription identifier. The human-readable name remains\nmetadata.annotations[\"openshift.io/display-name\"].",
+            "name": "body",
             "in": "body",
             "required": true,
             "schema": {
-              "$ref": "#/definitions/v1Subscription"
+              "$ref": "#/definitions/v1SubscriptionsCreateRequest"
             }
           }
         ],
@@ -2577,6 +2576,19 @@
         }
       },
       "description": "Observed state of a MaaS Subscription."
+    },
+    "v1SubscriptionsCreateRequest": {
+      "type": "object",
+      "properties": {
+        "object": {
+          "$ref": "#/definitions/v1Subscription",
+          "description": "The backend appends a short generated suffix to object.id (or\nobject.metadata.name, or \"sub\" when both are empty) and returns the final\nSubscription identifier. The human-readable name remains\nmetadata.annotations[\"openshift.io/display-name\"]."
+        },
+        "request_token": {
+          "type": "string",
+          "description": "Optional client-generated request token. Send the same lower-case UUIDv4\nwhen retrying a Create whose answer was lost: if its Subscription still\nexists and the create payload is equivalent, the backend returns that\nSubscription instead of creating another one. A different payload for the\nsame token is AlreadyExists. Only a SHA-256 of the token is stored."
+        }
+      }
     },
     "v1SubscriptionsCreateResponse": {
       "type": "object",

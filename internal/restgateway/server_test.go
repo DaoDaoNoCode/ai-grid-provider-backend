@@ -116,6 +116,58 @@ func TestRESTGatewayRoutes(t *testing.T) {
 		}
 	})
 
+	t.Run("create subscription with request wrapper", func(t *testing.T) {
+		createBody := `{
+			"request_token": "11111111-2222-4333-8444-555555555555",
+			"object": {
+				"id": "team-a",
+				"metadata": {"name": "team-a", "annotations": {"openshift.io/display-name": "Team A"}},
+				"spec": {
+					"organization": {"id": "org-1"},
+					"owner": {"groups": ["team-a"]},
+					"model_refs": [{"name": "external-model", "namespace": "external", "unlimited": true}],
+					"priority": 10
+				}
+			}
+		}`
+		resp, err := client.Post(baseURL+"/api/v1/subscriptions", "application/json", strings.NewReader(createBody))
+		if err != nil {
+			t.Fatalf("POST subscription: %v", err)
+		}
+		defer resp.Body.Close()
+		body, err := io.ReadAll(resp.Body)
+		if err != nil {
+			t.Fatalf("read POST subscription body: %v", err)
+		}
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("POST subscription status = %d, want 200 (%s)", resp.StatusCode, body)
+		}
+		var payload struct {
+			Object struct {
+				ID       string `json:"id"`
+				Metadata struct {
+					Name string `json:"name"`
+				} `json:"metadata"`
+			} `json:"object"`
+			AuthPolicy struct {
+				ID string `json:"id"`
+			} `json:"auth_policy"`
+		}
+		if err := json.Unmarshal(body, &payload); err != nil {
+			t.Fatalf("unmarshal POST subscription body: %v (%s)", err, body)
+		}
+		id := payload.Object.ID
+		if !strings.HasPrefix(id, "team-a-") || len(id) != len("team-a-")+6 {
+			t.Fatalf("POST subscription id = %q, want a generated team-a-* id", id)
+		}
+		if payload.Object.Metadata.Name != id || payload.AuthPolicy.ID != id+"-policy" {
+			t.Fatalf("POST subscription response = %s", body)
+		}
+		if strings.Contains(string(body), "11111111-2222-4333-8444-555555555555") {
+			t.Fatalf("POST subscription returned the request token: %s", body)
+		}
+	})
+
 	t.Run("get subscription not found", func(t *testing.T) {
 		resp, err := client.Get(baseURL + "/api/v1/subscriptions/free-subscription")
 		if err != nil {

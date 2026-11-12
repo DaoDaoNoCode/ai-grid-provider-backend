@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"path"
 	"regexp"
@@ -173,6 +174,290 @@ func TestSubscriptionsGitCreateGeneratesID(t *testing.T) {
 			t.Fatalf("Create auth_policy id = %q, want %q", response.GetAuthPolicy().GetId(), object.GetId()+"-policy")
 		}
 	}
+}
+
+func TestSubscriptionsGitCreateRequestTokenValidation(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	srv := mustGitSubscriptionsServer(t, gitops.NewMemoryWriter(gitModelSeed("sim-model")))
+
+	for _, token := range []string{
+		"11111111-2222-4333-8444-55555555555",
+		"11111111-2222-4333-8444-5555555555555",
+		"11111111-2222-5333-8444-555555555555",
+		"11111111-2222-4333-0444-555555555555",
+		"1111111A-2222-4333-8444-555555555555",
+	} {
+		_, err := srv.Create(ctx, &aigridv1.SubscriptionsCreateRequest{
+			Object:       gitSampleSubscription("team-a"),
+			RequestToken: token,
+		})
+		assertConnectCode(t, err, connect.CodeInvalidArgument)
+	}
+}
+
+func TestSubscriptionsGitCreateRequestTokenRetry(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	writer := gitops.NewMemoryWriter(gitModelSeed("sim-model"))
+	srv := mustGitSubscriptionsServer(t, writer)
+	token := "11111111-2222-4333-8444-555555555555"
+
+	created, err := srv.Create(ctx, &aigridv1.SubscriptionsCreateRequest{
+		Object:       gitSampleSubscription("team-a"),
+		RequestToken: token,
+	})
+	if err != nil {
+		t.Fatalf("Create(request token) error = %v", err)
+	}
+	id := created.GetObject().GetId()
+	assertGeneratedSubscriptionID(t, id, "team-a")
+	if got := created.GetObject().GetMetadata().GetAnnotations(); got[subscriptionCreateRequestTokenAnnotation] != "" || got[subscriptionCreateRequestFingerprintAnnotation] != "" {
+		t.Fatalf("Create returned internal request-token annotations: %v", got)
+	}
+
+	sub, _ := readGitSubscriptionFile(t, writer, id)
+	annotations := sub.GetAnnotations()
+	if got := annotations[subscriptionCreateRequestTokenAnnotation]; got != subscriptionCreateRequestTokenHash(token) {
+		t.Fatalf("stored token annotation = %q, want the SHA-256 of the request token", got)
+	}
+	if got := annotations[subscriptionCreateRequestFingerprintAnnotation]; len(got) != 64 || got == token {
+		t.Fatalf("stored fingerprint annotation = %q, want a SHA-256 fingerprint", got)
+	}
+
+	retry, err := srv.Create(ctx, &aigridv1.SubscriptionsCreateRequest{
+		Object:       gitSampleSubscription("team-a"),
+		RequestToken: token,
+	})
+	if err != nil {
+		t.Fatalf("Create(request token retry) error = %v", err)
+	}
+	if retry.GetObject().GetId() != id || retry.GetObject().GetMetadata().GetVersion() != 1 {
+		t.Fatalf("Create retry = %v, want the original Subscription %q at version 1", retry.GetObject(), id)
+	}
+	if messages := writer.Messages(); len(messages) != 1 {
+		t.Fatalf("commit messages = %v, want only the first create", messages)
+	}
+}
+
+func TestSubscriptionsGitCreateRequestTokenDifferentPayload(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	writer := gitops.NewMemoryWriter(gitModelSeed("sim-model"))
+	srv := mustGitSubscriptionsServer(t, writer)
+	token := "11111111-2222-4333-8444-555555555555"
+
+	_, err := srv.Create(ctx, &aigridv1.SubscriptionsCreateRequest{
+		Object:       gitSampleSubscription("team-a"),
+		RequestToken: token,
+	})
+	if err != nil {
+		t.Fatalf("Create(request token) error = %v", err)
+	}
+
+	changed := gitSampleSubscription("team-a")
+	changed.Spec.Priority = 20
+	_, err = srv.Create(ctx, &aigridv1.SubscriptionsCreateRequest{
+		Object:       changed,
+		RequestToken: token,
+	})
+	assertConnectCode(t, err, connect.CodeAlreadyExists)
+	if messages := writer.Messages(); len(messages) != 1 {
+		t.Fatalf("commit messages = %v, want only the first create", messages)
+	}
+}
+
+func TestSubscriptionsGitCreateRequestTokenEquivalentPayloads(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	writer := gitops.NewMemoryWriter(gitModelSeed("sim-model"))
+	srv := mustGitSubscriptionsServer(t, writer)
+	token := "11111111-2222-4333-8444-555555555555"
+
+	created, err := srv.Create(ctx, &aigridv1.SubscriptionsCreateRequest{
+		Object:       gitSampleSubscription("team-a"),
+		RequestToken: token,
+	})
+	if err != nil {
+		t.Fatalf("Create(bare payload) error = %v", err)
+	}
+
+	equivalent := gitSampleSubscription("team-a")
+	equivalent.Id = "team-b"
+	equivalent.Metadata.Name = "team-b"
+	equivalent.Metadata.Creator = "creator"
+	equivalent.Metadata.Tenant = "tenant"
+	equivalent.Metadata.Version = 99
+	equivalent.Spec.Owner.Groups = []string{testOrgID + "/team-a"}
+	equivalent.Spec.ModelRefs[0].Namespace = "models-as-a-service"
+	equivalent.Spec.ModelRefs[0].ModelId = "sim-model"
+	equivalent.Spec.ModelRefs[0].DisplayName = "Simulated model"
+	equivalent.Spec.ModelRefs[0].Description = "Simulated"
+	retry, err := srv.Create(ctx, &aigridv1.SubscriptionsCreateRequest{
+		Object:       equivalent,
+		RequestToken: token,
+	})
+	if err != nil {
+		t.Fatalf("Create(equivalent payload) error = %v", err)
+	}
+	if retry.GetObject().GetId() != created.GetObject().GetId() {
+		t.Fatalf("Create(equivalent payload) id = %q, want %q", retry.GetObject().GetId(), created.GetObject().GetId())
+	}
+	if messages := writer.Messages(); len(messages) != 1 {
+		t.Fatalf("commit messages = %v, want only the first create", messages)
+	}
+}
+
+func TestSubscriptionsGitCreateRequestTokenRefreshesStaleHead(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	writer := gitops.NewMemoryWriter(gitModelSeed("sim-model"))
+	srv := mustGitSubscriptionsServer(t, writer)
+	token := "11111111-2222-4333-8444-555555555555"
+
+	created, err := srv.Create(ctx, &aigridv1.SubscriptionsCreateRequest{
+		Object:       gitSampleSubscription("team-a"),
+		RequestToken: token,
+	})
+	if err != nil {
+		t.Fatalf("Create(request token) error = %v", err)
+	}
+	id := created.GetObject().GetId()
+	staleHead, err := writer.Head(ctx)
+	if err != nil {
+		t.Fatalf("Head(before Update) error = %v", err)
+	}
+
+	update := gitSampleSubscription(id)
+	update.Metadata.Version = 1
+	update.Spec.Priority = 20
+	if _, err := srv.Update(ctx, &aigridv1.SubscriptionsUpdateRequest{
+		Object:     update,
+		UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec"}},
+		Lock:       true,
+	}); err != nil {
+		t.Fatalf("Update(request token subscription) error = %v", err)
+	}
+
+	staleSrv := mustGitSubscriptionsServer(t, &staleSubscriptionWriter{MemoryWriter: writer, head: staleHead})
+	retry, err := staleSrv.Create(ctx, &aigridv1.SubscriptionsCreateRequest{
+		Object:       gitSampleSubscription("team-a"),
+		RequestToken: token,
+	})
+	if err != nil {
+		t.Fatalf("Create(request token on stale head) error = %v", err)
+	}
+	if retry.GetObject().GetId() != id || retry.GetObject().GetMetadata().GetVersion() != 2 || retry.GetObject().GetSpec().GetPriority() != 20 {
+		t.Fatalf("Create(request token on stale head) = %v, want Subscription %q at version 2, priority 20", retry.GetObject(), id)
+	}
+}
+
+func TestSubscriptionsGitCreateRequestTokenConcurrent(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	writer := &racingWriter{MemoryWriter: gitops.NewMemoryWriter(gitModelSeed("sim-model"))}
+	srv := mustGitSubscriptionsServer(t, writer)
+	token := "11111111-2222-4333-8444-555555555555"
+	request := &aigridv1.SubscriptionsCreateRequest{
+		Object:       gitSampleSubscription("team-a"),
+		RequestToken: token,
+	}
+
+	var raced *aigridv1.SubscriptionsCreateResponse
+	writer.race = func() {
+		var err error
+		raced, err = srv.Create(ctx, request)
+		if err != nil {
+			t.Errorf("racing Create(request token) error = %v", err)
+		}
+	}
+	created, err := srv.Create(ctx, request)
+	if err != nil {
+		t.Fatalf("Create(request token) error = %v", err)
+	}
+	if raced == nil || created.GetObject().GetId() != raced.GetObject().GetId() {
+		t.Fatalf("concurrent creates = %v and %v, want one Subscription", created.GetObject(), raced.GetObject())
+	}
+	if messages := writer.Messages(); len(messages) != 1 {
+		t.Fatalf("commit messages = %v, want one committed Subscription", messages)
+	}
+	if writer.commits != 2 {
+		t.Fatalf("commit attempts = %d, want the racing commit plus the conflicted commit", writer.commits)
+	}
+}
+
+func TestSubscriptionsGitCreateRequestTokenAfterUpdateAndDelete(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	writer := gitops.NewMemoryWriter(gitModelSeed("sim-model"))
+	srv := mustGitSubscriptionsServer(t, writer)
+	token := "11111111-2222-4333-8444-555555555555"
+
+	created, err := srv.Create(ctx, &aigridv1.SubscriptionsCreateRequest{
+		Object:       gitSampleSubscription("team-a"),
+		RequestToken: token,
+	})
+	if err != nil {
+		t.Fatalf("Create(request token) error = %v", err)
+	}
+	id := created.GetObject().GetId()
+
+	update := gitSampleSubscription(id)
+	update.Metadata.Version = 1
+	update.Spec.Priority = 20
+	updated, err := srv.Update(ctx, &aigridv1.SubscriptionsUpdateRequest{
+		Object:     update,
+		UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec"}},
+		Lock:       true,
+	})
+	if err != nil {
+		t.Fatalf("Update(request token subscription) error = %v", err)
+	}
+	if updated.GetObject().GetMetadata().GetVersion() != 2 {
+		t.Fatalf("Update version = %d, want 2", updated.GetObject().GetMetadata().GetVersion())
+	}
+	if sub, _ := readGitSubscriptionFile(t, writer, id); sub.GetAnnotations()[subscriptionCreateRequestTokenAnnotation] == "" {
+		t.Fatalf("Update dropped the request-token annotation: %v", sub.GetAnnotations())
+	}
+
+	retry, err := srv.Create(ctx, &aigridv1.SubscriptionsCreateRequest{
+		Object:       gitSampleSubscription("team-a"),
+		RequestToken: token,
+	})
+	if err != nil {
+		t.Fatalf("Create(request token after Update) error = %v", err)
+	}
+	if retry.GetObject().GetId() != id || retry.GetObject().GetMetadata().GetVersion() != 2 || retry.GetObject().GetSpec().GetPriority() != 20 {
+		t.Fatalf("Create retry after Update = %v, want Subscription %q at version 2, priority 20", retry.GetObject(), id)
+	}
+
+	if _, err := srv.Delete(ctx, &aigridv1.SubscriptionsDeleteRequest{Id: id, ResourceVersion: 2}); err != nil {
+		t.Fatalf("Delete(request token subscription) error = %v", err)
+	}
+	recreated, err := srv.Create(ctx, &aigridv1.SubscriptionsCreateRequest{
+		Object:       gitSampleSubscription("team-a"),
+		RequestToken: token,
+	})
+	if err != nil {
+		t.Fatalf("Create(request token after Delete) error = %v", err)
+	}
+	if recreated.GetObject().GetId() == id {
+		t.Fatalf("Create(request token after Delete) reused id %q", id)
+	}
+	assertGeneratedSubscriptionID(t, recreated.GetObject().GetId(), "team-a")
+}
+
+func TestSubscriptionsGitCreateErrorNamesGeneratedID(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	writer := &failingSubscriptionCommitWriter{MemoryWriter: gitops.NewMemoryWriter(gitModelSeed("sim-model"))}
+	srv := mustGitSubscriptionsServer(t, writer)
+
+	_, err := srv.Create(ctx, &aigridv1.SubscriptionsCreateRequest{Object: gitSampleSubscription("team-a")})
+	assertConnectCode(t, err, connect.CodeUnavailable)
+	id := strings.TrimPrefix(writer.message, "subscriptions: create ")
+	assertGeneratedSubscriptionID(t, id, "team-a")
+	assertConnectMessage(t, err, fmt.Sprintf("create Subscription %q: git: push failed", id))
 }
 
 func assertGeneratedSubscriptionID(t *testing.T, id, base string) {
@@ -1253,6 +1538,33 @@ func (w *unreadableWriter) Head(ctx context.Context) (gitops.Snapshot, error) {
 type unreadableSnapshot struct {
 	gitops.Snapshot
 	unreadable string
+}
+
+type failingSubscriptionCommitWriter struct {
+	*gitops.MemoryWriter
+	message string
+}
+
+func (w *failingSubscriptionCommitWriter) Commit(_ context.Context, _ string, c gitops.Change) (string, error) {
+	w.message = c.Message
+	return "", errors.New("push failed")
+}
+
+type staleSubscriptionWriter struct {
+	*gitops.MemoryWriter
+	head gitops.Snapshot
+}
+
+func (w *staleSubscriptionWriter) Head(context.Context) (gitops.Snapshot, error) {
+	return staleSubscriptionSnapshot{Snapshot: w.head}, nil
+}
+
+type staleSubscriptionSnapshot struct {
+	gitops.Snapshot
+}
+
+func (s staleSubscriptionSnapshot) Fresh() bool {
+	return false
 }
 
 // collidingSubscriptionWriter makes the first collisions reads of a

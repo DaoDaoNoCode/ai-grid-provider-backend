@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"regexp"
 	"strings"
 	"time"
 
@@ -39,6 +40,8 @@ type SubscriptionsServer struct {
 }
 
 var _ aigridv1connect.SubscriptionsHandler = (*SubscriptionsServer)(nil)
+
+var subscriptionRequestTokenRE = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`)
 
 // NewSubscriptionsServer creates a builder for SubscriptionsServer.
 func NewSubscriptionsServer() *SubscriptionsServerBuilder {
@@ -156,12 +159,22 @@ func (s *SubscriptionsServer) Create(ctx context.Context, req *aigridv1.Subscrip
 	if err := validateSubscriptionSpec(object.GetSpec()); err != nil {
 		return nil, err
 	}
+	if err := validateSubscriptionRequestToken(req.GetRequestToken()); err != nil {
+		return nil, err
+	}
 	var resp *aigridv1.SubscriptionsCreateResponse
 	err := gitops.RetryOnConflict(ctx, func() (err error) {
-		resp, err = s.gitCreate(ctx, proto.Clone(object).(*aigridv1.Subscription))
+		resp, err = s.gitCreate(ctx, proto.Clone(object).(*aigridv1.Subscription), req.GetRequestToken())
 		return err
 	})
 	return resp, err
+}
+
+func validateSubscriptionRequestToken(token string) error {
+	if token == "" || subscriptionRequestTokenRE.MatchString(token) {
+		return nil
+	}
+	return connect.Errorf(connect.CodeInvalidArgument, "request_token %q is not a lower-case UUIDv4", token)
 }
 
 func prepareSubscriptionCreate(object *aigridv1.Subscription) error {

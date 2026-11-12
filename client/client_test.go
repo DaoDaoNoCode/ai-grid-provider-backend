@@ -308,7 +308,7 @@ func TestClientSubscriptionsCRUD(t *testing.T) {
 		t.Fatalf("ListSubscriptions() len = %d, want 0", len(items))
 	}
 
-	created, err := c.CreateSubscription(ctx, &aigridv1.Subscription{
+	subscription := &aigridv1.Subscription{
 		Id:       "free-subscription",
 		Metadata: &aigridv1.Metadata{Name: "free-subscription"},
 		Spec: &aigridv1.SubscriptionSpec{
@@ -319,13 +319,22 @@ func TestClientSubscriptionsCRUD(t *testing.T) {
 			},
 			Priority: 10,
 		},
-	})
+	}
+	const requestToken = "11111111-2222-4333-8444-555555555555"
+	created, err := c.CreateSubscriptionWithRequestToken(ctx, subscription, requestToken)
 	if err != nil {
 		t.Fatalf("CreateSubscription() error = %v", err)
 	}
 	id := created.GetId()
 	if !regexp.MustCompile(`^free-subscription-[a-z0-9]{6}$`).MatchString(id) {
 		t.Fatalf("CreateSubscription id = %q, want the base and a generated suffix", id)
+	}
+	retried, err := c.CreateSubscriptionWithRequestToken(ctx, subscription, requestToken)
+	if err != nil {
+		t.Fatalf("CreateSubscriptionWithRequestToken(retry) error = %v", err)
+	}
+	if retried.GetId() != id {
+		t.Fatalf("CreateSubscriptionWithRequestToken(retry) id = %q, want %q", retried.GetId(), id)
 	}
 
 	got, err := c.GetSubscription(ctx, id)

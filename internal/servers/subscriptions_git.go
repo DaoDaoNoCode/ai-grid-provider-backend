@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -45,6 +47,12 @@ const (
 	// opendatahub-io/models-as-a-service#1841. The writer sets it on every
 	// file it writes and the API never shows it.
 	retainAPIKeysOnDeleteAnnotation = "maas.opendatahub.io/retain-api-keys-on-delete"
+
+	// A Create request token is stored only as hashes and never returned. It
+	// lets a client whose Create answer was lost retry without making a second
+	// Subscription.
+	subscriptionCreateRequestTokenAnnotation       = "ai-grid/create-request-token-sha256"
+	subscriptionCreateRequestFingerprintAnnotation = "ai-grid/create-request-fingerprint-sha256"
 )
 
 func subscriptionGitPath(id string) string {
@@ -53,8 +61,10 @@ func subscriptionGitPath(id string) string {
 
 // subscriptionDoc is a parsed subscription file.
 type subscriptionDoc struct {
-	sub    *aigridv1.Subscription
-	policy *aigridv1.AuthPolicy
+	sub                      *aigridv1.Subscription
+	policy                   *aigridv1.AuthPolicy
+	createRequestTokenHash   string
+	createRequestFingerprint string
 }
 
 func (s *SubscriptionsServer) gitList(ctx context.Context) ([]*aigridv1.Subscription, error) {
@@ -318,42 +328,188 @@ func gitModelRegistrations(sub *aigridv1.Subscription, namespace string, modelRe
 	return out
 }
 
-func (s *SubscriptionsServer) gitCreate(ctx context.Context, object *aigridv1.Subscription) (*aigridv1.SubscriptionsCreateResponse, error) {
-	id := subscriptionID(object)
+var errSubscriptionCreateRequestTokenNeedsFreshHead = errors.New("request token matched on a stale head")
+
+func (s *SubscriptionsServer) gitCreate(ctx context.Context, object *aigridv1.Subscription, requestToken string) (*aigridv1.SubscriptionsCreateResponse, error) {
 	if err := validateGitMetadata(object.GetMetadata()); err != nil {
 		return nil, err
 	}
 	if _, err := qualifiedOwnerGroups(object.GetSpec()); err != nil {
 		return nil, err
 	}
+	requestTokenHash := ""
+	requestFingerprint := ""
+	if requestToken != "" {
+		requestTokenHash = subscriptionCreateRequestTokenHash(requestToken)
+		fingerprint, err := subscriptionCreateFingerprint(object, s.namespace)
+		if err != nil {
+			return nil, err
+		}
+		requestFingerprint = fingerprint
+	}
 	var resp *aigridv1.SubscriptionsCreateResponse
-	err := decideOnHead(ctx, s.writer, func(err error) error { return subscriptionGitError("create", id, err) }, func(head gitops.Snapshot) (err error) {
-		resp, err = s.gitCreateOn(ctx, head, proto.CloneOf(object))
+	finalID := subscriptionID(object)
+	err := decideOnHead(ctx, s.writer, func(err error) error { return subscriptionGitError("create", finalID, err) }, func(head gitops.Snapshot) (err error) {
+		resp, finalID, err = s.gitCreateOn(ctx, head, proto.CloneOf(object), requestTokenHash, requestFingerprint)
 		return err
 	})
+	if errors.Is(err, errSubscriptionCreateRequestTokenNeedsFreshHead) {
+		head, freshErr := s.writer.FreshHead(ctx)
+		if freshErr != nil {
+			return nil, subscriptionGitError("create", finalID, freshErr)
+		}
+		resp, finalID, err = s.gitCreateOn(ctx, head, proto.CloneOf(object), requestTokenHash, requestFingerprint)
+	}
 	return resp, err
 }
 
 // gitCreateOn decides and commits the create of object on head.
-func (s *SubscriptionsServer) gitCreateOn(ctx context.Context, head gitops.Snapshot, object *aigridv1.Subscription) (*aigridv1.SubscriptionsCreateResponse, error) {
-	_, err := assignGeneratedSubscriptionID(head, object)
-	if err != nil {
-		return nil, err
+func (s *SubscriptionsServer) gitCreateOn(ctx context.Context, head gitops.Snapshot, object *aigridv1.Subscription, requestTokenHash, requestFingerprint string) (*aigridv1.SubscriptionsCreateResponse, string, error) {
+	var read []string
+	if requestTokenHash != "" {
+		existing, err := findSubscriptionByCreateRequestToken(head, requestTokenHash)
+		if err != nil {
+			return nil, subscriptionID(object), err
+		}
+		if existing != nil {
+			if !head.Fresh() {
+				return nil, existing.sub.GetId(), errSubscriptionCreateRequestTokenNeedsFreshHead
+			}
+			if existing.createRequestFingerprint != requestFingerprint {
+				return nil, existing.sub.GetId(), connect.Errorf(
+					connect.CodeAlreadyExists,
+					"request_token already created Subscription %q with a different payload",
+					existing.sub.GetId(),
+				)
+			}
+			return s.subscriptionCreateResponse(ctx, head, existing), existing.sub.GetId(), nil
+		}
+		read = append(read, subscriptionsGitDir)
 	}
-	read, err := s.gitEnsureModelsExist(head, "create", object)
+	id, err := assignGeneratedSubscriptionID(head, object)
 	if err != nil {
-		return nil, err
+		return nil, subscriptionID(object), err
 	}
+	modelRead, err := s.gitEnsureModelsExist(head, "create", object)
+	if err != nil {
+		return nil, id, err
+	}
+	read = append(read, modelRead...)
+	setSubscriptionCreateRequestMetadata(object, requestTokenHash, requestFingerprint)
 	doc, err := s.gitCommit(ctx, head.Revision(), "create", object, 1, read)
 	if err != nil {
-		return nil, err
+		return nil, id, err
 	}
 	// The commit changes no catalog entry, so the snapshot read still holds.
+	return s.subscriptionCreateResponse(ctx, head, doc), id, nil
+}
+
+func (s *SubscriptionsServer) subscriptionCreateResponse(ctx context.Context, head gitops.Snapshot, doc *subscriptionDoc) *aigridv1.SubscriptionsCreateResponse {
 	s.modelCatalog(head).join(ctx, doc.sub)
 	return &aigridv1.SubscriptionsCreateResponse{
 		Object:     withSubscriptionPhase(doc.sub, s.readReports(ctx, kindMaaSSubscription)),
 		AuthPolicy: withAuthPolicyStatus(doc.policy, s.readReports(ctx, kindMaaSAuthPolicy)),
-	}, nil
+	}
+}
+
+func findSubscriptionByCreateRequestToken(head gitops.Snapshot, tokenHash string) (*subscriptionDoc, error) {
+	names, err := head.List(subscriptionsGitDir)
+	if err != nil {
+		return nil, subscriptionGitError("create", "", err)
+	}
+	var found *subscriptionDoc
+	for _, name := range names {
+		id, ok := strings.CutSuffix(name, ".yaml")
+		if !ok {
+			continue
+		}
+		doc, err := readSubscriptionDoc(head, id)
+		if err != nil {
+			return nil, err
+		}
+		if doc.createRequestTokenHash != tokenHash {
+			continue
+		}
+		if found != nil {
+			return nil, connect.Errorf(
+				connect.CodeInternal,
+				"Subscription request token is stored by Subscriptions %q and %q",
+				found.sub.GetId(),
+				doc.sub.GetId(),
+			)
+		}
+		found = doc
+	}
+	return found, nil
+}
+
+func subscriptionCreateRequestTokenHash(token string) string {
+	sum := sha256.Sum256([]byte(token))
+	return hex.EncodeToString(sum[:])
+}
+
+func subscriptionCreateFingerprint(object *aigridv1.Subscription, namespace string) (string, error) {
+	normalized := proto.CloneOf(object)
+	normalized.Id = ""
+	if normalized.Metadata == nil {
+		normalized.Metadata = &aigridv1.Metadata{}
+	}
+	normalized.Metadata.Name = ""
+	normalized.Metadata.Creator = ""
+	normalized.Metadata.Tenant = ""
+	normalized.Metadata.CreationTimestamp = nil
+	normalized.Metadata.DeletionTimestamp = nil
+	normalized.Metadata.Version = 0
+	normalized.Status = nil
+
+	groups, err := qualifiedOwnerGroups(normalized.GetSpec())
+	if err != nil {
+		return "", err
+	}
+	if owner := normalized.GetSpec().GetOwner(); owner != nil {
+		owner.Groups = groups
+	}
+	for _, ref := range normalized.GetSpec().GetModelRefs() {
+		if ref.GetNamespace() == "" {
+			ref.Namespace = namespace
+		}
+		ref.ModelId = ""
+		ref.DisplayName = ""
+		ref.Description = ""
+	}
+
+	data, err := proto.MarshalOptions{Deterministic: true}.Marshal(normalized)
+	if err != nil {
+		return "", connect.Errorf(connect.CodeInternal, "fingerprint Subscription create payload: %v", err).WithCause(err)
+	}
+	hash := sha256.New()
+	hash.Write([]byte("subscription-create-fingerprint-v1"))
+	hash.Write([]byte{0})
+	hash.Write([]byte(namespace))
+	hash.Write([]byte{0})
+	hash.Write(data)
+	return hex.EncodeToString(hash.Sum(nil)), nil
+}
+
+func setSubscriptionCreateRequestMetadata(object *aigridv1.Subscription, tokenHash, fingerprint string) {
+	if tokenHash == "" {
+		return
+	}
+	if object.Metadata == nil {
+		object.Metadata = &aigridv1.Metadata{}
+	}
+	if object.Metadata.Annotations == nil {
+		object.Metadata.Annotations = map[string]string{}
+	}
+	object.Metadata.Annotations[subscriptionCreateRequestTokenAnnotation] = tokenHash
+	object.Metadata.Annotations[subscriptionCreateRequestFingerprintAnnotation] = fingerprint
+}
+
+func preserveSubscriptionCreateRequestMetadata(object *aigridv1.Subscription, current *subscriptionDoc) {
+	if current.createRequestTokenHash == "" {
+		return
+	}
+	setSubscriptionCreateRequestMetadata(object, current.createRequestTokenHash, current.createRequestFingerprint)
 }
 
 func assignGeneratedSubscriptionID(head gitops.Snapshot, object *aigridv1.Subscription) (string, error) {
@@ -443,6 +599,7 @@ func (s *SubscriptionsServer) gitUpdateOn(ctx context.Context, head gitops.Snaps
 	if err := validateGitMetadata(candidate.GetMetadata()); err != nil {
 		return nil, err
 	}
+	preserveSubscriptionCreateRequestMetadata(candidate, current)
 	var read []string
 	if paths.anySpec() {
 		if err := validateSubscriptionSpec(candidate.GetSpec()); err != nil {
@@ -690,6 +847,8 @@ func parseSubscriptionDoc(id string, data []byte) (*subscriptionDoc, error) {
 	}
 
 	meta := doc.sub.GetMetadata()
+	doc.createRequestTokenHash = meta.GetAnnotations()[subscriptionCreateRequestTokenAnnotation]
+	doc.createRequestFingerprint = meta.GetAnnotations()[subscriptionCreateRequestFingerprintAnnotation]
 	version, err := strconv.ParseInt(meta.GetAnnotations()[gitVersionAnnotation], 10, 32)
 	if err != nil {
 		return nil, fmt.Errorf("annotation %s: %w", gitVersionAnnotation, err)
@@ -697,6 +856,8 @@ func parseSubscriptionDoc(id string, data []byte) (*subscriptionDoc, error) {
 	meta.Version = int32(version)
 	delete(meta.Annotations, gitVersionAnnotation)
 	delete(meta.Annotations, retainAPIKeysOnDeleteAnnotation)
+	delete(meta.Annotations, subscriptionCreateRequestTokenAnnotation)
+	delete(meta.Annotations, subscriptionCreateRequestFingerprintAnnotation)
 	if len(meta.Annotations) == 0 {
 		meta.Annotations = nil
 	}
