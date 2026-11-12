@@ -966,14 +966,43 @@ func maasSummary(ingress []*aigridv1.ModelIngressStatus, unserved string) (aigri
 
 // unservedReason says why no placed cluster serves the model under the id MaaS
 // lists it as, for status.maas_message, or "" when one does: none runs it, or
-// its deployment serves another name (servesItsID), or both. Each is a full
-// sentence that says what to check or do, as the console shows it.
+// its deployment serves another name (servesItsID), or both. Each is in full
+// sentences, as the console shows it. With none running it says where it
+// failed (its deployment or its sync, as deploymentSummary counts it), is
+// starting, hasn't reported yet or is stopped, worst first, and asks for a
+// check only where it failed: a start, or a stop, is no fault.
 func unservedReason(model *aigridv1.Model, placed []*aigridv1.ModelClusterStatus) string {
 	var reasons []string
 	if !slices.ContainsFunc(placed, func(cluster *aigridv1.ModelClusterStatus) bool {
 		return cluster.GetDeployment() == aigridv1.ModelDeploymentState_MODEL_DEPLOYMENT_STATE_RUNNING
 	}) {
-		reasons = append(reasons, "No cluster the model is placed on is running it. Check the model's deployment on each cluster.")
+		var failed, starting, noReport, stopped []string
+		for _, c := range placed {
+			switch {
+			case c.GetSync() == aigridv1.ModelSyncState_MODEL_SYNC_STATE_FAILED ||
+				c.GetDeployment() == aigridv1.ModelDeploymentState_MODEL_DEPLOYMENT_STATE_FAILED:
+				failed = append(failed, c.GetCluster())
+			case c.GetDeployment() == aigridv1.ModelDeploymentState_MODEL_DEPLOYMENT_STATE_STARTING:
+				starting = append(starting, c.GetCluster())
+			case c.GetDeployment() == aigridv1.ModelDeploymentState_MODEL_DEPLOYMENT_STATE_STOPPED:
+				stopped = append(stopped, c.GetCluster())
+			default:
+				noReport = append(noReport, c.GetCluster())
+			}
+		}
+		reasons = append(reasons, "The model isn't running on any cluster it's placed on.")
+		if len(failed) > 0 {
+			reasons = append(reasons, "It failed on "+strings.Join(failed, ", ")+". Check the model's deployment there.")
+		}
+		if len(starting) > 0 {
+			reasons = append(reasons, "It's starting on "+strings.Join(starting, ", ")+".")
+		}
+		if len(noReport) > 0 {
+			reasons = append(reasons, "There's no report from "+strings.Join(noReport, ", ")+" yet.")
+		}
+		if len(stopped) > 0 {
+			reasons = append(reasons, "It's stopped on "+strings.Join(stopped, ", ")+".")
+		}
 	}
 	if !servesItsID(model) {
 		name := servedModelName(model)

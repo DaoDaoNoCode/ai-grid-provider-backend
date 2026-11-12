@@ -812,8 +812,19 @@ func TestModelsGitTwoStatuses(t *testing.T) {
 				readyIngress("hub"),
 			},
 			wantPhase: phaseFailed, wantDeployment: depFail, wantMaaS: unavail,
-			wantMaaSMsg: "No cluster the model is placed on is running it. Check the model's deployment on each cluster.",
+			wantMaaSMsg: "The model isn't running on any cluster it's placed on. It failed on site-a, site-b. Check the model's deployment there.",
 			wantPlaced:  map[string]dep{"site-a": {depFail, "config llm-template not found"}, "site-b": {depFail, "config llm-template not found"}},
+			wantIngress: []*aigridv1.ModelIngressStatus{ingress("hub", published, "")},
+		},
+		"published, starting on one, failed on the other": {
+			objects: []runtime.Object{
+				modelsApp("site-a", llmisvc("Synced", "Degraded", minAvail)),
+				modelsApp("site-b", llmisvc("Synced", "Degraded", "config llm-template not found")),
+				readyIngress("hub"),
+			},
+			wantPhase: phaseFailed, wantDeployment: depFail, wantMaaS: unavail,
+			wantMaaSMsg: "The model isn't running on any cluster it's placed on. It failed on site-b. Check the model's deployment there. It's starting on site-a.",
+			wantPlaced:  map[string]dep{"site-a": {starting, minAvail}, "site-b": {depFail, "config llm-template not found"}},
 			wantIngress: []*aigridv1.ModelIngressStatus{ingress("hub", published, "")},
 		},
 	} {
@@ -1150,7 +1161,7 @@ func TestMaaSSummary(t *testing.T) {
 		unavail   = aigridv1.ModelMaasState_MODEL_MAAS_STATE_UNAVAILABLE
 		none      = aigridv1.ModelMaasState_MODEL_MAAS_STATE_UNSPECIFIED
 	)
-	const why = "No cluster the model is placed on is running it."
+	const why = "The model isn't running on any cluster it's placed on."
 	for name, tc := range map[string]struct {
 		ingress     []*aigridv1.ModelIngressStatus
 		unserved    string
@@ -1180,33 +1191,56 @@ func TestMaaSSummary(t *testing.T) {
 }
 
 // TestUnservedReason checks the reason MaaS reads as UNAVAILABLE: none while a
-// placed cluster runs the model under its id, and one sentence for each cause
-// otherwise, both when both apply.
+// placed cluster runs the model under its id; otherwise where it isn't running
+// and why, worst first, with a step to take only where it failed, then the
+// served name; both when both apply.
 func TestUnservedReason(t *testing.T) {
 	t.Parallel()
 	const (
-		notRunning = "No cluster the model is placed on is running it. Check the model's deployment on each cluster."
+		notRunning = "The model isn't running on any cluster it's placed on."
 		served     = `The model's deployment serves it as "facebook/opt-125m", but MaaS lists it as "granite", so requests through MaaS can't reach it. Update the model to serve it as "granite"; any update does this.`
 	)
-	cluster := func(state aigridv1.ModelDeploymentState) *aigridv1.ModelClusterStatus {
-		return &aigridv1.ModelClusterStatus{Cluster: "site-a", Deployment: state}
+	cluster := func(name string, state aigridv1.ModelDeploymentState) *aigridv1.ModelClusterStatus {
+		return &aigridv1.ModelClusterStatus{Cluster: name, Deployment: state}
 	}
 	model := func(name string) *aigridv1.Model {
 		return &aigridv1.Model{Id: "granite", Spec: &aigridv1.ModelSpec{Model: &aigridv1.ModelSource{Name: name}}}
 	}
-	running := cluster(aigridv1.ModelDeploymentState_MODEL_DEPLOYMENT_STATE_RUNNING)
-	stopped := cluster(aigridv1.ModelDeploymentState_MODEL_DEPLOYMENT_STATE_STOPPED)
+	running := cluster("site-a", aigridv1.ModelDeploymentState_MODEL_DEPLOYMENT_STATE_RUNNING)
+	starting := cluster("site-a", aigridv1.ModelDeploymentState_MODEL_DEPLOYMENT_STATE_STARTING)
+	unreported := cluster("site-b", aigridv1.ModelDeploymentState_MODEL_DEPLOYMENT_STATE_UNSPECIFIED)
+	failed := cluster("site-c", aigridv1.ModelDeploymentState_MODEL_DEPLOYMENT_STATE_FAILED)
+	failedToo := cluster("site-e", aigridv1.ModelDeploymentState_MODEL_DEPLOYMENT_STATE_FAILED)
+	stopped := cluster("site-d", aigridv1.ModelDeploymentState_MODEL_DEPLOYMENT_STATE_STOPPED)
+	// Argo CD couldn't apply a start: failed, as status.deployment counts it.
+	syncFailed := &aigridv1.ModelClusterStatus{Cluster: "site-d",
+		Deployment: aigridv1.ModelDeploymentState_MODEL_DEPLOYMENT_STATE_STOPPED, Sync: aigridv1.ModelSyncState_MODEL_SYNC_STATE_FAILED}
+	// The cluster's Application doesn't list it yet: no report, not a fault.
+	notApplied := &aigridv1.ModelClusterStatus{Cluster: "site-b", Sync: aigridv1.ModelSyncState_MODEL_SYNC_STATE_OUT_OF_SYNC}
 	for name, tc := range map[string]struct {
 		model  *aigridv1.Model
 		placed []*aigridv1.ModelClusterStatus
 		want   string
 	}{
-		"running as its id":            {model("granite"), []*aigridv1.ModelClusterStatus{stopped, running}, ""},
-		"running, no name stored":      {model(""), []*aigridv1.ModelClusterStatus{running}, ""},
-		"none running":                 {model("granite"), []*aigridv1.ModelClusterStatus{stopped}, notRunning},
-		"no placed cluster reported":   {model("granite"), nil, notRunning},
-		"running another name":         {model("facebook/opt-125m"), []*aigridv1.ModelClusterStatus{running}, served},
-		"another name and not running": {model("facebook/opt-125m"), []*aigridv1.ModelClusterStatus{stopped}, notRunning + " " + served},
+		"running as its id":       {model("granite"), []*aigridv1.ModelClusterStatus{stopped, running}, ""},
+		"running, no name stored": {model(""), []*aigridv1.ModelClusterStatus{running}, ""},
+		"starting":                {model("granite"), []*aigridv1.ModelClusterStatus{starting}, notRunning + " It's starting on site-a."},
+		"not reported yet":        {model("granite"), []*aigridv1.ModelClusterStatus{unreported}, notRunning + " There's no report from site-b yet."},
+		"not applied yet":         {model("granite"), []*aigridv1.ModelClusterStatus{notApplied}, notRunning + " There's no report from site-b yet."},
+		"failed": {model("granite"), []*aigridv1.ModelClusterStatus{failed},
+			notRunning + " It failed on site-c. Check the model's deployment there."},
+		"failed on two": {model("granite"), []*aigridv1.ModelClusterStatus{failed, failedToo},
+			notRunning + " It failed on site-c, site-e. Check the model's deployment there."},
+		"stopped":     {model("granite"), []*aigridv1.ModelClusterStatus{stopped}, notRunning + " It's stopped on site-d."},
+		"sync failed": {model("granite"), []*aigridv1.ModelClusterStatus{syncFailed}, notRunning + " It failed on site-d. Check the model's deployment there."},
+		"starting and failed": {model("granite"), []*aigridv1.ModelClusterStatus{starting, failed},
+			notRunning + " It failed on site-c. Check the model's deployment there. It's starting on site-a."},
+		"every state": {model("granite"), []*aigridv1.ModelClusterStatus{starting, unreported, failed, stopped},
+			notRunning + " It failed on site-c. Check the model's deployment there. It's starting on site-a. There's no report from site-b yet. It's stopped on site-d."},
+		"no placed cluster":    {model("granite"), nil, notRunning},
+		"running another name": {model("facebook/opt-125m"), []*aigridv1.ModelClusterStatus{running}, served},
+		"another name and not running": {model("facebook/opt-125m"), []*aigridv1.ModelClusterStatus{stopped},
+			notRunning + " It's stopped on site-d. " + served},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()

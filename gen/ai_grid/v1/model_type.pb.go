@@ -1532,11 +1532,12 @@ type ModelStatus struct {
 	State ModelState `protobuf:"varint,13,opt,name=state,proto3,enum=ai_grid.v1.ModelState" json:"state,omitempty"`
 	// Why `maas` is UNAVAILABLE, in full sentences for the provider admin, and
 	// empty whenever `maas` is anything else. It says that no placed cluster
-	// runs the model ("No cluster the model is placed on is running it. Check
-	// the model's deployment on each cluster."), or that its deployment serves a
-	// name other than its id, with both names and the fix (any update), or both.
-	// MaaS's own messages stay in each `ingress` entry, and `message` stays the
-	// phase summary. Output only.
+	// runs the model and where it failed, is starting, hasn't reported yet or is
+	// stopped ("The model isn't running on any cluster it's placed on. It's
+	// starting on site-a."), with a check to make only where it failed; or that
+	// its deployment serves a name other than its id, with both names and the
+	// fix (any update); or both. MaaS's own messages stay in each `ingress`
+	// entry, and `message` stays the phase summary. Output only.
 	MaasMessage   string `protobuf:"bytes,14,opt,name=maas_message,json=maasMessage,proto3" json:"maas_message,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache

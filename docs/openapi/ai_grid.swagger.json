@@ -2219,7 +2219,7 @@
         },
         "maas_message": {
           "type": "string",
-          "description": "Why `maas` is UNAVAILABLE, in full sentences for the provider admin, and\nempty whenever `maas` is anything else. It says that no placed cluster\nruns the model (\"No cluster the model is placed on is running it. Check\nthe model's deployment on each cluster.\"), or that its deployment serves a\nname other than its id, with both names and the fix (any update), or both.\nMaaS's own messages stay in each `ingress` entry, and `message` stays the\nphase summary. Output only.",
+          "description": "Why `maas` is UNAVAILABLE, in full sentences for the provider admin, and\nempty whenever `maas` is anything else. It says that no placed cluster\nruns the model and where it failed, is starting, hasn't reported yet or is\nstopped (\"The model isn't running on any cluster it's placed on. It's\nstarting on site-a.\"), with a check to make only where it failed; or that\nits deployment serves a name other than its id, with both names and the\nfix (any update); or both. MaaS's own messages stay in each `ingress`\nentry, and `message` stays the phase summary. Output only.",
           "readOnly": true
         }
       },
