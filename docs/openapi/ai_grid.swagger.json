@@ -2200,7 +2200,7 @@
         },
         "maas": {
           "$ref": "#/definitions/v1ModelMaasState",
-          "description": "The model in MaaS, for a list's Availability column, summed over the\ningress clusters (`ingress`), worst first: FAILED;\nAWAITING_SUBSCRIPTION_AND_BACKEND; CONFIGURING_ROUTING (also while one\nhasn't reported); AWAITING_SUBSCRIPTION; AVAILABLE. AVAILABLE and\nCONFIGURING_ROUTING become UNAVAILABLE when no placed cluster serves the\nmodel (no `clusters[].deployment` is RUNNING). A failed sync doesn't\nstop a previous revision that is still running. UNSPECIFIED while none has reported. Each\n`ingress` entry keeps MaaS's own message. Output only.",
+          "description": "The model in MaaS, for a list's Availability column, summed over the\ningress clusters (`ingress`), worst first: FAILED;\nAWAITING_SUBSCRIPTION_AND_BACKEND; CONFIGURING_ROUTING (also while one\nhasn't reported); AWAITING_SUBSCRIPTION; AVAILABLE. AVAILABLE and\nCONFIGURING_ROUTING become UNAVAILABLE when no placed cluster serves the\nmodel (no `clusters[].deployment` is RUNNING), or when its deployment serves\na name other than its id, as a model saved before models were served as their\nid can until its next update; `message` then names that name. A failed sync doesn't\nstop a previous revision that is still running. UNSPECIFIED while none has reported. Each\n`ingress` entry keeps MaaS's own message. Output only.",
           "readOnly": true
         },
         "ingress": {

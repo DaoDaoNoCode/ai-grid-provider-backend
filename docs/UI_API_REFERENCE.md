@@ -895,7 +895,7 @@ show both, such as "Ready" and "Awaiting subscription":
   `AWAITING_SUBSCRIPTION_AND_BACKEND`, `CONFIGURING_ROUTING` (also while one
   hasn't reported), `AWAITING_SUBSCRIPTION`, `AVAILABLE`; `AVAILABLE` and
   `CONFIGURING_ROUTING` read `UNAVAILABLE` while no placed cluster serves the
-  model.
+  model or it serves a name other than its id.
 - `state` (model and each `clusters` entry): Git sync and deployment in one
   word, for a Status column: `SAVED_TO_GIT`, `SYNCING`, `SYNCED`,
   `STARTING`, `READY`, `PARTIALLY_READY` (model only), `FAILED`, `STOPPED`.

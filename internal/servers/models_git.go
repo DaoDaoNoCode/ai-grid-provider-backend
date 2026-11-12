@@ -625,6 +625,17 @@ func (r modelReports) apply(current *gitModel) {
 	if !anyIngress {
 		status.Message += "; no ingress cluster has reported the MaaSModelRef"
 	}
+	// MaaS forwards the id tenants send, so a deployment still serving an older name serves no one.
+	servesID := servesItsID(current.model)
+	if !servesID {
+		served := fmt.Sprintf("serves %q while MaaS lists it as %q; update the model to serve it as its id",
+			current.model.GetSpec().GetModel().GetName(), id)
+		if status.Message == "" {
+			status.Message = strings.ToUpper(served[:1]) + served[1:]
+		} else {
+			status.Message += "; " + served
+		}
+	}
 	if len(failures) > 0 {
 		status.Message += ". " + strings.Join(failures, "; ")
 	}
@@ -632,7 +643,7 @@ func (r modelReports) apply(current *gitModel) {
 	status.Ingress = ingressStatus
 	status.Deployment = deploymentSummary(placedStatus)
 	status.State = modelRollout(placedStatus)
-	status.Maas = maasSummary(ingressStatus, slices.ContainsFunc(placedStatus, func(cluster *aigridv1.ModelClusterStatus) bool {
+	status.Maas = maasSummary(ingressStatus, servesID && slices.ContainsFunc(placedStatus, func(cluster *aigridv1.ModelClusterStatus) bool {
 		return cluster.GetDeployment() == aigridv1.ModelDeploymentState_MODEL_DEPLOYMENT_STATE_RUNNING
 	}))
 	switch {
@@ -1302,6 +1313,13 @@ func renderKustomization(resources []string) []byte {
 
 func modelGitError(op, id string, err error) error {
 	return mapGitopsError("Model", "Models", op, id, err, staleModelError)
+}
+
+// servesItsID reports whether a model's deployment serves the name MaaS lists it under; only a model
+// saved before models were served as their id can differ.
+func servesItsID(model *aigridv1.Model) bool {
+	name := model.GetSpec().GetModel().GetName()
+	return name == "" || name == servedModelName(model)
 }
 
 // servedModelName is the name vLLM serves the model as and the ExternalModel
