@@ -1,9 +1,9 @@
 // Package keycloak is a fake of the part of Keycloak 26.8.0 that
 // ai-grid-provider-backend calls: the OpenID Connect password grant on
-// /realms/{admin realm}/protocol/openid-connect/token and the Organizations
-// Admin REST API under /admin/realms/{realm}/organizations. It answers with
-// Keycloak's status codes, body shapes and messages (validation.go names the
-// Keycloak source line of each), so the backend's client code runs unchanged.
+// /realms/{admin realm}/protocol/openid-connect/token, the Organizations Admin
+// REST API, and organization identity-provider Admin REST API. It answers with
+// Keycloak's status codes, body shapes and messages (handlers cite their
+// Keycloak source lines), so the backend's client code runs unchanged.
 package keycloak
 
 import (
@@ -201,7 +201,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("PUT "+orgs+"/{id}/identity-providers/{alias}", s.admin(s.configureOrgIdP))
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		// Everything else is a resource this fake does not serve
-		// (members, groups, invitations, other admin endpoints).
+		// (groups, invitations, other admin endpoints).
 		writeError(w, http.StatusNotFound, "HTTP 404 Not Found")
 	})
 	return mux
@@ -413,8 +413,10 @@ func (s *Server) count(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, len(s.filtered(r)))
 }
 
-// listMembers is GET /organizations/{id}/members. It follows the same paging
-// and representation rules as the organization list.
+// listMembers is GET /organizations/{id}/members. Keycloak's
+// OrganizationMemberResource.java L183-210 defines paging and brief/full
+// representations, L440-443 builds the member representation, and
+// OrganizationsResource.java L202-215 returns the missing-organization 404.
 func (s *Server) listMembers(w http.ResponseWriter, r *http.Request) {
 	organizationID := r.PathValue("id")
 	all, ok := s.members[organizationID]

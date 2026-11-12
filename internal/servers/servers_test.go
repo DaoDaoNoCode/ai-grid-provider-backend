@@ -1141,7 +1141,7 @@ func TestTenantIdentityProviderLoginIsolation(t *testing.T) {
 		})
 	}
 
-	t.Run("binds the shared flow and installs six mappers", func(t *testing.T) {
+	t.Run("uses the built-in flow and installs six mappers", func(t *testing.T) {
 		t.Parallel()
 		store := newFakeOrganizationStore()
 		got, err := createTenant(t, store)
@@ -1149,8 +1149,9 @@ func TestTenantIdentityProviderLoginIsolation(t *testing.T) {
 			t.Fatalf("Create: %v", err)
 		}
 		idp := store.idps["acme"]
-		if idp.FirstBrokerLoginFlowAlias != keycloak.FirstBrokerLoginFlowAlias {
-			t.Fatalf("firstBrokerLoginFlowAlias = %q, want %q", idp.FirstBrokerLoginFlowAlias, keycloak.FirstBrokerLoginFlowAlias)
+		var flow string
+		if err := json.Unmarshal(idp.Extra["firstBrokerLoginFlowAlias"], &flow); err != nil || flow != keycloak.FirstBrokerLoginFlowAlias {
+			t.Fatalf("firstBrokerLoginFlowAlias = %q, want %q", idp.Extra["firstBrokerLoginFlowAlias"], keycloak.FirstBrokerLoginFlowAlias)
 		}
 		wantMappers := []string{
 			"AI Grid org id",
@@ -1183,17 +1184,6 @@ func TestTenantIdentityProviderLoginIsolation(t *testing.T) {
 					t.Fatalf("cleanup failed: orgs=%v idps=%v links=%v", store.byID, store.idps, store.links)
 				}
 			})
-		}
-	})
-
-	t.Run("absent shared flow fails onboarding", func(t *testing.T) {
-		t.Parallel()
-		store := newFakeOrganizationStore()
-		store.flows = map[string]bool{}
-		_, err := createTenant(t, store)
-		assertConnectCode(t, err, connect.CodeNotFound)
-		if len(store.byID) != 0 || len(store.idps) != 0 || len(store.links) != 0 {
-			t.Fatalf("cleanup failed: orgs=%v idps=%v links=%v", store.byID, store.idps, store.links)
 		}
 	})
 
@@ -1602,11 +1592,11 @@ func TestTenantMemberSeparatesIdentityAndUsernames(t *testing.T) {
 	)
 	store.members["org-1"] = []keycloak.OrganizationMember{
 		{
-			ID: "user-alice-a", Username: "local-uuid-a", Enabled: true,
+			ID: "user-alice-a", Username: "11111111-2222-4333-8444-555555555555", Enabled: true,
 			Attributes: map[string][]string{"maas_preferred_username": {"alice"}},
 		},
 		{
-			ID: "user-alice-b", Username: "local-uuid-b", Enabled: true,
+			ID: "user-alice-b", Username: "66666666-7777-4888-9999-aaaaaaaaaaaa", Enabled: true,
 			Attributes: map[string][]string{"maas_preferred_username": {"alice"}},
 		},
 	}
@@ -1619,31 +1609,45 @@ func TestTenantMemberSeparatesIdentityAndUsernames(t *testing.T) {
 		t.Fatalf("ListMembers() items = %+v", got.GetItems())
 	}
 	members := []struct {
-		id       string
-		username string
+		id                string
+		username          string
+		preferredUsername string
 	}{
-		{id: "user-alice-a", username: "local-uuid-a"},
-		{id: "user-alice-b", username: "local-uuid-b"},
+		{id: "user-alice-a", username: "11111111-2222-4333-8444-555555555555", preferredUsername: "alice"},
+		{id: "user-alice-b", username: "66666666-7777-4888-9999-aaaaaaaaaaaa", preferredUsername: "alice"},
 	}
 	for i, want := range members {
 		item := got.GetItems()[i]
 		if item.GetId() != want.id || item.GetUsername() != want.username {
 			t.Fatalf("member %d identity = %+v", i, item)
 		}
-		if item.GetPreferredUsername() != "alice" {
-			t.Fatalf("member %d preferred username = %q, want alice", i, item.GetPreferredUsername())
+		if item.GetPreferredUsername() != want.preferredUsername {
+			t.Fatalf("member %d preferred username = %q, want %q", i, item.GetPreferredUsername(), want.preferredUsername)
 		}
 	}
 
 	missing := tenantMemberFromOrganizationMember(keycloak.OrganizationMember{
-		ID: "user-missing", Username: "local-uuid-missing",
+		ID: "user-missing", Username: "11111111-2222-4333-8444-555555555555",
 	})
-	if missing.GetPreferredUsername() != "" {
-		t.Fatalf("missing profile username = %q, want empty", missing.GetPreferredUsername())
+	if missing.GetUsername() != "11111111-2222-4333-8444-555555555555" || missing.GetPreferredUsername() != "" {
+		t.Fatalf("missing profile usernames = %q and %q", missing.GetUsername(), missing.GetPreferredUsername())
+	}
+	legacy := tenantMemberFromOrganizationMember(keycloak.OrganizationMember{
+		ID: "user-legacy", Username: "bob",
+	})
+	if legacy.GetUsername() != "bob" || legacy.GetPreferredUsername() != "" {
+		t.Fatalf("legacy usernames = %q and %q, want bob and empty", legacy.GetUsername(), legacy.GetPreferredUsername())
+	}
+	renamedLegacy := tenantMemberFromOrganizationMember(keycloak.OrganizationMember{
+		ID: "user-renamed-legacy", Username: "bob",
+		Attributes: map[string][]string{"maas_preferred_username": {"bob-renamed"}},
+	})
+	if renamedLegacy.GetUsername() != "bob" || renamedLegacy.GetPreferredUsername() != "bob-renamed" {
+		t.Fatalf("renamed legacy usernames = %q and %q, want bob and bob-renamed", renamedLegacy.GetUsername(), renamedLegacy.GetPreferredUsername())
 	}
 
 	before := keycloak.OrganizationMember{
-		ID: "user-renamed", Username: "local-uuid-renamed",
+		ID: "user-renamed", Username: "bbbbbbbb-2222-4333-8444-555555555555",
 		Attributes: map[string][]string{"maas_preferred_username": {"alice"}},
 	}
 	after := before
@@ -1653,7 +1657,7 @@ func TestTenantMemberSeparatesIdentityAndUsernames(t *testing.T) {
 	if beforeMember.GetId() != afterMember.GetId() || beforeMember.GetUsername() != afterMember.GetUsername() {
 		t.Fatalf("rename changed identity: before=%+v after=%+v", beforeMember, afterMember)
 	}
-	if afterMember.GetPreferredUsername() != "alice-renamed" {
+	if beforeMember.GetPreferredUsername() != "alice" || afterMember.GetPreferredUsername() != "alice-renamed" {
 		t.Fatalf("renamed profile username = %q, want alice-renamed", afterMember.GetPreferredUsername())
 	}
 }
@@ -1803,8 +1807,6 @@ type fakeOrganizationStore struct {
 	mapperUpserts int
 	// failMapperName makes the fake fail when it reaches that mapper.
 	failMapperName string
-	// flows contains authentication flows the fake accepts.
-	flows map[string]bool
 	// mapperOrgNames is the org name each alias's mappers were last upserted with.
 	mapperOrgNames map[string]string
 	next           int
@@ -1866,7 +1868,6 @@ func newFakeOrganizationStore(orgs ...keycloak.Organization) *fakeOrganizationSt
 		links:          make(map[string]string),
 		mappers:        make(map[string]keycloak.IdentityProviderMapper),
 		mapperNames:    make(map[string][]string),
-		flows:          map[string]bool{keycloak.FirstBrokerLoginFlowAlias: true},
 		mapperOrgNames: make(map[string]string),
 	}
 	for _, org := range orgs {
@@ -1995,9 +1996,6 @@ func (f *fakeOrganizationStore) CreateIdentityProvider(_ context.Context, idp ke
 	}
 	if _, ok := f.idps[idp.Alias]; ok {
 		return &keycloak.APIError{Op: "create identity provider", StatusCode: http.StatusConflict}
-	}
-	if idp.FirstBrokerLoginFlowAlias != "" && !f.flows[idp.FirstBrokerLoginFlowAlias] {
-		return &keycloak.APIError{Op: "create identity provider", StatusCode: http.StatusNotFound}
 	}
 	f.idps[idp.Alias] = idp
 	return nil
@@ -2142,7 +2140,7 @@ func (f *fakeOrganizationStore) ConfigureOrganizationIdentityProvider(_ context.
 	return nil
 }
 
-func (f *fakeOrganizationStore) UpsertIdentityProviderMapper(_ context.Context, alias, organizationID, organizationName string) error {
+func (f *fakeOrganizationStore) UpsertIdentityProviderMapper(_ context.Context, spec keycloak.IdentityProviderMapperSpec) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.mapperErr != nil {
@@ -2152,7 +2150,7 @@ func (f *fakeOrganizationStore) UpsertIdentityProviderMapper(_ context.Context, 
 		f.mapperErrOnce = nil
 		return err
 	}
-	if _, ok := f.idps[alias]; !ok {
+	if _, ok := f.idps[spec.Alias]; !ok {
 		return &keycloak.APIError{Op: "upsert identity provider mapper", StatusCode: http.StatusNotFound}
 	}
 	f.mapperCalls++
@@ -2165,19 +2163,19 @@ func (f *fakeOrganizationStore) UpsertIdentityProviderMapper(_ context.Context, 
 		"AI Grid local username",
 		"AI Grid preferred username",
 	}
-	f.mapperNames[alias] = nil
+	f.mapperNames[spec.Alias] = nil
 	for _, name := range names {
 		if name == f.failMapperName {
 			return &keycloak.APIError{Op: "upsert identity provider mapper", StatusCode: http.StatusBadGateway}
 		}
-		f.mapperNames[alias] = append(f.mapperNames[alias], name)
+		f.mapperNames[spec.Alias] = append(f.mapperNames[spec.Alias], name)
 	}
-	f.mappers[alias] = keycloak.IdentityProviderMapper{
-		Name: "AI Grid org id", IdentityProviderAlias: alias,
+	f.mappers[spec.Alias] = keycloak.IdentityProviderMapper{
+		Name: "AI Grid org id", IdentityProviderAlias: spec.Alias,
 		IdentityProviderMapper: "hardcoded-attribute-idp-mapper",
-		Config:                 map[string]string{"attribute": "maas_org_id", "attribute.value": organizationID, "syncMode": "FORCE"},
+		Config:                 map[string]string{"attribute": "maas_org_id", "attribute.value": spec.OrganizationID, "syncMode": "FORCE"},
 	}
-	f.mapperOrgNames[alias] = organizationName
+	f.mapperOrgNames[spec.Alias] = spec.OrganizationName
 	return nil
 }
 

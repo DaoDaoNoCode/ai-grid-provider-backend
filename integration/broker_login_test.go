@@ -1,6 +1,7 @@
 package integration
 
 import (
+	"bytes"
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/hex"
@@ -38,6 +39,12 @@ type brokerLoginError struct {
 	Body      string
 }
 
+type brokerLoginOptions struct {
+	expectConflict         bool
+	forgedUsername         string
+	expectProfileRejection bool
+}
+
 func (e *brokerLoginError) Error() string {
 	if e.Body == "" {
 		return fmt.Sprintf("broker login %s: status %d", e.Operation, e.Status)
@@ -72,22 +79,51 @@ type adminContext struct {
 	HTTPClient *http.Client
 }
 
+func (admin adminContext) request(t *testing.T, method, endpoint string, body []byte) (*http.Response, []byte) {
+	t.Helper()
+	var reader io.Reader
+	if len(body) > 0 {
+		reader = bytes.NewReader(body)
+	}
+	req, err := http.NewRequest(method, endpoint, reader)
+	if err != nil {
+		t.Fatalf("create %s request: %v", method, err)
+	}
+	req.Header.Set("Authorization", "Bearer "+admin.Token)
+	if len(body) > 0 {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	resp, err := admin.HTTPClient.Do(req)
+	if err != nil {
+		t.Fatalf("%s request: %v", method, err)
+	}
+	responseBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("read %s response: %v", method, err)
+	}
+	_ = resp.Body.Close()
+	return resp, responseBody
+}
+
 func loginViaBroker(t *testing.T, issuerURL, clientID, providerAlias, username, password string) brokerIdentity {
 	t.Helper()
-	return loginViaBrokerWithOptions(t, issuerURL, clientID, providerAlias, username, password, false, "", false)
+	return loginViaBrokerWithOptions(t, issuerURL, clientID, providerAlias, username, password, brokerLoginOptions{})
 }
 
 func loginViaBrokerExpectConflict(t *testing.T, issuerURL, clientID, providerAlias, username, password string) brokerIdentity {
 	t.Helper()
-	return loginViaBrokerWithOptions(t, issuerURL, clientID, providerAlias, username, password, true, "", false)
+	return loginViaBrokerWithOptions(t, issuerURL, clientID, providerAlias, username, password, brokerLoginOptions{expectConflict: true})
 }
 
 func loginViaBrokerWithForgedUsername(t *testing.T, issuerURL, clientID, providerAlias, username, password string) brokerIdentity {
 	t.Helper()
-	return loginViaBrokerWithOptions(t, issuerURL, clientID, providerAlias, username, password, false, "forged-local-username", true)
+	return loginViaBrokerWithOptions(t, issuerURL, clientID, providerAlias, username, password, brokerLoginOptions{
+		forgedUsername:         "forged-local-username",
+		expectProfileRejection: true,
+	})
 }
 
-func loginViaBrokerWithOptions(t *testing.T, issuerURL, clientID, providerAlias, username, password string, expectConflict bool, forgedUsername string, expectProfileRejection bool) brokerIdentity {
+func loginViaBrokerWithOptions(t *testing.T, issuerURL, clientID, providerAlias, username, password string, options brokerLoginOptions) brokerIdentity {
 	t.Helper()
 	if issuerURL == "" || clientID == "" || providerAlias == "" || username == "" || password == "" {
 		t.Fatal("loginViaBroker requires issuerURL, clientID, providerAlias, username, and password")
@@ -121,32 +157,47 @@ func loginViaBrokerWithOptions(t *testing.T, issuerURL, clientID, providerAlias,
 	values["username"] = username
 	values["password"] = password
 
+	forgedSubmitted := false
 	for i := 0; i < 5; i++ {
 		resp, body = doPostForm(t, client, formAction, values)
 		select {
 		case code := <-codeCh:
-			if expectProfileRejection {
+			if options.expectProfileRejection {
+				if !forgedSubmitted {
+					t.Fatal("broker login reached the callback before the forged username was submitted")
+				}
 				t.Fatal("forged local username was accepted")
 			}
 			_ = resp.Body.Close()
 			return exchangeCodeAndBuildIdentity(t, client, issuerURL, clientID, callbackURL, code, providerAlias)
 		default:
 		}
-		if expectProfileRejection {
-			return brokerIdentity{}
-		}
 		if resp.StatusCode != http.StatusOK {
-			if expectConflict && resp.StatusCode == http.StatusConflict {
+			if options.expectConflict && resp.StatusCode == http.StatusConflict {
 				return brokerIdentity{}
 			}
 			t.Fatalf("broker login status = %d, want 200", resp.StatusCode)
 		}
 		formAction, values = parseLoginForm(t, body)
+		if options.expectProfileRejection && formActionBelongsToRealm(formAction, issuerURL) {
+			values["username"] = options.forgedUsername
+			forgedSubmitted = true
+			resp, body = doPostForm(t, client, formAction, values)
+			select {
+			case <-codeCh:
+				if !forgedSubmitted {
+					t.Fatal("broker login reached the callback before the forged username was submitted")
+				}
+				t.Fatal("forged local username was accepted")
+			default:
+			}
+			if resp.StatusCode != http.StatusOK {
+				t.Fatalf("forged username profile response status = %d, want 200: %s", resp.StatusCode, body)
+			}
+			return brokerIdentity{}
+		}
 		if _, ok := values["password"]; ok {
 			t.Fatalf("unexpected second password form: %s", body)
-		}
-		if _, ok := values["username"]; ok {
-			t.Fatalf("profile form asks for local username: %s", body)
 		}
 		if values["firstName"] == "" {
 			values["firstName"] = "Test"
@@ -157,12 +208,25 @@ func loginViaBrokerWithOptions(t *testing.T, issuerURL, clientID, providerAlias,
 		if values["email"] == "" {
 			values["email"] = providerAlias + "@example.com"
 		}
-		if forgedUsername != "" {
-			values["username"] = forgedUsername
-		}
+	}
+	if options.expectProfileRejection {
+		t.Fatalf("broker login did not reach a target-realm profile form: %s", body)
 	}
 	t.Fatalf("broker login did not reach the callback after five forms: %s", body)
 	return brokerIdentity{}
+}
+
+func formActionBelongsToRealm(formAction, issuerURL string) bool {
+	base, err := url.Parse(issuerURL)
+	if err != nil {
+		return false
+	}
+	action, err := url.Parse(formAction)
+	if err != nil {
+		return false
+	}
+	resolved := base.ResolveReference(action)
+	return strings.EqualFold(resolved.Host, base.Host) && strings.HasPrefix(resolved.Path, strings.TrimRight(base.Path, "/")+"/")
 }
 
 func buildAuthorizationURL(issuerURL, clientID, callbackURL, state, nonce, providerAlias string) string {
@@ -395,7 +459,7 @@ func adminUserByEmail(t *testing.T, email string) (adminUser, error) {
 	if email == "" {
 		return adminUser{}, errors.New("email claim is empty")
 	}
-	endpoint := fmt.Sprintf("%s/admin/realms/%s/users?email=%s&exact=true",
+	endpoint := fmt.Sprintf("%s/admin/realms/%s/users?email=%s&exact=true&briefRepresentation=false",
 		brokerLoginAdmin.BaseURL, url.PathEscape(brokerLoginAdmin.Realm), url.QueryEscape(email))
 	req, err := http.NewRequest(http.MethodGet, endpoint, nil)
 	if err != nil {
@@ -421,7 +485,7 @@ func adminUserByEmail(t *testing.T, email string) (adminUser, error) {
 	if len(users) != 1 {
 		return adminUser{}, fmt.Errorf("user search returned %d users, want 1", len(users))
 	}
-	return users[0], nil
+	return getAdminUser(t, brokerLoginAdmin, brokerLoginAdmin.Realm, users[0].ID), nil
 }
 
 func randomHex(t *testing.T, length int) string {

@@ -49,63 +49,40 @@ func TestCreateIdentityProvider(t *testing.T) {
 	}
 }
 
-func TestCreateIdentityProviderRequiresFirstBrokerLoginFlow(t *testing.T) {
+func TestCreateIdentityProviderUsesBuiltInFirstBrokerLoginFlow(t *testing.T) {
 	t.Parallel()
-	t.Run("existing flow is sent on create", func(t *testing.T) {
-		t.Parallel()
-		var gotFlowPath string
-		var gotBody map[string]any
-		server := httptest.NewServer(tokenThen(func(w http.ResponseWriter, r *http.Request) {
-			switch {
-			case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/authentication/flows"):
-				gotFlowPath = r.URL.Path
-				_ = json.NewEncoder(w).Encode([]authenticationFlow{{Alias: FirstBrokerLoginFlowAlias}})
-			case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/identity-provider/instances"):
-				body, _ := io.ReadAll(r.Body)
-				_ = json.Unmarshal(body, &gotBody)
-				w.WriteHeader(http.StatusCreated)
-			default:
-				http.NotFound(w, r)
-			}
-		}))
-		t.Cleanup(server.Close)
-		err := testClient(server).CreateIdentityProvider(context.Background(), IdentityProvider{
-			Alias: "acme", ProviderID: "oidc", FirstBrokerLoginFlowAlias: FirstBrokerLoginFlowAlias,
-		})
-		if err != nil {
-			t.Fatalf("CreateIdentityProvider: %v", err)
+	var flowLookups int
+	var gotBody map[string]any
+	server := httptest.NewServer(tokenThen(func(w http.ResponseWriter, r *http.Request) {
+		if strings.Contains(r.URL.Path, "/authentication/flows") {
+			flowLookups++
+			http.NotFound(w, r)
+			return
 		}
-		if !strings.HasSuffix(gotFlowPath, "/authentication/flows") {
-			t.Fatalf("flow path = %q", gotFlowPath)
+		if r.Method != http.MethodPost || !strings.HasSuffix(r.URL.Path, "/identity-provider/instances") {
+			http.NotFound(w, r)
+			return
 		}
-		if gotBody["firstBrokerLoginFlowAlias"] != FirstBrokerLoginFlowAlias {
-			t.Fatalf("body = %#v", gotBody)
-		}
+		body, _ := io.ReadAll(r.Body)
+		_ = json.Unmarshal(body, &gotBody)
+		w.WriteHeader(http.StatusCreated)
+	}))
+	t.Cleanup(server.Close)
+	err := testClient(server).CreateIdentityProvider(context.Background(), IdentityProvider{
+		Alias: "acme", ProviderID: "oidc",
+		Extra: map[string]json.RawMessage{
+			"firstBrokerLoginFlowAlias": json.RawMessage(`"first broker login"`),
+		},
 	})
-	t.Run("absent flow stops the create", func(t *testing.T) {
-		t.Parallel()
-		posts := 0
-		server := httptest.NewServer(tokenThen(func(w http.ResponseWriter, r *http.Request) {
-			switch {
-			case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/authentication/flows"):
-				_ = json.NewEncoder(w).Encode([]authenticationFlow{})
-			case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/identity-provider/instances"):
-				posts++
-			default:
-				http.NotFound(w, r)
-			}
-		}))
-		t.Cleanup(server.Close)
-		err := testClient(server).CreateIdentityProvider(context.Background(), IdentityProvider{
-			Alias: "acme", ProviderID: "oidc", FirstBrokerLoginFlowAlias: FirstBrokerLoginFlowAlias,
-		})
-		if !IsNotFound(err) {
-			t.Fatalf("CreateIdentityProvider error = %v, want not found", err)
-		}
-		if posts != 0 {
-			t.Fatalf("posts = %d, want 0", posts)
-		}
-	})
+	if err != nil {
+		t.Fatalf("CreateIdentityProvider: %v", err)
+	}
+	if flowLookups != 0 {
+		t.Fatalf("authentication-flow lookups = %d, want 0", flowLookups)
+	}
+	if gotBody["firstBrokerLoginFlowAlias"] != "first broker login" {
+		t.Fatalf("firstBrokerLoginFlowAlias = %#v", gotBody["firstBrokerLoginFlowAlias"])
+	}
 }
 
 func TestDeleteIdentityProvider(t *testing.T) {
@@ -184,7 +161,9 @@ func TestUpsertIdentityProviderMapper(t *testing.T) {
 	t.Run("create all six when missing", func(t *testing.T) {
 		t.Parallel()
 		recorder := newMapperRecorder(t, nil)
-		if err := testClient(recorder.server).UpsertIdentityProviderMapper(context.Background(), "acme", "uuid-1", "Acme"); err != nil {
+		if err := testClient(recorder.server).UpsertIdentityProviderMapper(context.Background(), IdentityProviderMapperSpec{
+			Alias: "acme", OrganizationID: "uuid-1", OrganizationName: "Acme",
+		}); err != nil {
 			t.Fatalf("Upsert: %v", err)
 		}
 		created := map[string]IdentityProviderMapper{}
@@ -236,7 +215,9 @@ func TestUpsertIdentityProviderMapper(t *testing.T) {
 			{ID: "preferred-username", Name: "AI Grid preferred username", IdentityProviderAlias: "acme"},
 		}
 		recorder := newMapperRecorder(t, existing)
-		if err := testClient(recorder.server).UpsertIdentityProviderMapper(context.Background(), "acme", "uuid-2", "Acme"); err != nil {
+		if err := testClient(recorder.server).UpsertIdentityProviderMapper(context.Background(), IdentityProviderMapperSpec{
+			Alias: "acme", OrganizationID: "uuid-2", OrganizationName: "Acme",
+		}); err != nil {
 			t.Fatalf("Upsert: %v", err)
 		}
 		_, updatedOrgID := recorder.puts["org-id"]
@@ -254,7 +235,9 @@ func TestUpsertIdentityProviderMapper(t *testing.T) {
 		recorder := newMapperRecorder(t, nil)
 		client := testClient(recorder.server)
 		for range 2 {
-			if err := client.UpsertIdentityProviderMapper(context.Background(), "acme", "uuid-1", "Acme"); err != nil {
+			if err := client.UpsertIdentityProviderMapper(context.Background(), IdentityProviderMapperSpec{
+				Alias: "acme", OrganizationID: "uuid-1", OrganizationName: "Acme",
+			}); err != nil {
 				t.Fatalf("Upsert: %v", err)
 			}
 		}
@@ -269,7 +252,9 @@ func TestUpsertIdentityProviderMapper(t *testing.T) {
 			IdentityProviderMapper: "oidc-username-idp-mapper",
 		}}
 		recorder := newMapperRecorder(t, existing)
-		err := testClient(recorder.server).UpsertIdentityProviderMapper(context.Background(), "acme", "uuid-1", "Acme")
+		err := testClient(recorder.server).UpsertIdentityProviderMapper(context.Background(), IdentityProviderMapperSpec{
+			Alias: "acme", OrganizationID: "uuid-1", OrganizationName: "Acme",
+		})
 		if err == nil {
 			t.Fatal("Upsert succeeded with a differently named username preprocessor")
 		}

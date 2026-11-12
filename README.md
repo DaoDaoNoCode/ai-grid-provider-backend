@@ -557,17 +557,23 @@ dedicated service account with organization manage/query roles instead of these
 credentials outside local testing.
 
 Optional `spec.identity_provider` on Create configures a realm OIDC IdP linked
-to the Organization. The IdP uses the shared `ai-grid-first-broker-login`
-flow. The GitOps realm must provide that flow before onboarding creates an
-IdP. The backend upserts six broker mappers. `maas_org_id` and
+to the Organization. The IdP uses Keycloak's built-in `first broker login`
+flow. GitOps sets the `idp-create-user-if-unique` execution in `User creation or
+linking` to `REQUIRED` and keeps the flow's organization-membership step. The
+backend does not create or look up authentication flows. The backend upserts
+six broker mappers. `maas_org_id` and
 `maas_org_name` hold the organization's UUID and name, and `maas_groups`,
 `maas_roles`, and `maas_preferred_username` copy the tenant IdP's `groups`,
 `roles`, and `preferred_username` claims on every login (`FORCE`). The local
-username mapper generates a UUID once at import (`IMPORT`). The realm's client
-mappers turn these attributes into the flat `org_id`, `org_name`, `groups`,
-and `roles` claims, and the client mapper emits `preferred_username`
-(ODH-ADR-MS-0007). The shared realm keeps Keycloak's built-in `profile` and
-`email` client scopes unchanged.
+username mapper generates a UUID once at import (`IMPORT`). Set the built-in
+`profile` client scope's `username` mapper to read `maas_preferred_username`.
+Remove any second client mapper that writes `preferred_username`; two mappers
+for the same claim can expose the generated UUID, depending on import order.
+The other realm client mappers turn `maas_org_id`, `maas_org_name`,
+`maas_groups`, and `maas_roles` into the flat `org_id`, `org_name`, `groups`,
+and `roles` claims (ODH-ADR-MS-0007). This changes the shared `profile` scope's
+username mapper; the built-in `email` scope stays unchanged. When the upstream
+IdP sends no `preferred_username`, the token has no `preferred_username` claim.
 The backend creates the IdP with `trustEmail` on, so Keycloak takes each user's
 `email_verified` from the tenant IdP, on every login. The tenant IdP must send
 `email_verified: true` for its users in the ID token, and also in the userinfo
@@ -678,11 +684,6 @@ an Update that changes the IdP also sets. To fix one otherwise, turn on **Hide o
 section **Organization settings**, or with the Admin REST API, add the key with value `"true"`
 to `config` in the same `GET` and `PUT`.
 
-IdPs created by an earlier build also lack `firstBrokerLoginFlowAlias`. Reconcile them with the
-reviewed GitOps script for the shared realm. Set the field to
-`ai-grid-first-broker-login`, and install the two new username mappers. This reconciliation
-does not rewrite user records, provider links, groups, or organization attributes.
-
 ## Local architecture
 
 The local environment is Kubernetes-native:
@@ -770,19 +771,31 @@ The sample resources are defined in
 
 ## Run the tenant identity-isolation regression
 
-From the repository root:
+The target uses the Kind Keycloak 26.8.0 deployment and a local backend process. Set every input
+below before you run it. The script lists missing input names and stops.
+
+- Ports: `IDENTITY_ISOLATION_KEYCLOAK_PORT`, `IDENTITY_ISOLATION_BACKEND_PORT`, and `IDENTITY_ISOLATION_CALLBACK_PORT`.
+- Keycloak: `IDENTITY_ISOLATION_INTERNAL_KEYCLOAK_URL`, `KEYCLOAK_ADMIN_REALM`, `KEYCLOAK_ADMIN_USERNAME`, and `KEYCLOAK_ADMIN_PASSWORD`.
+- Realm names: `IDENTITY_ISOLATION_TARGET_REALM`, `IDENTITY_ISOLATION_UPSTREAM_REALM_A`, and `IDENTITY_ISOLATION_UPSTREAM_REALM_B`.
+- Client IDs: `IDENTITY_ISOLATION_BROKER_CLIENT_ID`, `IDENTITY_ISOLATION_UPSTREAM_CLIENT_A`, `IDENTITY_ISOLATION_UPSTREAM_CLIENT_B`, `IDENTITY_ISOLATION_SHARED_CLIENT_1`, `IDENTITY_ISOLATION_SHARED_CLIENT_2`, `IDENTITY_ISOLATION_NO_PROFILE_CLIENT`, and `IDENTITY_ISOLATION_PROFILE_CLIENT`.
+- Secret names: `IDENTITY_ISOLATION_UPSTREAM_SECRET_A`, `IDENTITY_ISOLATION_UPSTREAM_SECRET_B`, `IDENTITY_ISOLATION_SHARED_SECRET_1`, `IDENTITY_ISOLATION_SHARED_SECRET_2`, `IDENTITY_ISOLATION_NO_PROFILE_SECRET`, and `IDENTITY_ISOLATION_PROFILE_SECRET`.
+
+The runner uses the `ai-grid-hub` cluster and Podman by default. Set `KIND_CLUSTER_NAME` or
+`KIND_EXPERIMENTAL_PROVIDER` to choose another value. The backend uses the target realm as its
+`KEYCLOAK_REALM`. Choose realm names that do not exist. The test stops if a target or upstream
+realm already exists, and it does not delete existing realms.
+
+The test creates tenants through the real onboarding path and logs in through the broker
+authorization-code flow. It checks that two companies can use the profile username `alice`,
+that repeat logins keep their broker identities, and that upstream renames leave local handles
+and provider links unchanged. It also checks missing profile data, matching-email conflicts,
+and legacy local usernames.
+
+From the repository root, run:
 
 ```sh
 make test-tenant-identity-isolation
 ```
-
-The target uses the Kind Keycloak 26.8.0 deployment and a local backend process. It creates a
-disposable target realm and two disposable upstream realms. It then creates tenants through the
-real onboarding path and logs in through the broker authorization-code flow. The regression
-checks that two companies can both use the profile username `alice`, that repeat logins keep
-their broker identities, and that upstream renames do not change local handles or provider
-links. It also checks missing profile data, matching-email conflicts, and legacy local
-usernames.
 
 ## Run the environment manually
 

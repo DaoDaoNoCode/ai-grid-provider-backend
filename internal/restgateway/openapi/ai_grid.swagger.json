@@ -2681,7 +2681,7 @@
         },
         "username": {
           "type": "string",
-          "description": "Local Keycloak username generated for this broker account."
+          "description": "Local Keycloak login username."
         },
         "email": {
           "type": "string",

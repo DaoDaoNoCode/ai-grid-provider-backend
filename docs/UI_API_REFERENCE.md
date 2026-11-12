@@ -468,12 +468,13 @@ Organization **members** can be listed via `GET .../tenants/{id}:listMembers`.
 Full user CRUD remains out of scope for this API today; the org's own identity
 provider is `spec.identity_provider`.
 
-For a member, `id` names the Keycloak user UUID, `username` names the local
-Keycloak login handle, and `preferred_username` names the optional profile
-label from the upstream identity provider. Use `preferred_username` for
-labels. Use `id` to select a member in the configured realm. Canonical MaaS
-ownership still requires the broker issuer and subject. Never construct that
-issuer from an internal administration URL.
+For a member, `id` names the Keycloak user UUID. `username` names the local
+Keycloak login. `preferred_username` is the optional profile label from the
+upstream identity provider. A brokered account can use a generated UUID as its
+local login. Use `preferred_username` for labels. Use `id` to select a member
+in the configured realm. Canonical MaaS ownership still requires the broker
+issuer and subject. Never construct that issuer from an internal
+administration URL.
 
 | Field | Meaning for UI |
 | --- | --- |
@@ -484,6 +485,13 @@ issuer from an internal administration URL.
 | `spec.domains` | Email domains for the org (DNS hostnames, ≥2 labels, lowercase) |
 | `spec.identity_provider` | The org's OIDC identity provider (the Secret **name** of its client secret, never the value). Absent when the org has none: its members can't sign in yet, so show "sign-in not configured" |
 | `status` | Empty object today |
+
+Member fields:
+
+| Field | Meaning for UI |
+| --- | --- |
+| `username` | Local Keycloak login. A brokered account can use a generated UUID. |
+| `preferred_username` | Optional upstream profile label. It may repeat or be empty. |
 
 UI should treat **`id`** as the stable identifier for Get/Update/Delete, and
 **`metadata.name`** as the display / create name.

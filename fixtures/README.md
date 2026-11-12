@@ -17,6 +17,8 @@ at commit `537df38`:
 
 Both directories also carry hand-authored `members.json` files. The fake
 Keycloak serves these users through the organization members endpoint.
+The two files intentionally contain the same three members so both presets
+exercise the same member projection.
 
 `locations/` is **hand-written, not converted**: one ready cluster per edge case of
 `status.location` (README, "Cluster locations"); `make dev-fake-locations` serves it.

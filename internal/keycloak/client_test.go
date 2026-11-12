@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"reflect"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -285,7 +286,15 @@ func TestOrganizationDomainNames(t *testing.T) {
 func TestListOrganizationMembers(t *testing.T) {
 	t.Parallel()
 
-	queries := make(chan url.Values, 1)
+	queries := make(chan url.Values, 2)
+	members := make([]OrganizationMember, 0, 101)
+	for i := 0; i < 101; i++ {
+		members = append(members, OrganizationMember{
+			ID:       fmt.Sprintf("user-%03d", i),
+			Username: fmt.Sprintf("user-%03d", i),
+			Enabled:  true,
+		})
+	}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.Contains(r.URL.Path, "/token") {
 			_ = json.NewEncoder(w).Encode(map[string]string{"access_token": "test-token"})
@@ -296,13 +305,16 @@ func TestListOrganizationMembers(t *testing.T) {
 			return
 		}
 		queries <- r.URL.Query()
-		_ = json.NewEncoder(w).Encode([]OrganizationMember{
-			{
-				ID: "u1", Username: "alice", Email: "alice@example.com", Enabled: true,
-				Attributes: map[string][]string{"maas_preferred_username": {"alice-profile"}},
-			},
-			{ID: "u2", Username: "bob", FirstName: "Bob", LastName: "Builder"},
-		})
+		first, err := strconv.Atoi(r.URL.Query().Get("first"))
+		if err != nil || first < 0 || first >= len(members) {
+			http.NotFound(w, r)
+			return
+		}
+		last := first + listPageSize
+		if last > len(members) {
+			last = len(members)
+		}
+		_ = json.NewEncoder(w).Encode(members[first:last])
 	}))
 	t.Cleanup(server.Close)
 
@@ -314,15 +326,25 @@ func TestListOrganizationMembers(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListOrganizationMembers() error = %v", err)
 	}
-	if len(got) != 2 || got[0].Username != "alice" || got[1].Username != "bob" {
+	if len(got) != len(members) {
 		t.Fatalf("ListOrganizationMembers() = %+v", got)
 	}
-	if got[0].Attributes["maas_preferred_username"][0] != "alice-profile" {
-		t.Fatalf("member attributes = %+v", got[0].Attributes)
+	for i, member := range got {
+		if member.ID != members[i].ID || member.Username != members[i].Username {
+			t.Fatalf("member %d = %+v, want %+v", i, member, members[i])
+		}
 	}
-	query := <-queries
-	if query.Get("briefRepresentation") != "false" {
-		t.Fatalf("list query = %v, want briefRepresentation=false", query)
+	for _, first := range []int{0, listPageSize} {
+		query := <-queries
+		if query.Get("briefRepresentation") != "false" {
+			t.Fatalf("list query for first=%d = %v, want briefRepresentation=false", first, query)
+		}
+		if gotFirst, err := strconv.Atoi(query.Get("first")); err != nil || gotFirst != first {
+			t.Fatalf("list query first = %q, want %d", query.Get("first"), first)
+		}
+		if query.Get("max") != strconv.Itoa(listPageSize) {
+			t.Fatalf("list query max = %q, want %d", query.Get("max"), listPageSize)
+		}
 	}
 }
 

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"os"
 	"strconv"
@@ -13,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
 	clientpkg "github.com/osac-project/ai-grid-provider-backend/client"
 	aigridv1 "github.com/osac-project/ai-grid-provider-backend/gen/ai_grid/v1"
 )
@@ -50,14 +52,17 @@ func TestTenantBrokerIdentityIsolation(t *testing.T) {
 	admin := newIdentityIsolationAdmin(t, env)
 	brokerLoginAdmin = admin
 
+	for _, realm := range []string{env.TargetRealm, env.UpstreamRealmA, env.UpstreamRealmB} {
+		if err := requireRealmAbsent(t, admin, realm); err != nil {
+			t.Fatalf("refusing to use realm %q: %v", realm, err)
+		}
+	}
 	createTargetRealm(t, admin, env)
+	t.Cleanup(func() { deleteRealmBestEffort(admin, env.TargetRealm) })
 	createUpstreamRealmA(t, admin, env)
+	t.Cleanup(func() { deleteRealmBestEffort(admin, env.UpstreamRealmA) })
 	createUpstreamRealmB(t, admin, env)
-	t.Cleanup(func() {
-		deleteRealmBestEffort(admin, env.UpstreamRealmB)
-		deleteRealmBestEffort(admin, env.UpstreamRealmA)
-		deleteRealmBestEffort(admin, env.TargetRealm)
-	})
+	t.Cleanup(func() { deleteRealmBestEffort(admin, env.UpstreamRealmB) })
 
 	t.Run("two companies use the same profile username", func(t *testing.T) {
 		tenantA := createIdentityIsolationTenant(t, ctx, client, env, "acme", env.UpstreamRealmA, env.UpstreamClientA, env.UpstreamSecretA, "openid profile email")
@@ -74,12 +79,22 @@ func TestTenantBrokerIdentityIsolation(t *testing.T) {
 		if identityA.LocalUsername == identityB.LocalUsername {
 			t.Fatalf("local usernames are equal: %q", identityA.LocalUsername)
 		}
+		assertGeneratedLocalUsername(t, identityA.LocalUsername)
+		assertGeneratedLocalUsername(t, identityB.LocalUsername)
 		if identityA.PreferredUsername != "alice" || identityB.PreferredUsername != "alice" {
 			t.Fatalf("preferred usernames = %q and %q, want alice", identityA.PreferredUsername, identityB.PreferredUsername)
 		}
 		if identityA.Organization != tenantA.Id || identityB.Organization != tenantB.Id {
 			t.Fatalf("organizations = %q and %q, want %q and %q", identityA.Organization, identityB.Organization, tenantA.Id, tenantB.Id)
 		}
+		if len(identityA.Groups) != 0 || len(identityB.Groups) != 0 {
+			t.Fatalf("groups = %v and %v, want none", identityA.Groups, identityB.Groups)
+		}
+		if len(identityA.Roles) != 0 || len(identityB.Roles) != 0 {
+			t.Fatalf("roles = %v and %v, want none", identityA.Roles, identityB.Roles)
+		}
+		assertTenantMemberMatchesIdentity(t, ctx, client, tenantA.Id, identityA)
+		assertTenantMemberMatchesIdentity(t, ctx, client, tenantB.Id, identityB)
 	})
 
 	t.Run("repeat login and upstream rename keep identity stable", func(t *testing.T) {
@@ -136,6 +151,20 @@ func TestTenantBrokerIdentityIsolation(t *testing.T) {
 		}
 	})
 
+	t.Run("required profile collection accepts missing names", func(t *testing.T) {
+		tenant := createIdentityIsolationTenant(t, ctx, client, env, "missing-name-org", env.UpstreamRealmA, env.ProfileClient, env.ProfileSecret, "openid profile email")
+		defer deleteIdentityIsolationTenant(t, ctx, client, tenant)
+
+		identity := loginViaBroker(t, issuerURL(env.KeycloakURL, env.TargetRealm), env.BrokerClientID, "missing-name-org", "alice-missing-name", "password-missing-name")
+		if identity.Subject == "" {
+			t.Fatalf("identity is incomplete: %+v", identity)
+		}
+		assertGeneratedLocalUsername(t, identity.LocalUsername)
+		if identity.PreferredUsername != "Test" {
+			t.Fatalf("preferred username = %q, want Test", identity.PreferredUsername)
+		}
+	})
+
 	t.Run("case and separator variants stay separate", func(t *testing.T) {
 		tenant := createIdentityIsolationTenant(t, ctx, client, env, "variants-org", env.UpstreamRealmA, env.UpstreamClientA, env.UpstreamSecretA, "openid profile email")
 		defer deleteIdentityIsolationTenant(t, ctx, client, tenant)
@@ -188,6 +217,17 @@ func TestTenantBrokerIdentityIsolation(t *testing.T) {
 		if first.Organization != tenantA.Id {
 			t.Fatalf("first organization = %q, want %q", first.Organization, tenantA.Id)
 		}
+		account := getAdminUser(t, admin, env.TargetRealm, first.Subject)
+		if account.ID != first.Subject || account.Username != first.LocalUsername {
+			t.Fatalf("matching email changed the first account: identity=%+v account=%+v", first, account)
+		}
+		if len(account.FederatedIdentities) != 1 {
+			t.Fatalf("matching email changed provider links: %+v", account.FederatedIdentities)
+		}
+		link := account.FederatedIdentities[0]
+		if link.IdentityProvider != "email-a" || link.UserID != first.ProviderSubject {
+			t.Fatalf("matching email changed provider link: %+v", link)
+		}
 	})
 
 	t.Run("a legacy local username survives new onboarding", func(t *testing.T) {
@@ -207,24 +247,86 @@ func TestTenantBrokerIdentityIsolation(t *testing.T) {
 		if current.ID != legacy.ID || current.Username != legacy.Username {
 			t.Fatalf("legacy user changed: before=%+v after=%+v", legacy, current)
 		}
+		if len(current.FederatedIdentities) != 1 {
+			t.Fatalf("legacy user federated identities = %+v, want 1", current.FederatedIdentities)
+		}
+		link := current.FederatedIdentities[0]
+		if link.IdentityProvider != "legacy-a" || link.UserID != "legacy-upstream-subject" || link.UserName != "alice" {
+			t.Fatalf("legacy provider link = %+v", link)
+		}
 	})
 
 	t.Run("profile collection rejects a forged local username", func(t *testing.T) {
-		tenant := createIdentityIsolationTenant(t, ctx, client, env, "profile-org", env.UpstreamRealmA, env.ProfileClient, env.ProfileSecret, "openid profile email")
+		tenant := createIdentityIsolationTenant(t, ctx, client, env, "forged-profile-org", env.UpstreamRealmA, env.NoProfileClient, env.NoProfileSecret, "openid email")
 		defer deleteIdentityIsolationTenant(t, ctx, client, tenant)
+		otherTenant := createIdentityIsolationTenant(t, ctx, client, env, "forged-other-org", env.UpstreamRealmB, env.UpstreamClientB, env.UpstreamSecretB, "openid profile email")
+		defer deleteIdentityIsolationTenant(t, ctx, client, otherTenant)
 
-		rejected := loginViaBrokerWithForgedUsername(t, issuerURL(env.KeycloakURL, env.TargetRealm), env.BrokerClientID, "profile-org", "alice-profile", "password-profile")
+		other := loginViaBroker(t, issuerURL(env.KeycloakURL, env.TargetRealm), env.BrokerClientID, "forged-other-org", "forged-other-alice", "password-forged-other-alice")
+
+		rejected := loginViaBrokerWithForgedUsername(t, issuerURL(env.KeycloakURL, env.TargetRealm), env.BrokerClientID, "forged-profile-org", "alice-no-profile", "password-no-profile")
 		if rejected.Subject != "" || rejected.LocalUsername != "" {
 			t.Fatalf("forged local username created an identity: %+v", rejected)
 		}
-		identity := loginViaBroker(t, issuerURL(env.KeycloakURL, env.TargetRealm), env.BrokerClientID, "profile-org", "alice-profile", "password-profile")
-		if identity.LocalUsername == "forged-local-username" {
-			t.Fatalf("profile form accepted forged local username %q", identity.LocalUsername)
+		if users := adminUsersByUsername(t, admin, env.TargetRealm, "forged-local-username"); len(users) != 0 {
+			t.Fatalf("forged local username exists in target realm: %+v", users)
 		}
-		if identity.PreferredUsername != "alice-profile" {
-			t.Fatalf("preferred username = %q, want alice-profile", identity.PreferredUsername)
+		otherAccount := getAdminUser(t, admin, env.TargetRealm, other.Subject)
+		if otherAccount.ID != other.Subject || otherAccount.Username != other.LocalUsername {
+			t.Fatalf("forged username changed another company account: identity=%+v account=%+v", other, otherAccount)
+		}
+		if len(otherAccount.FederatedIdentities) != 1 || otherAccount.FederatedIdentities[0].IdentityProvider != "forged-other-org" || otherAccount.FederatedIdentities[0].UserID != other.ProviderSubject {
+			t.Fatalf("forged username changed another company provider link: %+v", otherAccount.FederatedIdentities)
 		}
 	})
+}
+
+func TestRequireRealmAbsent(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		statusCode int
+		wantError  bool
+	}{
+		{name: "missing realm", statusCode: http.StatusNotFound},
+		{name: "existing realm", statusCode: http.StatusOK, wantError: true},
+		{name: "admin API failure", statusCode: http.StatusForbidden, wantError: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var method, path string
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				method, path = r.Method, r.URL.Path
+				w.WriteHeader(tc.statusCode)
+				_, _ = w.Write([]byte("realm response"))
+			}))
+			defer server.Close()
+			admin := adminContext{BaseURL: server.URL, HTTPClient: server.Client()}
+			err := requireRealmAbsent(t, admin, "identity-isolation-target")
+			if (err != nil) != tc.wantError {
+				t.Fatalf("requireRealmAbsent() error = %v, wantError %t", err, tc.wantError)
+			}
+			if method != http.MethodGet || path != "/admin/realms/identity-isolation-target" {
+				t.Fatalf("realm preflight request = %s %s", method, path)
+			}
+		})
+	}
+}
+
+func TestFormActionBelongsToRealm(t *testing.T) {
+	issuer := "http://keycloak.example/realms/target"
+	for _, tc := range []struct {
+		action string
+		want   bool
+	}{
+		{action: "http://keycloak.example/realms/target/login-actions/required-action", want: true},
+		{action: "/realms/target/login-actions/required-action", want: true},
+		{action: "http://keycloak.example/realms/upstream/login-actions/required-action", want: false},
+		{action: "http://other.example/realms/target/login-actions/required-action", want: false},
+		{action: "http://keycloak.example/realms/target-other/login-actions/required-action", want: false},
+	} {
+		if got := formActionBelongsToRealm(tc.action, issuer); got != tc.want {
+			t.Errorf("formActionBelongsToRealm(%q, %q) = %t, want %t", tc.action, issuer, got, tc.want)
+		}
+	}
 }
 
 func requireIdentityIsolationInputs(t *testing.T) identityIsolationEnv {
@@ -234,7 +336,7 @@ func requireIdentityIsolationInputs(t *testing.T) identityIsolationEnv {
 		KeycloakURL:         os.Getenv("KEYCLOAK_URL"),
 		InternalKeycloakURL: os.Getenv("IDENTITY_ISOLATION_INTERNAL_KEYCLOAK_URL"),
 		AdminRealm:          os.Getenv("KEYCLOAK_ADMIN_REALM"),
-		TargetRealm:         os.Getenv("KEYCLOAK_REALM"),
+		TargetRealm:         os.Getenv("IDENTITY_ISOLATION_TARGET_REALM"),
 		UpstreamRealmA:      os.Getenv("IDENTITY_ISOLATION_UPSTREAM_REALM_A"),
 		UpstreamRealmB:      os.Getenv("IDENTITY_ISOLATION_UPSTREAM_REALM_B"),
 		AdminUsername:       os.Getenv("KEYCLOAK_ADMIN_USERNAME"),
@@ -273,7 +375,7 @@ func requireIdentityIsolationInputs(t *testing.T) identityIsolationEnv {
 		missing = append(missing, "KEYCLOAK_ADMIN_REALM")
 	}
 	if env.TargetRealm == "" {
-		missing = append(missing, "KEYCLOAK_REALM")
+		missing = append(missing, "IDENTITY_ISOLATION_TARGET_REALM")
 	}
 	if env.UpstreamRealmA == "" {
 		missing = append(missing, "IDENTITY_ISOLATION_UPSTREAM_REALM_A")
@@ -377,6 +479,19 @@ func newIdentityIsolationAdmin(t *testing.T, env identityIsolationEnv) adminCont
 	}
 }
 
+func requireRealmAbsent(t *testing.T, admin adminContext, realm string) error {
+	endpoint := admin.BaseURL + "/admin/realms/" + url.PathEscape(realm)
+	resp, body := admin.request(t, http.MethodGet, endpoint, nil)
+	switch resp.StatusCode {
+	case http.StatusNotFound:
+		return nil
+	case http.StatusOK:
+		return fmt.Errorf("Keycloak realm %q already exists", realm)
+	default:
+		return fmt.Errorf("check Keycloak realm %q: status %d: %s", realm, resp.StatusCode, body)
+	}
+}
+
 func issuerURL(baseURL, realm string) string {
 	return strings.TrimRight(baseURL, "/") + "/realms/" + realm
 }
@@ -408,6 +523,31 @@ func createIdentityIsolationTenant(t *testing.T, ctx context.Context, client *cl
 	return tenant
 }
 
+func assertTenantMemberMatchesIdentity(t *testing.T, ctx context.Context, client *clientpkg.Client, tenantID string, identity brokerIdentity) {
+	t.Helper()
+	members, err := client.ListTenantMembers(ctx, tenantID)
+	if err != nil {
+		t.Fatalf("list members for tenant %s: %v", tenantID, err)
+	}
+	if len(members) != 1 {
+		t.Fatalf("tenant %s members = %d, want 1", tenantID, len(members))
+	}
+	member := members[0]
+	if member.GetId() != identity.Subject || member.GetUsername() != identity.LocalUsername {
+		t.Fatalf("tenant %s member = %+v, want id %q and local username %q", tenantID, member, identity.Subject, identity.LocalUsername)
+	}
+	if member.GetPreferredUsername() != identity.PreferredUsername {
+		t.Fatalf("tenant %s preferred username = %q, want %q", tenantID, member.GetPreferredUsername(), identity.PreferredUsername)
+	}
+}
+
+func assertGeneratedLocalUsername(t *testing.T, username string) {
+	t.Helper()
+	if _, err := uuid.Parse(username); err != nil {
+		t.Fatalf("local username %q is not a UUID: %v", username, err)
+	}
+}
+
 func deleteIdentityIsolationTenant(t *testing.T, ctx context.Context, client *clientpkg.Client, tenant *aigridv1.Tenant) {
 	t.Helper()
 	if err := client.DeleteTenant(ctx, tenant.Id, tenant.Metadata.Version); err != nil {
@@ -416,14 +556,12 @@ func deleteIdentityIsolationTenant(t *testing.T, ctx context.Context, client *cl
 }
 
 type keycloakRealm struct {
-	Realm                string                         `json:"realm"`
-	Enabled              bool                           `json:"enabled"`
-	OrganizationsEnabled bool                           `json:"organizationsEnabled,omitempty"`
-	ClientScopes         []keycloakClientScope          `json:"clientScopes,omitempty"`
-	AuthenticationFlows  []keycloakAuthenticationFlow   `json:"authenticationFlows,omitempty"`
-	Clients              []keycloakClient               `json:"clients,omitempty"`
-	Users                []keycloakUser                 `json:"users,omitempty"`
-	Components           map[string][]keycloakComponent `json:"components,omitempty"`
+	Realm                string                `json:"realm"`
+	Enabled              bool                  `json:"enabled"`
+	OrganizationsEnabled bool                  `json:"organizationsEnabled,omitempty"`
+	ClientScopes         []keycloakClientScope `json:"clientScopes,omitempty"`
+	Clients              []keycloakClient      `json:"clients,omitempty"`
+	Users                []keycloakUser        `json:"users,omitempty"`
 }
 
 type keycloakClientScope struct {
@@ -443,20 +581,21 @@ type keycloakProtocolMapper struct {
 	Config         map[string]string `json:"config,omitempty"`
 }
 
-type keycloakAuthenticationFlow struct {
-	Alias                    string                            `json:"alias"`
-	Description              string                            `json:"description,omitempty"`
-	ProviderID               string                            `json:"providerId"`
-	TopLevel                 bool                              `json:"topLevel"`
-	BuiltIn                  bool                              `json:"builtIn"`
-	AuthenticationExecutions []keycloakAuthenticationExecution `json:"authenticationExecutions,omitempty"`
-}
-
-type keycloakAuthenticationExecution struct {
-	Authenticator     string `json:"authenticator"`
-	Requirement       string `json:"requirement"`
-	Priority          int    `json:"priority"`
-	AuthenticatorFlow bool   `json:"authenticatorFlow"`
+func keycloakUserAttributeMapper(name, attribute, claim string, multivalued bool) keycloakProtocolMapper {
+	return keycloakProtocolMapper{
+		Name:           name,
+		Protocol:       "openid-connect",
+		ProtocolMapper: "oidc-usermodel-attribute-mapper",
+		Config: map[string]string{
+			"user.attribute":       attribute,
+			"claim.name":           claim,
+			"jsonType.label":       "String",
+			"multivalued":          strconv.FormatBool(multivalued),
+			"id.token.claim":       "true",
+			"userinfo.token.claim": "true",
+			"access.token.claim":   "true",
+		},
+	}
 }
 
 type keycloakClient struct {
@@ -489,32 +628,12 @@ type keycloakCredential struct {
 	Temporary bool   `json:"temporary"`
 }
 
-type keycloakComponent struct {
-	ID            string              `json:"id,omitempty"`
-	Name          string              `json:"name,omitempty"`
-	ProviderID    string              `json:"providerId"`
-	SubComponents map[string]any      `json:"subComponents,omitempty"`
-	Config        map[string][]string `json:"config,omitempty"`
-}
-
 func createTargetRealm(t *testing.T, admin adminContext, env identityIsolationEnv) {
 	t.Helper()
-	deleteRealmIfExists(t, admin, env.TargetRealm)
 	realm := keycloakRealm{
 		Realm:                env.TargetRealm,
 		Enabled:              true,
 		OrganizationsEnabled: true,
-		AuthenticationFlows: []keycloakAuthenticationFlow{{
-			Alias:       "ai-grid-first-broker-login",
-			Description: "Create a unique local account for each brokered identity.",
-			ProviderID:  "basic-flow",
-			TopLevel:    true,
-			AuthenticationExecutions: []keycloakAuthenticationExecution{{
-				Authenticator: "idp-create-user-if-unique",
-				Requirement:   "REQUIRED",
-				Priority:      10,
-			}},
-		}},
 		Clients: []keycloakClient{{
 			ClientID:                  env.BrokerClientID,
 			Name:                      "Identity isolation broker client",
@@ -526,149 +645,102 @@ func createTargetRealm(t *testing.T, admin adminContext, env identityIsolationEn
 			RedirectUris:              []string{fmt.Sprintf("http://127.0.0.1:%d/callback", env.CallbackPort)},
 			DefaultClientScopes:       []string{"basic", "profile", "email", "roles", "web-origins"},
 			ProtocolMappers: []keycloakProtocolMapper{
-				{
-					Name:           "AI Grid preferred username",
-					Protocol:       "openid-connect",
-					ProtocolMapper: "oidc-usermodel-attribute-mapper",
-					Config: map[string]string{
-						"user.attribute":       "maas_preferred_username",
-						"claim.name":           "preferred_username",
-						"jsonType.label":       "String",
-						"id.token.claim":       "true",
-						"userinfo.token.claim": "true",
-						"access.token.claim":   "true",
-					},
-				},
-				{
-					Name:           "MaaS org id",
-					Protocol:       "openid-connect",
-					ProtocolMapper: "oidc-usermodel-attribute-mapper",
-					Config: map[string]string{
-						"user.attribute":       "maas_org_id",
-						"claim.name":           "org_id",
-						"jsonType.label":       "String",
-						"multivalued":          "false",
-						"id.token.claim":       "true",
-						"userinfo.token.claim": "true",
-						"access.token.claim":   "true",
-					},
-				},
-				{
-					Name:           "MaaS org name",
-					Protocol:       "openid-connect",
-					ProtocolMapper: "oidc-usermodel-attribute-mapper",
-					Config: map[string]string{
-						"user.attribute":       "maas_org_name",
-						"claim.name":           "org_name",
-						"jsonType.label":       "String",
-						"multivalued":          "false",
-						"id.token.claim":       "true",
-						"userinfo.token.claim": "true",
-						"access.token.claim":   "true",
-					},
-				},
-				{
-					Name:           "MaaS groups",
-					Protocol:       "openid-connect",
-					ProtocolMapper: "oidc-usermodel-attribute-mapper",
-					Config: map[string]string{
-						"user.attribute":       "maas_groups",
-						"claim.name":           "groups",
-						"jsonType.label":       "String",
-						"multivalued":          "true",
-						"id.token.claim":       "true",
-						"userinfo.token.claim": "true",
-						"access.token.claim":   "true",
-					},
-				},
-				{
-					Name:           "MaaS roles",
-					Protocol:       "openid-connect",
-					ProtocolMapper: "oidc-usermodel-attribute-mapper",
-					Config: map[string]string{
-						"user.attribute":       "maas_roles",
-						"claim.name":           "roles",
-						"jsonType.label":       "String",
-						"multivalued":          "true",
-						"id.token.claim":       "true",
-						"userinfo.token.claim": "true",
-						"access.token.claim":   "true",
-					},
-				},
+				keycloakUserAttributeMapper("MaaS org id", "maas_org_id", "org_id", false),
+				keycloakUserAttributeMapper("MaaS org name", "maas_org_name", "org_name", false),
+				keycloakUserAttributeMapper("MaaS groups", "maas_groups", "groups", true),
+				keycloakUserAttributeMapper("MaaS roles", "maas_roles", "roles", true),
 			},
 		}},
-		Components: map[string][]keycloakComponent{
-			"org.keycloak.userprofile.UserProfileProvider": {userProfileComponent(t)},
-		},
 	}
 	postRealm(t, admin, realm)
-	requireAuthenticationFlow(t, admin, env.TargetRealm, "ai-grid-first-broker-login")
+	requireUniqueBrokerUserCreation(t, admin, env.TargetRealm)
+	configureUserProfile(t, admin, env.TargetRealm)
+	configureProfileScope(t, admin, env.TargetRealm, "maas_preferred_username")
 }
 
-func requireAuthenticationFlow(t *testing.T, admin adminContext, realm, alias string) {
+func configureUserProfile(t *testing.T, admin adminContext, realm string) {
 	t.Helper()
-	endpoint := admin.BaseURL + "/admin/realms/" + url.PathEscape(realm) + "/authentication/flows"
-	req, err := http.NewRequest(http.MethodGet, endpoint, nil)
-	if err != nil {
-		t.Fatalf("create authentication flow request: %v", err)
-	}
-	req.Header.Set("Authorization", "Bearer "+admin.Token)
-	resp, err := admin.HTTPClient.Do(req)
-	if err != nil {
-		t.Fatalf("get authentication flow %s: %v", alias, err)
-	}
-	defer resp.Body.Close()
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		t.Fatalf("read authentication flows response: %v", err)
-	}
+	endpoint := admin.BaseURL + "/admin/realms/" + url.PathEscape(realm) + "/users/profile"
+	resp, body := admin.request(t, http.MethodGet, endpoint, nil)
 	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("list authentication flows: status %d body %s", resp.StatusCode, body)
+		t.Fatalf("read user profile: status %d body %s", resp.StatusCode, body)
 	}
-	var flows []struct {
-		Alias string `json:"alias"`
+	var profile map[string]any
+	if err := json.Unmarshal(body, &profile); err != nil {
+		t.Fatalf("decode user profile: %v", err)
 	}
-	if err := json.Unmarshal(body, &flows); err != nil {
-		t.Fatalf("decode authentication flows response: %v", err)
+	profile["unmanagedAttributePolicy"] = "ADMIN_EDIT"
+	attributes, ok := profile["attributes"].([]any)
+	if !ok {
+		t.Fatalf("user profile attributes = %T, want array", profile["attributes"])
 	}
-	for _, flow := range flows {
-		if flow.Alias == alias {
-			return
+	var username map[string]any
+	for _, item := range attributes {
+		attribute, ok := item.(map[string]any)
+		if ok && attribute["name"] == "username" {
+			username = attribute
+			break
 		}
 	}
-	t.Fatalf("authentication flow %s not found", alias)
-}
-
-func userProfileComponent(t *testing.T) keycloakComponent {
-	t.Helper()
-	return keycloakComponent{
-		ID:         randomHex(t, 16),
-		Name:       "identity-isolation-user-profile",
-		ProviderID: "declarative-user-profile",
-		Config: map[string][]string{
-			"config-pieces-count": {"1"},
-			"config-piece-0":      {`{"unmanagedAttributePolicy":"ADMIN_EDIT","attributes":[{"name":"username","required":{},"permissions":{"view":["admin"],"edit":["admin"]}}]}`},
-		},
+	if username == nil {
+		t.Fatal("user profile has no username attribute")
+	}
+	username["required"] = map[string]any{}
+	username["permissions"] = map[string][]string{
+		"view": {"admin"},
+		"edit": {"admin"},
+	}
+	body, err := json.Marshal(profile)
+	if err != nil {
+		t.Fatalf("marshal user profile configuration: %v", err)
+	}
+	resp, responseBody := admin.request(t, http.MethodPut, endpoint, body)
+	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+		t.Fatalf("update user profile: status %d body %s", resp.StatusCode, responseBody)
 	}
 }
 
-func configureProfileScope(t *testing.T, admin adminContext, realm, userAttribute, mapperType string) {
+func requireUniqueBrokerUserCreation(t *testing.T, admin adminContext, realm string) {
+	t.Helper()
+	endpoint := admin.BaseURL + "/admin/realms/" + url.PathEscape(realm) + "/authentication/flows/" + url.PathEscape("User creation or linking") + "/executions"
+	resp, body := admin.request(t, http.MethodGet, endpoint, nil)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("list broker user-creation executions: status %d body %s", resp.StatusCode, body)
+	}
+	var executions []map[string]any
+	if err := json.Unmarshal(body, &executions); err != nil {
+		t.Fatalf("decode broker user-creation executions: %v", err)
+	}
+	var uniqueUserExecution map[string]any
+	for _, execution := range executions {
+		if execution["providerId"] == "idp-create-user-if-unique" {
+			if uniqueUserExecution != nil {
+				t.Fatal("user-creation flow has multiple idp-create-user-if-unique executions")
+			}
+			uniqueUserExecution = execution
+		}
+	}
+	if uniqueUserExecution == nil {
+		t.Fatal("user-creation flow has no idp-create-user-if-unique execution")
+	}
+	if uniqueUserExecution["requirement"] == "REQUIRED" {
+		return
+	}
+	uniqueUserExecution["requirement"] = "REQUIRED"
+	update, err := json.Marshal(uniqueUserExecution)
+	if err != nil {
+		t.Fatalf("marshal user-creation execution: %v", err)
+	}
+	resp, body = admin.request(t, http.MethodPut, endpoint, update)
+	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+		t.Fatalf("require unique broker user: status %d body %s", resp.StatusCode, body)
+	}
+}
+
+func configureProfileScope(t *testing.T, admin adminContext, realm, userAttribute string) {
 	t.Helper()
 	scopesEndpoint := admin.BaseURL + "/admin/realms/" + url.PathEscape(realm) + "/client-scopes"
-	req, err := http.NewRequest(http.MethodGet, scopesEndpoint, nil)
-	if err != nil {
-		t.Fatalf("create client scopes request: %v", err)
-	}
-	req.Header.Set("Authorization", "Bearer "+admin.Token)
-	resp, err := admin.HTTPClient.Do(req)
-	if err != nil {
-		t.Fatalf("list client scopes: %v", err)
-	}
-	defer resp.Body.Close()
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		t.Fatalf("read client scopes response: %v", err)
-	}
+	resp, body := admin.request(t, http.MethodGet, scopesEndpoint, nil)
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("list client scopes: status %d body %s", resp.StatusCode, body)
 	}
@@ -687,20 +759,7 @@ func configureProfileScope(t *testing.T, admin adminContext, realm, userAttribut
 		t.Fatal("profile client scope not found")
 	}
 	mappersEndpoint := scopesEndpoint + "/" + url.PathEscape(profileScopeID) + "/protocol-mappers/models"
-	req, err = http.NewRequest(http.MethodGet, mappersEndpoint, nil)
-	if err != nil {
-		t.Fatalf("create profile mappers request: %v", err)
-	}
-	req.Header.Set("Authorization", "Bearer "+admin.Token)
-	resp, err = admin.HTTPClient.Do(req)
-	if err != nil {
-		t.Fatalf("list profile mappers: %v", err)
-	}
-	defer resp.Body.Close()
-	body, err = io.ReadAll(resp.Body)
-	if err != nil {
-		t.Fatalf("read profile mappers response: %v", err)
-	}
+	resp, body = admin.request(t, http.MethodGet, mappersEndpoint, nil)
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("list profile mappers: status %d body %s", resp.StatusCode, body)
 	}
@@ -708,61 +767,38 @@ func configureProfileScope(t *testing.T, admin adminContext, realm, userAttribut
 	if err := json.Unmarshal(body, &mappers); err != nil {
 		t.Fatalf("decode profile mappers response: %v", err)
 	}
-	for _, mapper := range mappers {
-		if mapper.Name != "username" && mapper.Config["claim.name"] != "preferred_username" {
+	var usernameMapper *keycloakProtocolMapper
+	for i := range mappers {
+		mapper := &mappers[i]
+		if mapper.Name != "username" || mapper.Config["claim.name"] != "preferred_username" {
 			continue
 		}
-		deleteReq, err := http.NewRequest(http.MethodDelete, mappersEndpoint+"/"+url.PathEscape(mapper.ID), nil)
-		if err != nil {
-			t.Fatalf("create delete profile mapper request: %v", err)
+		if usernameMapper != nil {
+			t.Fatal("multiple profile username mappers found")
 		}
-		deleteReq.Header.Set("Authorization", "Bearer "+admin.Token)
-		deleteResp, err := admin.HTTPClient.Do(deleteReq)
-		if err != nil {
-			t.Fatalf("delete profile mapper %s: %v", mapper.Name, err)
-		}
-		_ = deleteResp.Body.Close()
-		if deleteResp.StatusCode != http.StatusNoContent {
-			t.Fatalf("delete profile mapper %s: status %d", mapper.Name, deleteResp.StatusCode)
-		}
+		usernameMapper = mapper
 	}
-	preferredMapper := keycloakProtocolMapper{
-		Name:           "AI Grid preferred username",
-		Protocol:       "openid-connect",
-		ProtocolMapper: mapperType,
-		Config: map[string]string{
-			"user.attribute":       userAttribute,
-			"claim.name":           "preferred_username",
-			"jsonType.label":       "String",
-			"id.token.claim":       "true",
-			"access.token.claim":   "true",
-			"userinfo.token.claim": "true",
-		},
+	if usernameMapper == nil {
+		t.Fatal("profile username mapper not found")
 	}
-	mapperBody, err := json.Marshal(preferredMapper)
+	if usernameMapper.Config["user.attribute"] == userAttribute {
+		return
+	}
+	usernameMapper.Config["user.attribute"] = userAttribute
+	mapperBody, err := json.Marshal(usernameMapper)
 	if err != nil {
-		t.Fatalf("marshal preferred username mapper: %v", err)
+		t.Fatalf("marshal profile username mapper: %v", err)
 	}
-	postReq, err := http.NewRequest(http.MethodPost, mappersEndpoint, strings.NewReader(string(mapperBody)))
-	if err != nil {
-		t.Fatalf("create preferred username mapper request: %v", err)
-	}
-	postReq.Header.Set("Authorization", "Bearer "+admin.Token)
-	postReq.Header.Set("Content-Type", "application/json")
-	postResp, err := admin.HTTPClient.Do(postReq)
-	if err != nil {
-		t.Fatalf("create preferred username mapper: %v", err)
-	}
-	defer postResp.Body.Close()
-	if postResp.StatusCode != http.StatusCreated {
-		responseBody, _ := io.ReadAll(postResp.Body)
-		t.Fatalf("create preferred username mapper: status %d body %s", postResp.StatusCode, responseBody)
+	updateURL := mappersEndpoint + "/" + url.PathEscape(usernameMapper.ID)
+	updateResp, _ := admin.request(t, http.MethodPut, updateURL, mapperBody)
+	if updateResp.StatusCode != http.StatusNoContent {
+		responseBody, _ := io.ReadAll(updateResp.Body)
+		t.Fatalf("update profile username mapper: status %d body %s", updateResp.StatusCode, responseBody)
 	}
 }
 
 func createUpstreamRealmA(t *testing.T, admin adminContext, env identityIsolationEnv) {
 	t.Helper()
-	deleteRealmIfExists(t, admin, env.UpstreamRealmA)
 	realm := keycloakRealm{
 		Realm:   env.UpstreamRealmA,
 		Enabled: true,
@@ -781,18 +817,18 @@ func createUpstreamRealmA(t *testing.T, admin adminContext, env identityIsolatio
 			newUpstreamUser("alice-1", "alice-sep1@example.com", "password-alice-1"),
 			newUpstreamUser("alice_1", "alice-sep2@example.com", "password-alice_1"),
 			newUpstreamUser("alice-no-profile", "alice-no-profile@example.com", "password-no-profile"),
+			newUpstreamUserWithoutName("alice-missing-name", "alice-missing-name@example.com", "password-missing-name"),
 			newUpstreamUser("alice-shared", "shared@example.com", "password-shared"),
 			newUpstreamUser("alice-profile", "alice-profile@example.com", "password-profile"),
 			newUpstreamUserWithoutEmail("shared-subject", "password-shared-subject"),
 		},
 	}
 	postRealm(t, admin, realm)
-	configureProfileScope(t, admin, env.UpstreamRealmA, "firstName", "oidc-usermodel-property-mapper")
+	configureProfileScope(t, admin, env.UpstreamRealmA, "firstName")
 }
 
 func createUpstreamRealmB(t *testing.T, admin adminContext, env identityIsolationEnv) {
 	t.Helper()
-	deleteRealmIfExists(t, admin, env.UpstreamRealmB)
 	realm := keycloakRealm{
 		Realm:   env.UpstreamRealmB,
 		Enabled: true,
@@ -804,10 +840,11 @@ func createUpstreamRealmB(t *testing.T, admin adminContext, env identityIsolatio
 			newUpstreamUser("baseline-alice", "baseline-b@example.com", "password-baseline-b"),
 			newUpstreamUser("alice-shared", "shared@example.com", "password-shared-b"),
 			newUpstreamUser("legacy-alice", "legacy-b-alice@example.com", "password-legacy-alice"),
+			newUpstreamUser("forged-other-alice", "forged-other-alice@example.com", "password-forged-other-alice"),
 		},
 	}
 	postRealm(t, admin, realm)
-	configureProfileScope(t, admin, env.UpstreamRealmB, "firstName", "oidc-usermodel-property-mapper")
+	configureProfileScope(t, admin, env.UpstreamRealmB, "firstName")
 }
 
 func newUpstreamClient(clientID, secret string, includeProfile bool) keycloakClient {
@@ -847,6 +884,18 @@ func newUpstreamUserWithoutEmail(username, password string) keycloakUser {
 	return newUpstreamUser(username, "", password)
 }
 
+func newUpstreamUserWithoutName(username, email, password string) keycloakUser {
+	return keycloakUser{
+		Username: username,
+		Enabled:  true,
+		Email:    email,
+		Credentials: []keycloakCredential{{
+			Type:  "password",
+			Value: password,
+		}},
+	}
+}
+
 func postRealm(t *testing.T, admin adminContext, realm keycloakRealm) {
 	t.Helper()
 	body, err := json.Marshal(realm)
@@ -854,39 +903,10 @@ func postRealm(t *testing.T, admin adminContext, realm keycloakRealm) {
 		t.Fatalf("marshal realm %s: %v", realm.Realm, err)
 	}
 	endpoint := admin.BaseURL + "/admin/realms"
-	req, err := http.NewRequest(http.MethodPost, endpoint, strings.NewReader(string(body)))
-	if err != nil {
-		t.Fatalf("create realm request: %v", err)
-	}
-	req.Header.Set("Authorization", "Bearer "+admin.Token)
-	req.Header.Set("Content-Type", "application/json")
-	resp, err := admin.HTTPClient.Do(req)
-	if err != nil {
-		t.Fatalf("create realm %s: %v", realm.Realm, err)
-	}
-	defer resp.Body.Close()
+	resp, _ := admin.request(t, http.MethodPost, endpoint, body)
 	if resp.StatusCode != http.StatusCreated {
 		responseBody, _ := io.ReadAll(resp.Body)
 		t.Fatalf("create realm %s: status %d body %s", realm.Realm, resp.StatusCode, responseBody)
-	}
-}
-
-func deleteRealmIfExists(t *testing.T, admin adminContext, realm string) {
-	t.Helper()
-	endpoint := admin.BaseURL + "/admin/realms/" + url.PathEscape(realm)
-	req, err := http.NewRequest(http.MethodDelete, endpoint, nil)
-	if err != nil {
-		t.Fatalf("create delete realm request: %v", err)
-	}
-	req.Header.Set("Authorization", "Bearer "+admin.Token)
-	resp, err := admin.HTTPClient.Do(req)
-	if err != nil {
-		t.Fatalf("delete realm %s: %v", realm, err)
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusNoContent && resp.StatusCode != http.StatusNotFound {
-		body, _ := io.ReadAll(resp.Body)
-		t.Fatalf("delete realm %s: status %d body %s", realm, resp.StatusCode, body)
 	}
 }
 
@@ -913,19 +933,8 @@ func renameUpstreamUser(t *testing.T, admin adminContext, realm, currentUsername
 		t.Fatalf("marshal renamed user: %v", err)
 	}
 	endpoint := admin.BaseURL + "/admin/realms/" + url.PathEscape(realm) + "/users/" + url.PathEscape(user.ID)
-	req, err := http.NewRequest(http.MethodPut, endpoint, strings.NewReader(string(body)))
-	if err != nil {
-		t.Fatalf("create rename user request: %v", err)
-	}
-	req.Header.Set("Authorization", "Bearer "+admin.Token)
-	req.Header.Set("Content-Type", "application/json")
-	resp, err := admin.HTTPClient.Do(req)
-	if err != nil {
-		t.Fatalf("rename user %s: %v", currentUsername, err)
-	}
-	defer resp.Body.Close()
+	resp, responseBody := admin.request(t, http.MethodPut, endpoint, body)
 	if resp.StatusCode != http.StatusNoContent {
-		responseBody, _ := io.ReadAll(resp.Body)
 		t.Fatalf("rename user %s: status %d body %s", currentUsername, resp.StatusCode, responseBody)
 	}
 	updated := getAdminUser(t, admin, realm, user.ID)
@@ -943,19 +952,8 @@ func updateUpstreamUserEmail(t *testing.T, admin adminContext, realm, username, 
 		t.Fatalf("marshal updated user email: %v", err)
 	}
 	endpoint := admin.BaseURL + "/admin/realms/" + url.PathEscape(realm) + "/users/" + url.PathEscape(user.ID)
-	req, err := http.NewRequest(http.MethodPut, endpoint, strings.NewReader(string(body)))
-	if err != nil {
-		t.Fatalf("create updated user email request: %v", err)
-	}
-	req.Header.Set("Authorization", "Bearer "+admin.Token)
-	req.Header.Set("Content-Type", "application/json")
-	resp, err := admin.HTTPClient.Do(req)
-	if err != nil {
-		t.Fatalf("update user email for %s: %v", username, err)
-	}
-	defer resp.Body.Close()
+	resp, responseBody := admin.request(t, http.MethodPut, endpoint, body)
 	if resp.StatusCode != http.StatusNoContent {
-		responseBody, _ := io.ReadAll(resp.Body)
 		t.Fatalf("update user email for %s: status %d body %s", username, resp.StatusCode, responseBody)
 	}
 }
@@ -963,20 +961,7 @@ func updateUpstreamUserEmail(t *testing.T, admin adminContext, realm, username, 
 func deleteIdentityProviderMapper(t *testing.T, admin adminContext, realm, providerAlias, mapperName string) {
 	t.Helper()
 	endpoint := admin.BaseURL + "/admin/realms/" + url.PathEscape(realm) + "/identity-provider/instances/" + url.PathEscape(providerAlias) + "/mappers"
-	req, err := http.NewRequest(http.MethodGet, endpoint, nil)
-	if err != nil {
-		t.Fatalf("create identity provider mapper list request: %v", err)
-	}
-	req.Header.Set("Authorization", "Bearer "+admin.Token)
-	resp, err := admin.HTTPClient.Do(req)
-	if err != nil {
-		t.Fatalf("list identity provider mappers: %v", err)
-	}
-	defer resp.Body.Close()
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		t.Fatalf("read identity provider mappers: %v", err)
-	}
+	resp, body := admin.request(t, http.MethodGet, endpoint, nil)
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("list identity provider mappers: status %d body %s", resp.StatusCode, body)
 	}
@@ -988,16 +973,7 @@ func deleteIdentityProviderMapper(t *testing.T, admin adminContext, realm, provi
 		if mapper.Name != mapperName {
 			continue
 		}
-		deleteReq, err := http.NewRequest(http.MethodDelete, endpoint+"/"+url.PathEscape(mapper.ID), nil)
-		if err != nil {
-			t.Fatalf("create identity provider mapper delete request: %v", err)
-		}
-		deleteReq.Header.Set("Authorization", "Bearer "+admin.Token)
-		deleteResp, err := admin.HTTPClient.Do(deleteReq)
-		if err != nil {
-			t.Fatalf("delete identity provider mapper %s: %v", mapperName, err)
-		}
-		_ = deleteResp.Body.Close()
+		deleteResp, _ := admin.request(t, http.MethodDelete, endpoint+"/"+url.PathEscape(mapper.ID), nil)
 		if deleteResp.StatusCode != http.StatusNoContent {
 			t.Fatalf("delete identity provider mapper %s: status %d", mapperName, deleteResp.StatusCode)
 		}
@@ -1008,22 +984,18 @@ func deleteIdentityProviderMapper(t *testing.T, admin adminContext, realm, provi
 
 func adminUserByUsername(t *testing.T, admin adminContext, realm, username string) adminUser {
 	t.Helper()
+	users := adminUsersByUsername(t, admin, realm, username)
+	if len(users) != 1 {
+		t.Fatalf("user search for %s returned %d users, want 1", username, len(users))
+	}
+	return users[0]
+}
+
+func adminUsersByUsername(t *testing.T, admin adminContext, realm, username string) []adminUser {
+	t.Helper()
 	endpoint := fmt.Sprintf("%s/admin/realms/%s/users?username=%s&exact=true",
 		admin.BaseURL, url.PathEscape(realm), url.QueryEscape(username))
-	req, err := http.NewRequest(http.MethodGet, endpoint, nil)
-	if err != nil {
-		t.Fatalf("create user search request: %v", err)
-	}
-	req.Header.Set("Authorization", "Bearer "+admin.Token)
-	resp, err := admin.HTTPClient.Do(req)
-	if err != nil {
-		t.Fatalf("search user %s: %v", username, err)
-	}
-	defer resp.Body.Close()
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		t.Fatalf("read user search response: %v", err)
-	}
+	resp, body := admin.request(t, http.MethodGet, endpoint, nil)
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("search user %s: status %d body %s", username, resp.StatusCode, body)
 	}
@@ -1031,10 +1003,7 @@ func adminUserByUsername(t *testing.T, admin adminContext, realm, username strin
 	if err := json.Unmarshal(body, &users); err != nil {
 		t.Fatalf("decode user search response: %v", err)
 	}
-	if len(users) != 1 {
-		t.Fatalf("user search for %s returned %d users, want 1", username, len(users))
-	}
-	return users[0]
+	return users
 }
 
 func createLegacyLocalUser(t *testing.T, admin adminContext, realm, username, email string) adminUser {
@@ -1048,19 +1017,8 @@ func createLegacyLocalUser(t *testing.T, admin adminContext, realm, username, em
 		t.Fatalf("marshal legacy user: %v", err)
 	}
 	endpoint := admin.BaseURL + "/admin/realms/" + url.PathEscape(realm) + "/users"
-	req, err := http.NewRequest(http.MethodPost, endpoint, strings.NewReader(string(body)))
-	if err != nil {
-		t.Fatalf("create legacy user request: %v", err)
-	}
-	req.Header.Set("Authorization", "Bearer "+admin.Token)
-	req.Header.Set("Content-Type", "application/json")
-	resp, err := admin.HTTPClient.Do(req)
-	if err != nil {
-		t.Fatalf("create legacy user: %v", err)
-	}
-	defer resp.Body.Close()
+	resp, responseBody := admin.request(t, http.MethodPost, endpoint, body)
 	if resp.StatusCode != http.StatusCreated {
-		responseBody, _ := io.ReadAll(resp.Body)
 		t.Fatalf("create legacy user: status %d body %s", resp.StatusCode, responseBody)
 	}
 	return adminUserByUsername(t, admin, realm, username)
@@ -1077,19 +1035,8 @@ func linkFederatedIdentity(t *testing.T, admin adminContext, realm, userID, prov
 		t.Fatalf("marshal federated identity link: %v", err)
 	}
 	endpoint := admin.BaseURL + "/admin/realms/" + url.PathEscape(realm) + "/users/" + url.PathEscape(userID) + "/federated-identity/" + url.PathEscape(providerAlias)
-	req, err := http.NewRequest(http.MethodPost, endpoint, strings.NewReader(string(body)))
-	if err != nil {
-		t.Fatalf("create federated identity link request: %v", err)
-	}
-	req.Header.Set("Authorization", "Bearer "+admin.Token)
-	req.Header.Set("Content-Type", "application/json")
-	resp, err := admin.HTTPClient.Do(req)
-	if err != nil {
-		t.Fatalf("create federated identity link: %v", err)
-	}
-	defer resp.Body.Close()
+	resp, responseBody := admin.request(t, http.MethodPost, endpoint, body)
 	if resp.StatusCode != http.StatusNoContent && resp.StatusCode != http.StatusCreated {
-		responseBody, _ := io.ReadAll(resp.Body)
 		t.Fatalf("create federated identity link: status %d body %s", resp.StatusCode, responseBody)
 	}
 }
@@ -1097,20 +1044,7 @@ func linkFederatedIdentity(t *testing.T, admin adminContext, realm, userID, prov
 func getAdminUser(t *testing.T, admin adminContext, realm, userID string) adminUser {
 	t.Helper()
 	endpoint := admin.BaseURL + "/admin/realms/" + url.PathEscape(realm) + "/users/" + url.PathEscape(userID)
-	req, err := http.NewRequest(http.MethodGet, endpoint, nil)
-	if err != nil {
-		t.Fatalf("create get user request: %v", err)
-	}
-	req.Header.Set("Authorization", "Bearer "+admin.Token)
-	resp, err := admin.HTTPClient.Do(req)
-	if err != nil {
-		t.Fatalf("get user %s: %v", userID, err)
-	}
-	defer resp.Body.Close()
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		t.Fatalf("read user response: %v", err)
-	}
+	resp, body := admin.request(t, http.MethodGet, endpoint, nil)
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("get user %s: status %d body %s", userID, resp.StatusCode, body)
 	}
