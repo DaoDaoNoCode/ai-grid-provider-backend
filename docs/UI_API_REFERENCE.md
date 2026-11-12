@@ -895,7 +895,18 @@ show both, such as "Ready" and "Awaiting subscription":
   `AWAITING_SUBSCRIPTION_AND_BACKEND`, `CONFIGURING_ROUTING` (also while one
   hasn't reported), `AWAITING_SUBSCRIPTION`, `AVAILABLE`; `AVAILABLE` and
   `CONFIGURING_ROUTING` read `UNAVAILABLE` while no placed cluster serves the
-  model or it serves a name other than its id.
+  model or it serves a name other than its id. `status.maasMessage` then says
+  why, in sentences to show as the reason, and is empty for every other
+  `maas`; `status.message` is the phase summary, not a reason for `maas`:
+
+  ```json
+  "maas": "MODEL_MAAS_STATE_UNAVAILABLE",
+  "maasMessage": "The model's deployment serves it as \"facebook/opt-125m\", but MaaS lists it as \"granite\", so requests through MaaS can't reach it. Update the model to serve it as \"granite\"; any update does this."
+  ```
+
+  With no placed cluster running the model it is `No cluster the model is
+  placed on is running it. Check the model's deployment on each cluster.`,
+  and both sentences when both apply.
 - `state` (model and each `clusters` entry): Git sync and deployment in one
   word, for a Status column: `SAVED_TO_GIT`, `SYNCING`, `SYNCED`,
   `STARTING`, `READY`, `PARTIALLY_READY` (model only), `FAILED`, `STOPPED`.

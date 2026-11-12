@@ -231,8 +231,8 @@ func TestModelsGitLegacyServedNameIsUnavailableInMaaS(t *testing.T) {
 		}
 		return got.GetObject().GetStatus()
 	}
-	if st := maas(); st.GetMaas() != aigridv1.ModelMaasState_MODEL_MAAS_STATE_AVAILABLE {
-		t.Fatalf("MaaS = %v, want AVAILABLE while the deployment serves the id (%s)", st.GetMaas(), st.GetMessage())
+	if st := maas(); st.GetMaas() != aigridv1.ModelMaasState_MODEL_MAAS_STATE_AVAILABLE || st.GetMaasMessage() != "" {
+		t.Fatalf("MaaS = %v, %q; want AVAILABLE with no reason while the deployment serves the id (%s)", st.GetMaas(), st.GetMaasMessage(), st.GetMessage())
 	}
 
 	// Rewrite the deployment the way a backend before served-as-id wrote it.
@@ -253,7 +253,10 @@ func TestModelsGitLegacyServedNameIsUnavailableInMaaS(t *testing.T) {
 		t.Fatalf("Commit() error = %v", err)
 	}
 
-	const fragment = `serves "facebook/opt-125m" while MaaS lists it as "granite"; update the model to serve it as its id`
+	const (
+		fragment = `serves "facebook/opt-125m" while MaaS lists it as "granite"; update the model to serve it as its id`
+		reason   = `The model's deployment serves it as "facebook/opt-125m", but MaaS lists it as "granite", so requests through MaaS can't reach it. Update the model to serve it as "granite"; any update does this.`
+	)
 	list, err := srv.List(ctx, &aigridv1.ModelsListRequest{})
 	if err != nil {
 		t.Fatalf("List() error = %v", err)
@@ -265,6 +268,9 @@ func TestModelsGitLegacyServedNameIsUnavailableInMaaS(t *testing.T) {
 		if !strings.Contains(st.GetMessage(), fragment) {
 			t.Errorf("%s message = %q, want it to contain %q", op, st.GetMessage(), fragment)
 		}
+		if st.GetMaasMessage() != reason {
+			t.Errorf("%s maas message = %q, want %q", op, st.GetMaasMessage(), reason)
+		}
 	}
 
 	// Its next update serves the id, and MaaS reads it as available again.
@@ -274,7 +280,8 @@ func TestModelsGitLegacyServedNameIsUnavailableInMaaS(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("Update() error = %v", err)
 	}
-	if st := maas(); st.GetMaas() != aigridv1.ModelMaasState_MODEL_MAAS_STATE_AVAILABLE || strings.Contains(st.GetMessage(), "facebook/opt-125m") {
-		t.Errorf("after update MaaS = %v, message = %q; want AVAILABLE with no served-name fragment", st.GetMaas(), st.GetMessage())
+	if st := maas(); st.GetMaas() != aigridv1.ModelMaasState_MODEL_MAAS_STATE_AVAILABLE || strings.Contains(st.GetMessage(), "facebook/opt-125m") || st.GetMaasMessage() != "" {
+		t.Errorf("after update MaaS = %v, message = %q, maas message = %q; want AVAILABLE with no served-name fragment and no reason",
+			st.GetMaas(), st.GetMessage(), st.GetMaasMessage())
 	}
 }

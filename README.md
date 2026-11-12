@@ -436,7 +436,7 @@ For models:
     `AWAITING_SUBSCRIPTION`, `AVAILABLE`; and `AVAILABLE` or
     `CONFIGURING_ROUTING` is `UNAVAILABLE` while no placed cluster serves the
     model or it serves a name other than its id, because MaaS checks only the
-    route.
+    route; `status.maas_message` then says which, and is empty otherwise.
   - `status.state` and `status.clusters[].state` give Git sync and
     deployment in one word, for a list's Status column: per cluster the
     deployment once it's on the cluster (`READY`, `STARTING`, `FAILED`,

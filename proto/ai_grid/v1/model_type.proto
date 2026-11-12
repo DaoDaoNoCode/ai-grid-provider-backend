@@ -301,9 +301,10 @@ message ModelStatus {
   // CONFIGURING_ROUTING become UNAVAILABLE when no placed cluster serves the
   // model (no `clusters[].deployment` is RUNNING), or when its deployment serves
   // a name other than its id, as a model saved before models were served as their
-  // id can until its next update; `message` then names that name. A failed sync doesn't
-  // stop a previous revision that is still running. UNSPECIFIED while none has reported. Each
-  // `ingress` entry keeps MaaS's own message. Output only.
+  // id can until its next update; `message` then names that name. `maas_message`
+  // says why it is UNAVAILABLE. A failed sync doesn't stop a previous revision
+  // that is still running. UNSPECIFIED while none has reported. Each `ingress`
+  // entry keeps MaaS's own message. Output only.
   ModelMaasState maas = 11 [(buf.validate.field).enum.defined_only = true];
 
   // The model on each ingress cluster, one entry per cluster in cluster-name
@@ -322,6 +323,15 @@ message ModelStatus {
   // change yet; SYNCED when every one has but none reports a deployment yet.
   // `phase` stays the MaaS-inclusive answer. Output only.
   ModelState state = 13 [(buf.validate.field).enum.defined_only = true];
+
+  // Why `maas` is UNAVAILABLE, in full sentences for the provider admin, and
+  // empty whenever `maas` is anything else. It says that no placed cluster
+  // runs the model ("No cluster the model is placed on is running it. Check
+  // the model's deployment on each cluster."), or that its deployment serves a
+  // name other than its id, with both names and the fix (any update), or both.
+  // MaaS's own messages stay in each `ingress` entry, and `message` stays the
+  // phase summary. Output only.
+  string maas_message = 14;
 }
 
 // What one placed cluster reports about the model's LLMInferenceService.
@@ -417,7 +427,8 @@ enum ModelMaasState {
   // No placed cluster serves it, while MaaS publishes it or is still
   // routing it: MaaS checks only the route, so it can't see the model's pods
   // are down. Summary only (ModelStatus.maas), from the placed clusters'
-  // live deployment states.
+  // live deployment states. Also when its deployment serves a name other
+  // than the id MaaS lists it under. ModelStatus.maas_message says why.
   MODEL_MAAS_STATE_UNAVAILABLE = 6;
 }
 
