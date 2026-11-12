@@ -694,6 +694,7 @@ func TestModelsGitTwoStatuses(t *testing.T) {
 		notReady  = aigridv1.ModelMaasState_MODEL_MAAS_STATE_CONFIGURING_ROUTING
 		maasFail  = aigridv1.ModelMaasState_MODEL_MAAS_STATE_FAILED
 		maasNone  = aigridv1.ModelMaasState_MODEL_MAAS_STATE_UNSPECIFIED
+		unavail   = aigridv1.ModelMaasState_MODEL_MAAS_STATE_UNAVAILABLE
 
 		noSubNoRoute = aigridv1.ModelMaasState_MODEL_MAAS_STATE_AWAITING_SUBSCRIPTION_AND_BACKEND
 
@@ -716,6 +717,7 @@ func TestModelsGitTwoStatuses(t *testing.T) {
 		wantPhase      aigridv1.ModelPhase
 		wantDeployment aigridv1.ModelDeploymentState
 		wantMaaS       aigridv1.ModelMaasState
+		wantMaaSMsg    string
 		wantPlaced     map[string]dep
 		wantIngress    []*aigridv1.ModelIngressStatus
 	}{
@@ -802,6 +804,29 @@ func TestModelsGitTwoStatuses(t *testing.T) {
 		"no reports": {
 			wantDeployment: depNone, wantMaaS: maasNone,
 		},
+		// MaaS publishes it, but nothing serves it: UNAVAILABLE, with the reason.
+		"published, failed everywhere": {
+			objects: []runtime.Object{
+				modelsApp("site-a", llmisvc("Synced", "Degraded", "config llm-template not found")),
+				modelsApp("site-b", llmisvc("Synced", "Degraded", "config llm-template not found")),
+				readyIngress("hub"),
+			},
+			wantPhase: phaseFailed, wantDeployment: depFail, wantMaaS: unavail,
+			wantMaaSMsg: "The model isn't running on any cluster it's placed on. It failed on site-a, site-b. Check the model's deployment there.",
+			wantPlaced:  map[string]dep{"site-a": {depFail, "config llm-template not found"}, "site-b": {depFail, "config llm-template not found"}},
+			wantIngress: []*aigridv1.ModelIngressStatus{ingress("hub", published, "")},
+		},
+		"published, starting on one, failed on the other": {
+			objects: []runtime.Object{
+				modelsApp("site-a", llmisvc("Synced", "Degraded", minAvail)),
+				modelsApp("site-b", llmisvc("Synced", "Degraded", "config llm-template not found")),
+				readyIngress("hub"),
+			},
+			wantPhase: phaseFailed, wantDeployment: depFail, wantMaaS: unavail,
+			wantMaaSMsg: "The model isn't running on any cluster it's placed on. It failed on site-b. Check the model's deployment there. It's starting on site-a.",
+			wantPlaced:  map[string]dep{"site-a": {starting, minAvail}, "site-b": {depFail, "config llm-template not found"}},
+			wantIngress: []*aigridv1.ModelIngressStatus{ingress("hub", published, "")},
+		},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
@@ -833,6 +858,10 @@ func TestModelsGitTwoStatuses(t *testing.T) {
 				if st.GetPhase() != tc.wantPhase || st.GetDeployment() != tc.wantDeployment || st.GetMaas() != tc.wantMaaS {
 					t.Errorf("%s phase, deployment, maas = %v, %v, %v; want %v, %v, %v (%q)", op,
 						st.GetPhase(), st.GetDeployment(), st.GetMaas(), tc.wantPhase, tc.wantDeployment, tc.wantMaaS, st.GetMessage())
+				}
+				// Only the backend's UNAVAILABLE has a reason of its own; MaaS's are in ingress.
+				if st.GetMaasMessage() != tc.wantMaaSMsg {
+					t.Errorf("%s maas message = %q; want %q", op, st.GetMaasMessage(), tc.wantMaaSMsg)
 				}
 				placed := map[string]dep{}
 				for _, c := range st.GetClusters() {
@@ -1113,7 +1142,7 @@ func TestViewLink(t *testing.T) {
 
 // TestMaaSSummary checks the Availability summary: worst first, and
 // AVAILABLE read as UNAVAILABLE while no placed cluster serves the model,
-// because MaaS checks only the route.
+// because MaaS checks only the route, with the reason as its message only then.
 func TestMaaSSummary(t *testing.T) {
 	t.Parallel()
 	in := func(states ...aigridv1.ModelMaasState) []*aigridv1.ModelIngressStatus {
@@ -1132,26 +1161,91 @@ func TestMaaSSummary(t *testing.T) {
 		unavail   = aigridv1.ModelMaasState_MODEL_MAAS_STATE_UNAVAILABLE
 		none      = aigridv1.ModelMaasState_MODEL_MAAS_STATE_UNSPECIFIED
 	)
+	const why = "The model isn't running on any cluster it's placed on."
 	for name, tc := range map[string]struct {
-		ingress []*aigridv1.ModelIngressStatus
-		serving bool
-		want    aigridv1.ModelMaasState
+		ingress     []*aigridv1.ModelIngressStatus
+		unserved    string
+		want        aigridv1.ModelMaasState
+		wantMessage string
 	}{
-		"available and serving":             {in(available, available), true, available},
-		"available, nothing serving":        {in(available), false, unavail},
-		"awaiting subscription stays":       {in(noSub), false, noSub},
-		"routing beats subscription":        {in(noSub, routing), true, routing},
-		"an unreported cluster is routing":  {in(available, none), true, routing},
-		"subscription and backend":          {in(routing, both), true, both},
-		"failed beats all":                  {in(both, failed, available), true, failed},
-		"routing while nothing serves":      {in(routing), false, unavail},
-		"both missing while nothing serves": {in(both), false, both},
-		"none reported":                     {in(none), true, none},
+		"available and serving":             {in(available, available), "", available, ""},
+		"available, nothing serving":        {in(available), why, unavail, why},
+		"awaiting subscription stays":       {in(noSub), why, noSub, ""},
+		"routing beats subscription":        {in(noSub, routing), "", routing, ""},
+		"an unreported cluster is routing":  {in(available, none), "", routing, ""},
+		"subscription and backend":          {in(routing, both), "", both, ""},
+		"failed beats all":                  {in(both, failed, available), "", failed, ""},
+		"failed while nothing serves":       {in(failed), why, failed, ""},
+		"routing while nothing serves":      {in(routing), why, unavail, why},
+		"both missing while nothing serves": {in(both), why, both, ""},
+		"none reported":                     {in(none), "", none, ""},
+		"none reported, nothing serves":     {in(none), why, none, ""},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			if got := maasSummary(tc.ingress, tc.serving); got != tc.want {
-				t.Errorf("maasSummary() = %v, want %v", got, tc.want)
+			if got, message := maasSummary(tc.ingress, tc.unserved); got != tc.want || message != tc.wantMessage {
+				t.Errorf("maasSummary() = %v, %q; want %v, %q", got, message, tc.want, tc.wantMessage)
+			}
+		})
+	}
+}
+
+// TestUnservedReason checks the reason MaaS reads as UNAVAILABLE: none while a
+// placed cluster runs the model under its id; otherwise where it isn't running
+// and why, worst first, with a step to take only where it failed, then the
+// served name; both when both apply.
+func TestUnservedReason(t *testing.T) {
+	t.Parallel()
+	const (
+		notRunning = "The model isn't running on any cluster it's placed on."
+		served     = `The model's deployment serves it as "facebook/opt-125m", but MaaS lists it as "granite", so requests through MaaS can't reach it. Update the model to serve it as "granite"; any update does this.`
+	)
+	cluster := func(name string, state aigridv1.ModelDeploymentState) *aigridv1.ModelClusterStatus {
+		return &aigridv1.ModelClusterStatus{Cluster: name, Deployment: state}
+	}
+	model := func(name string) *aigridv1.Model {
+		return &aigridv1.Model{Id: "granite", Spec: &aigridv1.ModelSpec{Model: &aigridv1.ModelSource{Name: name}}}
+	}
+	running := cluster("site-a", aigridv1.ModelDeploymentState_MODEL_DEPLOYMENT_STATE_RUNNING)
+	starting := cluster("site-a", aigridv1.ModelDeploymentState_MODEL_DEPLOYMENT_STATE_STARTING)
+	unreported := cluster("site-b", aigridv1.ModelDeploymentState_MODEL_DEPLOYMENT_STATE_UNSPECIFIED)
+	failed := cluster("site-c", aigridv1.ModelDeploymentState_MODEL_DEPLOYMENT_STATE_FAILED)
+	failedToo := cluster("site-e", aigridv1.ModelDeploymentState_MODEL_DEPLOYMENT_STATE_FAILED)
+	stopped := cluster("site-d", aigridv1.ModelDeploymentState_MODEL_DEPLOYMENT_STATE_STOPPED)
+	// Argo CD couldn't apply a start: failed, as status.deployment counts it.
+	syncFailed := &aigridv1.ModelClusterStatus{Cluster: "site-d",
+		Deployment: aigridv1.ModelDeploymentState_MODEL_DEPLOYMENT_STATE_STOPPED, Sync: aigridv1.ModelSyncState_MODEL_SYNC_STATE_FAILED}
+	// The cluster's Application doesn't list it yet: no report, not a fault.
+	notApplied := &aigridv1.ModelClusterStatus{Cluster: "site-b", Sync: aigridv1.ModelSyncState_MODEL_SYNC_STATE_OUT_OF_SYNC}
+	for name, tc := range map[string]struct {
+		model  *aigridv1.Model
+		placed []*aigridv1.ModelClusterStatus
+		want   string
+	}{
+		"running as its id":       {model("granite"), []*aigridv1.ModelClusterStatus{stopped, running}, ""},
+		"running, no name stored": {model(""), []*aigridv1.ModelClusterStatus{running}, ""},
+		"starting":                {model("granite"), []*aigridv1.ModelClusterStatus{starting}, notRunning + " It's starting on site-a."},
+		"not reported yet":        {model("granite"), []*aigridv1.ModelClusterStatus{unreported}, notRunning + " There's no report from site-b yet."},
+		"not applied yet":         {model("granite"), []*aigridv1.ModelClusterStatus{notApplied}, notRunning + " There's no report from site-b yet."},
+		"failed": {model("granite"), []*aigridv1.ModelClusterStatus{failed},
+			notRunning + " It failed on site-c. Check the model's deployment there."},
+		"failed on two": {model("granite"), []*aigridv1.ModelClusterStatus{failed, failedToo},
+			notRunning + " It failed on site-c, site-e. Check the model's deployment there."},
+		"stopped":     {model("granite"), []*aigridv1.ModelClusterStatus{stopped}, notRunning + " It's stopped on site-d."},
+		"sync failed": {model("granite"), []*aigridv1.ModelClusterStatus{syncFailed}, notRunning + " It failed on site-d. Check the model's deployment there."},
+		"starting and failed": {model("granite"), []*aigridv1.ModelClusterStatus{starting, failed},
+			notRunning + " It failed on site-c. Check the model's deployment there. It's starting on site-a."},
+		"every state": {model("granite"), []*aigridv1.ModelClusterStatus{starting, unreported, failed, stopped},
+			notRunning + " It failed on site-c. Check the model's deployment there. It's starting on site-a. There's no report from site-b yet. It's stopped on site-d."},
+		"no placed cluster":    {model("granite"), nil, notRunning},
+		"running another name": {model("facebook/opt-125m"), []*aigridv1.ModelClusterStatus{running}, served},
+		"another name and not running": {model("facebook/opt-125m"), []*aigridv1.ModelClusterStatus{stopped},
+			notRunning + " It's stopped on site-d. " + served},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			if got := unservedReason(tc.model, tc.placed); got != tc.want {
+				t.Errorf("unservedReason() = %q, want %q", got, tc.want)
 			}
 		})
 	}

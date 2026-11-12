@@ -626,8 +626,7 @@ func (r modelReports) apply(current *gitModel) {
 		status.Message += "; no ingress cluster has reported the MaaSModelRef"
 	}
 	// MaaS forwards the id tenants send, so a deployment still serving an older name serves no one.
-	servesID := servesItsID(current.model)
-	if !servesID {
+	if !servesItsID(current.model) {
 		served := fmt.Sprintf("serves %q while MaaS lists it as %q; update the model to serve it as its id",
 			current.model.GetSpec().GetModel().GetName(), id)
 		if status.Message == "" {
@@ -643,9 +642,7 @@ func (r modelReports) apply(current *gitModel) {
 	status.Ingress = ingressStatus
 	status.Deployment = deploymentSummary(placedStatus)
 	status.State = modelRollout(placedStatus)
-	status.Maas = maasSummary(ingressStatus, servesID && slices.ContainsFunc(placedStatus, func(cluster *aigridv1.ModelClusterStatus) bool {
-		return cluster.GetDeployment() == aigridv1.ModelDeploymentState_MODEL_DEPLOYMENT_STATE_RUNNING
-	}))
+	status.Maas, status.MaasMessage = maasSummary(ingressStatus, unservedReason(current.model, placedStatus))
 	switch {
 	case anyIngress && len(failed) == 0 && len(notReady) == 0 && len(stopped) == 0 && len(noReport) == 0:
 		status.Phase = aigridv1.ModelPhase_MODEL_PHASE_READY
@@ -930,13 +927,14 @@ func allSynced(placed []*aigridv1.ModelClusterStatus) bool {
 
 // maasSummary sums the ingress clusters' MaaS states, worst first: FAILED;
 // AWAITING_SUBSCRIPTION_AND_BACKEND; CONFIGURING_ROUTING, also while one
-// hasn't reported; AWAITING_SUBSCRIPTION; AVAILABLE. While serving is
-// false, AVAILABLE and CONFIGURING_ROUTING are UNAVAILABLE: MaaS checks only
-// the route, so it can't see that no placed cluster serves the model, and a
-// model stopped or failed everywhere would otherwise read "configuring
-// routing" for good (MaaS says "Governed but backend is not ready" then).
-// UNSPECIFIED while none has reported.
-func maasSummary(ingress []*aigridv1.ModelIngressStatus, serving bool) aigridv1.ModelMaasState {
+// hasn't reported; AWAITING_SUBSCRIPTION; AVAILABLE. While unserved (from
+// unservedReason) is set, AVAILABLE and CONFIGURING_ROUTING are UNAVAILABLE,
+// with unserved as the message: MaaS checks only the route, so it can't see
+// that no placed cluster serves the model, and a model stopped or failed
+// everywhere would otherwise read "configuring routing" for good (MaaS says
+// "Governed but backend is not ready" then). UNSPECIFIED while none has
+// reported. The message is empty unless the state is UNAVAILABLE.
+func maasSummary(ingress []*aigridv1.ModelIngressStatus, unserved string) (aigridv1.ModelMaasState, string) {
 	rank := map[aigridv1.ModelMaasState]int{
 		aigridv1.ModelMaasState_MODEL_MAAS_STATE_AVAILABLE:                         0,
 		aigridv1.ModelMaasState_MODEL_MAAS_STATE_AWAITING_SUBSCRIPTION:             1,
@@ -958,12 +956,61 @@ func maasSummary(ingress []*aigridv1.ModelIngressStatus, serving bool) aigridv1.
 	}
 	switch {
 	case !reported:
-		return aigridv1.ModelMaasState_MODEL_MAAS_STATE_UNSPECIFIED
-	case !serving && (worst == aigridv1.ModelMaasState_MODEL_MAAS_STATE_AVAILABLE ||
+		return aigridv1.ModelMaasState_MODEL_MAAS_STATE_UNSPECIFIED, ""
+	case unserved != "" && (worst == aigridv1.ModelMaasState_MODEL_MAAS_STATE_AVAILABLE ||
 		worst == aigridv1.ModelMaasState_MODEL_MAAS_STATE_CONFIGURING_ROUTING):
-		return aigridv1.ModelMaasState_MODEL_MAAS_STATE_UNAVAILABLE
+		return aigridv1.ModelMaasState_MODEL_MAAS_STATE_UNAVAILABLE, unserved
 	}
-	return worst
+	return worst, ""
+}
+
+// unservedReason says why no placed cluster serves the model under the id MaaS
+// lists it as, for status.maas_message, or "" when one does: none runs it, or
+// its deployment serves another name (servesItsID), or both. Each is in full
+// sentences, as the console shows it. With none running it says where it
+// failed (its deployment or its sync, as deploymentSummary counts it), is
+// starting, hasn't reported yet or is stopped, worst first, and asks for a
+// check only where it failed: a start, or a stop, is no fault.
+func unservedReason(model *aigridv1.Model, placed []*aigridv1.ModelClusterStatus) string {
+	var reasons []string
+	if !slices.ContainsFunc(placed, func(cluster *aigridv1.ModelClusterStatus) bool {
+		return cluster.GetDeployment() == aigridv1.ModelDeploymentState_MODEL_DEPLOYMENT_STATE_RUNNING
+	}) {
+		var failed, starting, noReport, stopped []string
+		for _, c := range placed {
+			switch {
+			case c.GetSync() == aigridv1.ModelSyncState_MODEL_SYNC_STATE_FAILED ||
+				c.GetDeployment() == aigridv1.ModelDeploymentState_MODEL_DEPLOYMENT_STATE_FAILED:
+				failed = append(failed, c.GetCluster())
+			case c.GetDeployment() == aigridv1.ModelDeploymentState_MODEL_DEPLOYMENT_STATE_STARTING:
+				starting = append(starting, c.GetCluster())
+			case c.GetDeployment() == aigridv1.ModelDeploymentState_MODEL_DEPLOYMENT_STATE_STOPPED:
+				stopped = append(stopped, c.GetCluster())
+			default:
+				noReport = append(noReport, c.GetCluster())
+			}
+		}
+		reasons = append(reasons, "The model isn't running on any cluster it's placed on.")
+		if len(failed) > 0 {
+			reasons = append(reasons, "It failed on "+strings.Join(failed, ", ")+". Check the model's deployment there.")
+		}
+		if len(starting) > 0 {
+			reasons = append(reasons, "It's starting on "+strings.Join(starting, ", ")+".")
+		}
+		if len(noReport) > 0 {
+			reasons = append(reasons, "There's no report from "+strings.Join(noReport, ", ")+" yet.")
+		}
+		if len(stopped) > 0 {
+			reasons = append(reasons, "It's stopped on "+strings.Join(stopped, ", ")+".")
+		}
+	}
+	if !servesItsID(model) {
+		name := servedModelName(model)
+		reasons = append(reasons, fmt.Sprintf(
+			"The model's deployment serves it as %q, but MaaS lists it as %q, so requests through MaaS can't reach it. Update the model to serve it as %q; any update does this.",
+			model.GetSpec().GetModel().GetName(), name, name))
+	}
+	return strings.Join(reasons, " ")
 }
 
 // clusterReports says what one cluster reported about the model, for example
