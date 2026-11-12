@@ -273,8 +273,12 @@ func (x *SubscriptionsGetResponse) GetModelRegistrations() []*ModelRegistration 
 }
 
 type SubscriptionsCreateRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Object        *Subscription          `protobuf:"bytes,1,opt,name=object,proto3" json:"object,omitempty"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// The backend appends a short generated suffix to object.id (or
+	// object.metadata.name, or "sub" when both are empty) and returns the final
+	// Subscription identifier. The human-readable name remains
+	// metadata.annotations["openshift.io/display-name"].
+	Object        *Subscription `protobuf:"bytes,1,opt,name=object,proto3" json:"object,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }

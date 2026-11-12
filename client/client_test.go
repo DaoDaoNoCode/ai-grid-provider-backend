@@ -8,6 +8,7 @@ import (
 	"github.com/osac-project/ai-grid-provider-backend/gen/ai_grid/v1/aigridv1connect"
 	"net"
 	"net/http"
+	"regexp"
 	"testing"
 
 	clientpkg "github.com/osac-project/ai-grid-provider-backend/client"
@@ -322,11 +323,12 @@ func TestClientSubscriptionsCRUD(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateSubscription() error = %v", err)
 	}
-	if created.GetId() != "free-subscription" {
-		t.Fatalf("CreateSubscription id = %q", created.GetId())
+	id := created.GetId()
+	if !regexp.MustCompile(`^free-subscription-[a-z0-9]{6}$`).MatchString(id) {
+		t.Fatalf("CreateSubscription id = %q, want the base and a generated suffix", id)
 	}
 
-	got, err := c.GetSubscription(ctx, "free-subscription")
+	got, err := c.GetSubscription(ctx, id)
 	if err != nil {
 		t.Fatalf("GetSubscription() error = %v", err)
 	}
@@ -343,10 +345,10 @@ func TestClientSubscriptionsCRUD(t *testing.T) {
 		t.Fatalf("updated priority = %d", updated.GetSpec().GetPriority())
 	}
 
-	if err := c.DeleteSubscription(ctx, "free-subscription"); err != nil {
+	if err := c.DeleteSubscription(ctx, id); err != nil {
 		t.Fatalf("DeleteSubscription() error = %v", err)
 	}
-	_, err = c.GetSubscription(ctx, "free-subscription")
+	_, err = c.GetSubscription(ctx, id)
 	if status.Code(err) != codes.NotFound {
 		t.Fatalf("Get after delete code = %v (%v)", status.Code(err), err)
 	}

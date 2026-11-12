@@ -315,10 +315,14 @@ func TestModelsGitDeleteRacesSubscribe(t *testing.T) {
 		t.Fatalf("Create model error = %v", err)
 	}
 
+	var subscriptionID string
 	writer.race = func() {
-		if _, err := subscriptions.Create(ctx, &aigridv1.SubscriptionsCreateRequest{Object: gitSampleSubscription("team-a")}); err != nil {
+		created, err := subscriptions.Create(ctx, &aigridv1.SubscriptionsCreateRequest{Object: gitSampleSubscription("team-a")})
+		if err != nil {
 			t.Errorf("racing subscription Create() error = %v", err)
+			return
 		}
+		subscriptionID = created.GetObject().GetId()
 	}
 	_, err := models.Delete(ctx, &aigridv1.ModelsDeleteRequest{Id: "sim-model"})
 	assertConnectCode(t, err, connect.CodeFailedPrecondition)
@@ -326,7 +330,7 @@ func TestModelsGitDeleteRacesSubscribe(t *testing.T) {
 		t.Fatalf("Get model after the refused delete error = %v", err)
 	}
 
-	if _, err := subscriptions.Delete(ctx, &aigridv1.SubscriptionsDeleteRequest{Id: "team-a"}); err != nil {
+	if _, err := subscriptions.Delete(ctx, &aigridv1.SubscriptionsDeleteRequest{Id: subscriptionID}); err != nil {
 		t.Fatalf("Delete subscription error = %v", err)
 	}
 	racingSubs := mustGitSubscriptionsServer(t, writer)
@@ -337,8 +341,13 @@ func TestModelsGitDeleteRacesSubscribe(t *testing.T) {
 	}
 	_, err = racingSubs.Create(ctx, &aigridv1.SubscriptionsCreateRequest{Object: gitSampleSubscription("team-b")})
 	assertConnectCode(t, err, connect.CodeFailedPrecondition)
-	_, err = racingSubs.Get(ctx, &aigridv1.SubscriptionsGetRequest{Id: "team-b"})
-	assertConnectCode(t, err, connect.CodeNotFound)
+	list, err := racingSubs.List(ctx, &aigridv1.SubscriptionsListRequest{})
+	if err != nil {
+		t.Fatalf("List after refused Create error = %v", err)
+	}
+	if list.GetTotal() != 0 {
+		t.Fatalf("List after refused Create = %v, want no subscriptions", list.GetItems())
+	}
 }
 
 func mustGitModelsServer(t *testing.T, writer gitops.Writer) *ModelsServer {

@@ -7,6 +7,7 @@ import (
 	"errors"
 	"log/slog"
 	"path"
+	"regexp"
 	"slices"
 	"strings"
 	"testing"
@@ -32,7 +33,9 @@ func TestSubscriptionsGitCRUD(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Create() error = %v", err)
 	}
-	if got := created.GetObject(); got.GetId() != "team-a" || got.GetMetadata().GetVersion() != 1 {
+	id := created.GetObject().GetId()
+	assertGeneratedSubscriptionID(t, id, "team-a")
+	if got := created.GetObject(); got.GetMetadata().GetVersion() != 1 {
 		t.Fatalf("Create object id = %q, version = %d", got.GetId(), got.GetMetadata().GetVersion())
 	}
 	if got := created.GetObject().GetSpec().GetOwner().GetGroups(); !slices.Equal(got, []string{"team-a"}) {
@@ -41,11 +44,11 @@ func TestSubscriptionsGitCRUD(t *testing.T) {
 	if _, ok := created.GetObject().GetMetadata().GetAnnotations()[gitVersionAnnotation]; ok {
 		t.Fatal("Create returned the version annotation")
 	}
-	if created.GetAuthPolicy().GetId() != "team-a-policy" {
+	if created.GetAuthPolicy().GetId() != id+"-policy" {
 		t.Fatalf("Create auth_policy = %v", created.GetAuthPolicy())
 	}
 
-	sub, policy := readGitSubscriptionFile(t, writer, "team-a")
+	sub, policy := readGitSubscriptionFile(t, writer, id)
 	if sub.GetNamespace() != "models-as-a-service" || sub.GetAnnotations()[gitVersionAnnotation] != "1" {
 		t.Fatalf("file MaaSSubscription namespace = %q, annotations = %v", sub.GetNamespace(), sub.GetAnnotations())
 	}
@@ -58,14 +61,14 @@ func TestSubscriptionsGitCRUD(t *testing.T) {
 	if _, ok := created.GetObject().GetMetadata().GetAnnotations()[retainAPIKeysOnDeleteAnnotation]; ok {
 		t.Fatal("Create returned the retain-api-keys annotation")
 	}
-	if policy.GetName() != "team-a-policy" || policy.GetNamespace() != "models-as-a-service" || policy.GetLabels()[managedByLabelKey] != managedByLabelValue {
+	if policy.GetName() != id+"-policy" || policy.GetNamespace() != "models-as-a-service" || policy.GetLabels()[managedByLabelKey] != managedByLabelValue {
 		t.Fatalf("file policy name = %q, namespace = %q, labels = %v", policy.GetName(), policy.GetNamespace(), policy.GetLabels())
 	}
 	if refs := policy.GetOwnerReferences(); len(refs) != 0 {
 		t.Fatalf("file policy ownerReferences = %v, want none: Argo CD prunes it with the file", refs)
 	}
 
-	got, err := srv.Get(ctx, &aigridv1.SubscriptionsGetRequest{Id: "team-a"})
+	got, err := srv.Get(ctx, &aigridv1.SubscriptionsGetRequest{Id: id})
 	if err != nil {
 		t.Fatalf("Get() error = %v", err)
 	}
@@ -79,7 +82,7 @@ func TestSubscriptionsGitCRUD(t *testing.T) {
 		t.Fatalf("Get model_registrations = %v, want one per model ref, saved to Git", regs)
 	}
 
-	update := gitSampleSubscription("team-a")
+	update := gitSampleSubscription(id)
 	update.Metadata.Version = 1
 	update.Spec.Priority = 20
 	updated, err := srv.Update(ctx, &aigridv1.SubscriptionsUpdateRequest{
@@ -93,7 +96,7 @@ func TestSubscriptionsGitCRUD(t *testing.T) {
 	if updated.GetObject().GetMetadata().GetVersion() != 2 || updated.GetObject().GetSpec().GetPriority() != 20 {
 		t.Fatalf("Update version = %d, priority = %d", updated.GetObject().GetMetadata().GetVersion(), updated.GetObject().GetSpec().GetPriority())
 	}
-	if sub, _ := readGitSubscriptionFile(t, writer, "team-a"); sub.GetAnnotations()[retainAPIKeysOnDeleteAnnotation] != "true" {
+	if sub, _ := readGitSubscriptionFile(t, writer, id); sub.GetAnnotations()[retainAPIKeysOnDeleteAnnotation] != "true" {
 		t.Fatalf("file MaaSSubscription annotations after Update = %v, want %s: \"true\"", sub.GetAnnotations(), retainAPIKeysOnDeleteAnnotation)
 	}
 
@@ -109,18 +112,168 @@ func TestSubscriptionsGitCRUD(t *testing.T) {
 	}
 
 	// A stale resource_version is Aborted and leaves the file.
-	_, err = srv.Delete(ctx, &aigridv1.SubscriptionsDeleteRequest{Id: "team-a", ResourceVersion: 1})
+	_, err = srv.Delete(ctx, &aigridv1.SubscriptionsDeleteRequest{Id: id, ResourceVersion: 1})
 	assertConnectCode(t, err, connect.CodeAborted)
-	if _, err := srv.Delete(ctx, &aigridv1.SubscriptionsDeleteRequest{Id: "team-a", ResourceVersion: 2}); err != nil {
+	if _, err := srv.Delete(ctx, &aigridv1.SubscriptionsDeleteRequest{Id: id, ResourceVersion: 2}); err != nil {
 		t.Fatalf("Delete() error = %v", err)
 	}
-	_, err = srv.Get(ctx, &aigridv1.SubscriptionsGetRequest{Id: "team-a"})
+	_, err = srv.Get(ctx, &aigridv1.SubscriptionsGetRequest{Id: id})
 	assertConnectCode(t, err, connect.CodeNotFound)
 
-	want := []string{"subscriptions: create team-a", "subscriptions: update team-a", "subscriptions: delete team-a"}
+	want := []string{"subscriptions: create " + id, "subscriptions: update " + id, "subscriptions: delete " + id}
 	if got := writer.Messages(); !slices.Equal(got, want) {
 		t.Fatalf("commit messages = %v, want %v", got, want)
 	}
+}
+
+func TestSubscriptionsGitCreateGeneratesID(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	writer := gitops.NewMemoryWriter(gitModelSeed("sim-model"))
+	srv := mustGitSubscriptionsServer(t, writer)
+
+	newSubscription := func(base string) *aigridv1.Subscription {
+		object := gitSampleSubscription("team-a")
+		object.Id = base
+		object.Metadata.Name = base
+		object.Metadata.Annotations = map[string]string{annotationDisplayName: "Team A"}
+		return object
+	}
+
+	first, err := srv.Create(ctx, &aigridv1.SubscriptionsCreateRequest{Object: newSubscription("team-a")})
+	if err != nil {
+		t.Fatalf("Create(first generated id) error = %v", err)
+	}
+	second, err := srv.Create(ctx, &aigridv1.SubscriptionsCreateRequest{Object: newSubscription("team-a")})
+	if err != nil {
+		t.Fatalf("Create(second generated id) error = %v", err)
+	}
+	defaultBase, err := srv.Create(ctx, &aigridv1.SubscriptionsCreateRequest{Object: newSubscription("")})
+	if err != nil {
+		t.Fatalf("Create(default base) error = %v", err)
+	}
+
+	firstID := first.GetObject().GetId()
+	secondID := second.GetObject().GetId()
+	assertGeneratedSubscriptionID(t, firstID, "team-a")
+	assertGeneratedSubscriptionID(t, secondID, "team-a")
+	assertGeneratedSubscriptionID(t, defaultBase.GetObject().GetId(), "sub")
+	if firstID == secondID {
+		t.Fatalf("Create generated the same id twice: %q", firstID)
+	}
+	for _, response := range []*aigridv1.SubscriptionsCreateResponse{first, second, defaultBase} {
+		object := response.GetObject()
+		if object.GetMetadata().GetName() != object.GetId() {
+			t.Fatalf("Create metadata.name = %q, want id %q", object.GetMetadata().GetName(), object.GetId())
+		}
+		if object.GetMetadata().GetAnnotations()[annotationDisplayName] != "Team A" {
+			t.Fatalf("Create display-name annotation = %v", object.GetMetadata().GetAnnotations())
+		}
+		if response.GetAuthPolicy().GetId() != object.GetId()+"-policy" {
+			t.Fatalf("Create auth_policy id = %q, want %q", response.GetAuthPolicy().GetId(), object.GetId()+"-policy")
+		}
+	}
+}
+
+func assertGeneratedSubscriptionID(t *testing.T, id, base string) {
+	t.Helper()
+	if !regexp.MustCompile(`^` + regexp.QuoteMeta(base) + `-[a-z0-9]{6}$`).MatchString(id) {
+		t.Fatalf("generated id = %q, want %q followed by a short generated suffix", id, base)
+	}
+}
+
+func TestGeneratedSubscriptionSuffixUsesFullAlphabet(t *testing.T) {
+	t.Parallel()
+	suffixRE := regexp.MustCompile(`^[a-z0-9]{6}$`)
+	alphabet := "abcdefghijklmnopqrstuvwxyz0123456789"
+	seen := make(map[rune]struct{}, len(alphabet))
+	for range 10000 {
+		suffix, err := generatedSubscriptionSuffix()
+		if err != nil {
+			t.Fatalf("generatedSubscriptionSuffix() error = %v", err)
+		}
+		if !suffixRE.MatchString(suffix) {
+			t.Fatalf("generatedSubscriptionSuffix() = %q, want six lowercase letters or digits", suffix)
+		}
+		for _, character := range suffix {
+			seen[character] = struct{}{}
+		}
+	}
+	for _, character := range alphabet {
+		if _, ok := seen[character]; !ok {
+			t.Fatalf("generatedSubscriptionSuffix() never used alphabet character %q", character)
+		}
+	}
+}
+
+func TestSubscriptionsGitCreateRetriesGeneratedIDCollision(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	writer := &collidingSubscriptionWriter{
+		MemoryWriter: gitops.NewMemoryWriter(gitModelSeed("sim-model")),
+		collisions:   1,
+	}
+	srv := mustGitSubscriptionsServer(t, writer)
+
+	created, err := srv.Create(ctx, &aigridv1.SubscriptionsCreateRequest{Object: gitSampleSubscription("team-a")})
+	if err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	assertGeneratedSubscriptionID(t, created.GetObject().GetId(), "team-a")
+	if writer.collisions != 0 {
+		t.Fatalf("unconsumed simulated collisions = %d, want 0", writer.collisions)
+	}
+}
+
+func TestSubscriptionsGitCreateGeneratedIDCollisionGivesUp(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	writer := &collidingSubscriptionWriter{
+		MemoryWriter: gitops.NewMemoryWriter(gitModelSeed("sim-model")),
+		collisions:   subscriptionGeneratedSuffixAttempts,
+	}
+	srv := mustGitSubscriptionsServer(t, writer)
+
+	_, err := srv.Create(ctx, &aigridv1.SubscriptionsCreateRequest{Object: gitSampleSubscription("team-a")})
+	assertConnectCode(t, err, connect.CodeInternal)
+	if writer.collisions != 0 {
+		t.Fatalf("unconsumed simulated collisions = %d, want 0", writer.collisions)
+	}
+}
+
+func TestSubscriptionsGitCreateBaseValidation(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	writer := gitops.NewMemoryWriter(gitModelSeed("sim-model"))
+	srv := mustGitSubscriptionsServer(t, writer)
+
+	nameOnly := gitSampleSubscription("team-name")
+	nameOnly.Id = ""
+	nameOnly.Metadata.Name = "team-name"
+	created, err := srv.Create(ctx, &aigridv1.SubscriptionsCreateRequest{Object: nameOnly})
+	if err != nil {
+		t.Fatalf("Create(metadata.name base) error = %v", err)
+	}
+	assertGeneratedSubscriptionID(t, created.GetObject().GetId(), "team-name")
+
+	maxBase := gitSampleSubscription(strings.Repeat("a", maxSubscriptionBaseIDLen))
+	created, err = srv.Create(ctx, &aigridv1.SubscriptionsCreateRequest{Object: maxBase})
+	if err != nil {
+		t.Fatalf("Create(max base) error = %v", err)
+	}
+	assertGeneratedSubscriptionID(t, created.GetObject().GetId(), strings.Repeat("a", maxSubscriptionBaseIDLen))
+	if got := created.GetAuthPolicy().GetId(); len(got) != 63 {
+		t.Fatalf("Create(max base) auth_policy id = %q, want 63 characters", got)
+	}
+
+	mismatched := gitSampleSubscription("team-a")
+	mismatched.Metadata.Name = "team-b"
+	_, err = srv.Create(ctx, &aigridv1.SubscriptionsCreateRequest{Object: mismatched})
+	assertConnectCode(t, err, connect.CodeInvalidArgument)
+
+	longBase := gitSampleSubscription(strings.Repeat("a", maxSubscriptionBaseIDLen+1))
+	_, err = srv.Create(ctx, &aigridv1.SubscriptionsCreateRequest{Object: longBase})
+	assertConnectCode(t, err, connect.CodeInvalidArgument)
 }
 
 // A zero resource_version skips the version check, as on the cluster.
@@ -128,13 +281,15 @@ func TestSubscriptionsGitDeleteWithoutVersion(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	srv := mustGitSubscriptionsServer(t, gitops.NewMemoryWriter(gitModelSeed("sim-model")))
-	if _, err := srv.Create(ctx, &aigridv1.SubscriptionsCreateRequest{Object: gitSampleSubscription("team-a")}); err != nil {
+	created, err := srv.Create(ctx, &aigridv1.SubscriptionsCreateRequest{Object: gitSampleSubscription("team-a")})
+	if err != nil {
 		t.Fatalf("Create() error = %v", err)
 	}
-	if _, err := srv.Delete(ctx, &aigridv1.SubscriptionsDeleteRequest{Id: "team-a"}); err != nil {
+	id := created.GetObject().GetId()
+	if _, err := srv.Delete(ctx, &aigridv1.SubscriptionsDeleteRequest{Id: id}); err != nil {
 		t.Fatalf("Delete() error = %v", err)
 	}
-	_, err := srv.Delete(ctx, &aigridv1.SubscriptionsDeleteRequest{Id: "team-a"})
+	_, err = srv.Delete(ctx, &aigridv1.SubscriptionsDeleteRequest{Id: id})
 	assertConnectCode(t, err, connect.CodeNotFound)
 }
 
@@ -143,11 +298,13 @@ func TestSubscriptionsGitUpdateMasks(t *testing.T) {
 	ctx := context.Background()
 	writer := gitops.NewMemoryWriter(gitModelSeed("sim-model"))
 	srv := mustGitSubscriptionsServer(t, writer)
-	if _, err := srv.Create(ctx, &aigridv1.SubscriptionsCreateRequest{Object: gitSampleSubscription("team-a")}); err != nil {
+	created, err := srv.Create(ctx, &aigridv1.SubscriptionsCreateRequest{Object: gitSampleSubscription("team-a")})
+	if err != nil {
 		t.Fatalf("Create() error = %v", err)
 	}
+	id := created.GetObject().GetId()
 
-	labelsOnly := &aigridv1.Subscription{Id: "team-a", Metadata: &aigridv1.Metadata{Labels: map[string]string{"tier": "gold"}}}
+	labelsOnly := &aigridv1.Subscription{Id: id, Metadata: &aigridv1.Metadata{Labels: map[string]string{"tier": "gold"}}}
 	updated, err := srv.Update(ctx, &aigridv1.SubscriptionsUpdateRequest{
 		Object:     labelsOnly,
 		UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"metadata.labels"}},
@@ -163,7 +320,7 @@ func TestSubscriptionsGitUpdateMasks(t *testing.T) {
 	}
 
 	// A single spec field leaves the rest of the spec.
-	priority := &aigridv1.Subscription{Id: "team-a", Spec: &aigridv1.SubscriptionSpec{Priority: 30}}
+	priority := &aigridv1.Subscription{Id: id, Spec: &aigridv1.SubscriptionSpec{Priority: 30}}
 	updated, err = srv.Update(ctx, &aigridv1.SubscriptionsUpdateRequest{
 		Object:     priority,
 		UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.priority"}},
@@ -213,13 +370,19 @@ func TestSubscriptionsGitValidation(t *testing.T) {
 		assertConnectCode(t, err, connect.CodeInvalidArgument)
 	}
 
-	if _, err := srv.Create(ctx, &aigridv1.SubscriptionsCreateRequest{Object: gitSampleSubscription("team-a")}); err != nil {
+	first, err := srv.Create(ctx, &aigridv1.SubscriptionsCreateRequest{Object: gitSampleSubscription("team-a")})
+	if err != nil {
 		t.Fatalf("Create() error = %v", err)
 	}
-	_, err = srv.Create(ctx, &aigridv1.SubscriptionsCreateRequest{Object: gitSampleSubscription("team-a")})
-	assertConnectCode(t, err, connect.CodeAlreadyExists)
+	second, err := srv.Create(ctx, &aigridv1.SubscriptionsCreateRequest{Object: gitSampleSubscription("team-a")})
+	if err != nil {
+		t.Fatalf("Create(same base) error = %v", err)
+	}
+	if first.GetObject().GetId() == second.GetObject().GetId() {
+		t.Fatalf("Create(same base) reused id %q", first.GetObject().GetId())
+	}
 
-	otherOrg := gitSampleSubscription("team-a")
+	otherOrg := gitSampleSubscription(first.GetObject().GetId())
 	otherOrg.Spec.Organization.Id = "other-org"
 	_, err = srv.Update(ctx, &aigridv1.SubscriptionsUpdateRequest{Object: otherOrg})
 	assertConnectCode(t, err, connect.CodeInvalidArgument)
@@ -297,11 +460,12 @@ func TestSubscriptionsGitTokenWindow(t *testing.T) {
 			_, err = srv.Create(ctx, &aigridv1.SubscriptionsCreateRequest{Object: create})
 			check("Create", err, 0)
 
-			if _, err := srv.Create(ctx, &aigridv1.SubscriptionsCreateRequest{Object: gitSampleSubscription("team-b")}); err != nil {
+			created, err := srv.Create(ctx, &aigridv1.SubscriptionsCreateRequest{Object: gitSampleSubscription("team-b")})
+			if err != nil {
 				t.Fatalf("Create(team-b) error = %v", err)
 			}
 			commits := len(writer.Messages())
-			update := gitSampleSubscription("team-b")
+			update := gitSampleSubscription(created.GetObject().GetId())
 			update.Spec.ModelRefs[0].TokenRateLimits[0].Window = tc.window
 			_, err = srv.Update(ctx, &aigridv1.SubscriptionsUpdateRequest{
 				Object:     update,
@@ -357,7 +521,7 @@ func TestSubscriptionsGitOwnerGroups(t *testing.T) {
 			if got := created.GetObject().GetSpec().GetOwner().GetGroups(); !slices.Equal(got, tc.wantAPI) {
 				t.Fatalf("Create owner.groups = %v, want %v", got, tc.wantAPI)
 			}
-			sub, policy := readGitSubscriptionFile(t, writer, "team-a")
+			sub, policy := readGitSubscriptionFile(t, writer, created.GetObject().GetId())
 			if got := groupNames(t, sub, "spec", "owner", "groups"); !slices.Equal(got, tc.wantFile) {
 				t.Fatalf("file owner.groups = %v, want %v", got, tc.wantFile)
 			}
@@ -373,13 +537,14 @@ func TestSubscriptionsGitUpdateRejectsForeignGroup(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	srv := mustGitSubscriptionsServer(t, gitops.NewMemoryWriter(gitModelSeed("sim-model")))
-	if _, err := srv.Create(ctx, &aigridv1.SubscriptionsCreateRequest{Object: gitSampleSubscription("team-a")}); err != nil {
+	created, err := srv.Create(ctx, &aigridv1.SubscriptionsCreateRequest{Object: gitSampleSubscription("team-a")})
+	if err != nil {
 		t.Fatalf("Create() error = %v", err)
 	}
-	update := &aigridv1.Subscription{Id: "team-a", Spec: &aigridv1.SubscriptionSpec{
+	update := &aigridv1.Subscription{Id: created.GetObject().GetId(), Spec: &aigridv1.SubscriptionSpec{
 		Owner: &aigridv1.SubscriptionOwner{Groups: []string{"other-org/team-a"}},
 	}}
-	_, err := srv.Update(ctx, &aigridv1.SubscriptionsUpdateRequest{Object: update, UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.owner"}}})
+	_, err = srv.Update(ctx, &aigridv1.SubscriptionsUpdateRequest{Object: update, UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.owner"}}})
 	assertConnectCode(t, err, connect.CodeInvalidArgument)
 }
 
@@ -393,12 +558,14 @@ func TestSubscriptionsGitConcurrentWrite(t *testing.T) {
 	writer := &racingWriter{MemoryWriter: gitops.NewMemoryWriter(gitModelSeed("sim-model"))}
 	srv := mustGitSubscriptionsServer(t, writer)
 	other := mustGitSubscriptionsServer(t, writer.MemoryWriter)
-	if _, err := srv.Create(ctx, &aigridv1.SubscriptionsCreateRequest{Object: gitSampleSubscription("team-a")}); err != nil {
+	created, err := srv.Create(ctx, &aigridv1.SubscriptionsCreateRequest{Object: gitSampleSubscription("team-a")})
+	if err != nil {
 		t.Fatalf("Create() error = %v", err)
 	}
+	id := created.GetObject().GetId()
 	otherWrite := func(mask string, set func(*aigridv1.Subscription)) func() {
 		return func() {
-			object := gitSampleSubscription("team-a")
+			object := gitSampleSubscription(id)
 			set(object)
 			if _, err := other.Update(ctx, &aigridv1.SubscriptionsUpdateRequest{
 				Object:     object,
@@ -410,10 +577,10 @@ func TestSubscriptionsGitConcurrentWrite(t *testing.T) {
 	}
 
 	writer.race = otherWrite("spec.priority", func(s *aigridv1.Subscription) { s.Spec.Priority = 20 })
-	update := gitSampleSubscription("team-a")
+	update := gitSampleSubscription(id)
 	update.Metadata.Version = 1
 	update.Spec.Priority = 30
-	_, err := srv.Update(ctx, &aigridv1.SubscriptionsUpdateRequest{
+	_, err = srv.Update(ctx, &aigridv1.SubscriptionsUpdateRequest{
 		Object:     update,
 		UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.priority"}},
 		Lock:       true,
@@ -422,7 +589,7 @@ func TestSubscriptionsGitConcurrentWrite(t *testing.T) {
 	if errors.Is(err, gitops.ErrConflict) {
 		t.Fatalf("Update() error = %v, want the rerun's version check, not the conflict", err)
 	}
-	got, err := srv.Get(ctx, &aigridv1.SubscriptionsGetRequest{Id: "team-a"})
+	got, err := srv.Get(ctx, &aigridv1.SubscriptionsGetRequest{Id: id})
 	if err != nil {
 		t.Fatalf("Get() error = %v", err)
 	}
@@ -455,17 +622,20 @@ func TestSubscriptionsGitListFilter(t *testing.T) {
 		subscriptionsGitDir + "/README.md":                               []byte("not a subscription"),
 		path.Join(modelDeploymentGitDir("sim-model"), "deployment.yaml"): []byte("seed"),
 	}))
-	for _, id := range []string{"team-a", "team-b"} {
-		if _, err := srv.Create(ctx, &aigridv1.SubscriptionsCreateRequest{Object: gitSampleSubscription(id)}); err != nil {
-			t.Fatalf("Create(%s) error = %v", id, err)
+	ids := make([]string, 0, 2)
+	for _, base := range []string{"team-a", "team-b"} {
+		created, err := srv.Create(ctx, &aigridv1.SubscriptionsCreateRequest{Object: gitSampleSubscription(base)})
+		if err != nil {
+			t.Fatalf("Create(%s) error = %v", base, err)
 		}
+		ids = append(ids, created.GetObject().GetId())
 	}
-	filter := `this.id == "team-b"`
+	filter := `this.id == "` + ids[1] + `"`
 	list, err := srv.List(ctx, &aigridv1.SubscriptionsListRequest{Filter: &filter})
 	if err != nil {
 		t.Fatalf("List() error = %v", err)
 	}
-	if list.GetTotal() != 1 || list.GetItems()[0].GetId() != "team-b" {
+	if list.GetTotal() != 1 || list.GetItems()[0].GetId() != ids[1] {
 		t.Fatalf("List = %v", list)
 	}
 }
@@ -490,11 +660,12 @@ func TestSubscriptionsGitModelRefNamespaceDefault(t *testing.T) {
 
 	object := gitSampleSubscription("team-a")
 	object.Spec.ModelRefs[0].Namespace = ""
-	if _, err := srv.Create(context.Background(), &aigridv1.SubscriptionsCreateRequest{Object: object}); err != nil {
+	created, err := srv.Create(context.Background(), &aigridv1.SubscriptionsCreateRequest{Object: object})
+	if err != nil {
 		t.Fatalf("Create() error = %v", err)
 	}
 
-	sub, policy := readGitSubscriptionFile(t, writer, "team-a")
+	sub, policy := readGitSubscriptionFile(t, writer, created.GetObject().GetId())
 	for _, obj := range []*unstructured.Unstructured{sub, policy} {
 		refs, _, _ := unstructured.NestedSlice(obj.Object, "spec", "modelRefs")
 		if len(refs) != 1 || refs[0].(map[string]interface{})["namespace"] != "models-as-a-service" {
@@ -520,10 +691,11 @@ func TestSubscriptionsGitModelRefsMustExist(t *testing.T) {
 	_, err = srv.Create(ctx, &aigridv1.SubscriptionsCreateRequest{Object: missing})
 	assertConnectCode(t, err, connect.CodeFailedPrecondition)
 
-	if _, err := srv.Create(ctx, &aigridv1.SubscriptionsCreateRequest{Object: gitSampleSubscription("team-a")}); err != nil {
+	created, err := srv.Create(ctx, &aigridv1.SubscriptionsCreateRequest{Object: gitSampleSubscription("team-a")})
+	if err != nil {
 		t.Fatalf("Create() error = %v", err)
 	}
-	update := gitSampleSubscription("team-a")
+	update := gitSampleSubscription(created.GetObject().GetId())
 	update.Spec.ModelRefs[0].Name = "no-such-model"
 	_, err = srv.Update(ctx, &aigridv1.SubscriptionsUpdateRequest{Object: update, UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.model_refs"}}})
 	assertConnectCode(t, err, connect.CodeFailedPrecondition)
@@ -677,7 +849,7 @@ func TestSubscriptionsGitMetadataKeyAllowlist(t *testing.T) {
 		_, err = srv.Create(ctx, &aigridv1.SubscriptionsCreateRequest{Object: annotations})
 		assertConnectCode(t, err, connect.CodeInvalidArgument)
 
-		update := &aigridv1.Subscription{Id: "team-a", Metadata: &aigridv1.Metadata{Annotations: map[string]string{key: "x"}}}
+		update := &aigridv1.Subscription{Id: created.GetObject().GetId(), Metadata: &aigridv1.Metadata{Annotations: map[string]string{key: "x"}}}
 		_, err = srv.Update(ctx, &aigridv1.SubscriptionsUpdateRequest{Object: update, UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"metadata.annotations"}}})
 		assertConnectCode(t, err, connect.CodeInvalidArgument)
 	}
@@ -810,9 +982,10 @@ func TestSubscriptionsGitModelRefCatalogJoin(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Create() error = %v", err)
 	}
+	id := created.GetObject().GetId()
 	check("Create", created.GetObject())
 
-	got, err := srv.Get(ctx, &aigridv1.SubscriptionsGetRequest{Id: "team-a"})
+	got, err := srv.Get(ctx, &aigridv1.SubscriptionsGetRequest{Id: id})
 	if err != nil {
 		t.Fatalf("Get() error = %v", err)
 	}
@@ -829,8 +1002,8 @@ func TestSubscriptionsGitModelRefCatalogJoin(t *testing.T) {
 
 	// The subscriptions that use a model, as the model's page asks for them.
 	for filter, wantIDs := range map[string][]string{
-		`this.spec.model_refs.exists(r, r.model_id == "granite")`: {"team-a"},
-		`this.spec.model_refs.exists(r, r.model_id == "plain")`:   {"team-a"},
+		`this.spec.model_refs.exists(r, r.model_id == "granite")`: {id},
+		`this.spec.model_refs.exists(r, r.model_id == "plain")`:   {id},
 		`this.spec.model_refs.exists(r, r.model_id == "other")`:   nil,
 	} {
 		list, err := srv.List(ctx, &aigridv1.SubscriptionsListRequest{Filter: &filter})
@@ -846,7 +1019,7 @@ func TestSubscriptionsGitModelRefCatalogJoin(t *testing.T) {
 		}
 	}
 
-	update := proto.CloneOf(object)
+	update := proto.CloneOf(created.GetObject())
 	update.Metadata.Version = 1
 	update.Spec.Priority = 20
 	updated, err := srv.Update(ctx, &aigridv1.SubscriptionsUpdateRequest{
@@ -869,7 +1042,7 @@ func TestSubscriptionsGitModelRefCatalogJoin(t *testing.T) {
 	}
 	check("Update(no-op)", unchanged.GetObject())
 
-	sub, _ := readGitSubscriptionFile(t, writer, "team-a")
+	sub, _ := readGitSubscriptionFile(t, writer, id)
 	refs, _, _ := unstructured.NestedSlice(sub.Object, "spec", "modelRefs")
 	for i, raw := range refs {
 		for _, key := range []string{"modelId", "model_id", "displayName", "display_name", "description"} {
@@ -889,7 +1062,7 @@ func TestSubscriptionsGitModelRefCatalogJoin(t *testing.T) {
 		t.Fatalf("Update model error = %v", err)
 	}
 	want[0].DisplayName, want[0].Description = "Granite 3B v2", ""
-	got, err = srv.Get(ctx, &aigridv1.SubscriptionsGetRequest{Id: "team-a"})
+	got, err = srv.Get(ctx, &aigridv1.SubscriptionsGetRequest{Id: id})
 	if err != nil {
 		t.Fatalf("Get() after the model's update error = %v", err)
 	}
@@ -928,10 +1101,11 @@ func TestSubscriptionsGitModelIDFollowsTheCatalogEntry(t *testing.T) {
 	t.Run("no catalog entry", func(t *testing.T) {
 		t.Parallel()
 		srv := mustGitSubscriptionsServer(t, gitops.NewMemoryWriter(gitModelSeed("sim-model")))
-		if _, err := srv.Create(ctx, &aigridv1.SubscriptionsCreateRequest{Object: gitSampleSubscription("team-a")}); err != nil {
+		created, err := srv.Create(ctx, &aigridv1.SubscriptionsCreateRequest{Object: gitSampleSubscription("team-a")})
+		if err != nil {
 			t.Fatalf("Create() error = %v", err)
 		}
-		got, err := srv.Get(ctx, &aigridv1.SubscriptionsGetRequest{Id: "team-a"})
+		got, err := srv.Get(ctx, &aigridv1.SubscriptionsGetRequest{Id: created.GetObject().GetId()})
 		if err != nil {
 			t.Fatalf("Get() error = %v", err)
 		}
@@ -991,9 +1165,12 @@ func TestSubscriptionsGitBrokenCatalogEntryOnlyUnjoinsItsRefs(t *testing.T) {
 			plainOnly := gitSampleSubscription("team-b")
 			plainOnly.Spec.ModelRefs[0].Name = "plain"
 			for _, sub := range []*aigridv1.Subscription{both, plainOnly} {
-				if _, err := srv.Create(ctx, &aigridv1.SubscriptionsCreateRequest{Object: sub}); err != nil {
+				created, err := srv.Create(ctx, &aigridv1.SubscriptionsCreateRequest{Object: sub})
+				if err != nil {
 					t.Fatalf("Create(%s) error = %v", sub.GetId(), err)
 				}
+				sub.Id = created.GetObject().GetId()
+				sub.Metadata.Name = created.GetObject().GetId()
 			}
 			breakEntry(t, writer)
 
@@ -1021,12 +1198,12 @@ func TestSubscriptionsGitBrokenCatalogEntryOnlyUnjoinsItsRefs(t *testing.T) {
 			for _, item := range list.GetItems() {
 				check("List", item)
 			}
-			got, err := srv.Get(ctx, &aigridv1.SubscriptionsGetRequest{Id: "team-a"})
+			got, err := srv.Get(ctx, &aigridv1.SubscriptionsGetRequest{Id: both.GetId()})
 			if err != nil {
 				t.Fatalf("Get() error = %v, want an answer", err)
 			}
 			check("Get", got.GetObject())
-			relabel := gitSampleSubscription("team-a")
+			relabel := gitSampleSubscription(both.GetId())
 			relabel.Metadata.Labels = map[string]string{"team": "a"}
 			updated, err := srv.Update(ctx, &aigridv1.SubscriptionsUpdateRequest{
 				Object:     relabel,
@@ -1076,6 +1253,34 @@ func (w *unreadableWriter) Head(ctx context.Context) (gitops.Snapshot, error) {
 type unreadableSnapshot struct {
 	gitops.Snapshot
 	unreadable string
+}
+
+// collidingSubscriptionWriter makes the first collisions reads of a
+// Subscription path report an existing object, exercising suffix retries.
+type collidingSubscriptionWriter struct {
+	*gitops.MemoryWriter
+	collisions int
+}
+
+func (w *collidingSubscriptionWriter) Head(ctx context.Context) (gitops.Snapshot, error) {
+	head, err := w.MemoryWriter.Head(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return collidingSubscriptionSnapshot{Snapshot: head, collisions: &w.collisions}, nil
+}
+
+type collidingSubscriptionSnapshot struct {
+	gitops.Snapshot
+	collisions *int
+}
+
+func (s collidingSubscriptionSnapshot) Read(p string) ([]byte, error) {
+	if strings.HasPrefix(p, subscriptionsGitDir+"/") && *s.collisions > 0 {
+		*s.collisions--
+		return []byte("existing"), nil
+	}
+	return s.Snapshot.Read(p)
 }
 
 func (s unreadableSnapshot) Read(p string) ([]byte, error) {

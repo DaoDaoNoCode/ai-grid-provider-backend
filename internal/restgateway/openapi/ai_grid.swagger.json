@@ -598,6 +598,7 @@
         "parameters": [
           {
             "name": "object",
+            "description": "The backend appends a short generated suffix to object.id (or\nobject.metadata.name, or \"sub\" when both are empty) and returns the final\nSubscription identifier. The human-readable name remains\nmetadata.annotations[\"openshift.io/display-name\"].",
             "in": "body",
             "required": true,
             "schema": {
@@ -699,7 +700,7 @@
         "parameters": [
           {
             "name": "object.id",
-            "description": "Unique identifier of the subscription. Equals metadata.name.",
+            "description": "Unique identifier of the subscription. Equals metadata.name. On Create,\nthis is the requested base name, which may be empty: the backend always\nappends a short generated suffix and returns the resulting final\nidentifier.",
             "in": "path",
             "required": true,
             "type": "string"
@@ -2405,7 +2406,7 @@
       "properties": {
         "id": {
           "type": "string",
-          "description": "Unique identifier of the subscription. Equals metadata.name."
+          "description": "Unique identifier of the subscription. Equals metadata.name. On Create,\nthis is the requested base name, which may be empty: the backend always\nappends a short generated suffix and returns the resulting final\nidentifier."
         },
         "metadata": {
           "$ref": "#/definitions/v1Metadata"

@@ -130,6 +130,21 @@ safe.
   for that reason; the field stays in the contract until the contract step removes it.
   **Condition:** a console older than #115 shows no location labels on a model's page; it
   doesn't fail.
+- **`Subscription.id` on Create (2026-11-12).** Its Create-only meaning changed from the
+  exact final identifier to a requested base name: the backend always appends a short
+  generated suffix and returns the final identifier in both `object.id` and
+  `object.metadata.name`. The expand and migrate steps were skipped under the API owner's
+  explicit 2026-11-12 tech-preview waiver for this behavior; no compatibility window is
+  required. The Go client returns the response object and its tests use the returned
+  identifier. The console's one Create caller at backend pin `9a449bb6` (commit
+  `9a449bb659163e82d4884c83c30d7b53d8b48276`) discards the Create response and navigates
+  to the list, so it does not assume its requested id is final. Its current form still
+  allows 56-character bases, so the console pin and form limit must advance with this
+  change (49 characters for a Create base).
+  **Condition:** every Create caller uses the returned `object.id` (or metadata name) for
+  subsequent operations and keeps the human-readable name in the display-name annotation.
+  A caller that assumes its requested id is the final id cannot Get, Update, or Delete the
+  new Subscription.
 
 ### 2. Unstable areas
 

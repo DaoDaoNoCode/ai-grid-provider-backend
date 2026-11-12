@@ -280,19 +280,10 @@ func TestGitWritesDecideRefusalsAgainOnFreshHead(t *testing.T) {
 	assertConnectCode(t, err, connect.CodeAlreadyExists)
 	wantFreshHeads("Create of an existing model on a fresh snapshot", 0)
 
-	_, err = otherSubscriptions.Create(ctx, &aigridv1.SubscriptionsCreateRequest{Object: gitSampleSubscription("team-a")})
-	must("other Create team-a", err)
 	writer.lagHere(t)
-	_, err = otherSubscriptions.Delete(ctx, &aigridv1.SubscriptionsDeleteRequest{Id: "team-a"})
-	must("other Delete team-a", err)
-	_, err = subscriptions.Create(ctx, &aigridv1.SubscriptionsCreateRequest{Object: gitSampleSubscription("team-a")})
-	must("Create of a subscription deleted meanwhile", err)
-	wantFreshHeads("Create of a subscription deleted meanwhile", 1)
-
-	writer.lagHere(t)
-	_, err = otherSubscriptions.Create(ctx, &aigridv1.SubscriptionsCreateRequest{Object: gitSampleSubscription("team-b")})
+	createdSubscription, err := otherSubscriptions.Create(ctx, &aigridv1.SubscriptionsCreateRequest{Object: gitSampleSubscription("team-b")})
 	must("other Create team-b", err)
-	update := gitSampleSubscription("team-b")
+	update := gitSampleSubscription(createdSubscription.GetObject().GetId())
 	update.Spec.Priority = 20
 	_, err = subscriptions.Update(ctx, &aigridv1.SubscriptionsUpdateRequest{
 		Object:     update,
@@ -440,8 +431,9 @@ func TestSubscriptionsGitRetry(t *testing.T) {
 			}
 		}
 	}
+	var subscriptionID string
 	updateSubscription := func() {
-		object := gitSampleSubscription("team-a")
+		object := gitSampleSubscription(subscriptionID)
 		object.Spec.Priority = 50
 		if _, err := other.Update(ctx, &aigridv1.SubscriptionsUpdateRequest{
 			Object:     object,
@@ -452,16 +444,18 @@ func TestSubscriptionsGitRetry(t *testing.T) {
 	}
 
 	writer.race = updateModel(2)
-	if _, err := subscriptions.Create(ctx, &aigridv1.SubscriptionsCreateRequest{Object: gitSampleSubscription("team-a")}); err != nil {
+	createdSubscription, err := subscriptions.Create(ctx, &aigridv1.SubscriptionsCreateRequest{Object: gitSampleSubscription("team-a")})
+	if err != nil {
 		t.Fatalf("Create() racing a model update error = %v", err)
 	}
+	subscriptionID = createdSubscription.GetObject().GetId()
 	if writer.commits != 2 {
 		t.Fatalf("Create commits = %d, want 2", writer.commits)
 	}
 
 	writer.commits = 0
 	writer.race = updateModel(3)
-	update := gitSampleSubscription("team-a")
+	update := gitSampleSubscription(subscriptionID)
 	update.Metadata.Version = 1
 	update.Spec.Priority = 20
 	updated, err := subscriptions.Update(ctx, &aigridv1.SubscriptionsUpdateRequest{
@@ -482,7 +476,7 @@ func TestSubscriptionsGitRetry(t *testing.T) {
 			t.Errorf("racing model Delete() error = %v", err)
 		}
 	}
-	refs := gitSampleSubscription("team-a")
+	refs := gitSampleSubscription(subscriptionID)
 	refs.Spec.ModelRefs[0].Name = "model-b"
 	_, err = subscriptions.Update(ctx, &aigridv1.SubscriptionsUpdateRequest{
 		Object:     refs,
@@ -493,16 +487,16 @@ func TestSubscriptionsGitRetry(t *testing.T) {
 	// The subscription itself changes meanwhile.
 	writer.commits = 0
 	writer.race = updateSubscription
-	_, err = subscriptions.Delete(ctx, &aigridv1.SubscriptionsDeleteRequest{Id: "team-a", ResourceVersion: 2})
+	_, err = subscriptions.Delete(ctx, &aigridv1.SubscriptionsDeleteRequest{Id: subscriptionID, ResourceVersion: 2})
 	assertConnectCode(t, err, connect.CodeAborted)
 	if errors.Is(err, gitops.ErrConflict) || writer.commits != 1 {
 		t.Fatalf("Delete() error = %v after %d commits, want the rerun's version check, after 1", err, writer.commits)
 	}
 	writer.race = updateSubscription
-	if _, err := subscriptions.Delete(ctx, &aigridv1.SubscriptionsDeleteRequest{Id: "team-a"}); err != nil {
+	if _, err := subscriptions.Delete(ctx, &aigridv1.SubscriptionsDeleteRequest{Id: subscriptionID}); err != nil {
 		t.Fatalf("Delete() without a version error = %v", err)
 	}
-	_, err = subscriptions.Get(ctx, &aigridv1.SubscriptionsGetRequest{Id: "team-a"})
+	_, err = subscriptions.Get(ctx, &aigridv1.SubscriptionsGetRequest{Id: subscriptionID})
 	assertConnectCode(t, err, connect.CodeNotFound)
 }
 
@@ -527,13 +521,15 @@ func TestGitWritesGiveUpAfterConflictAttempts(t *testing.T) {
 	if _, err := mustGitModelsServer(t, seed).Create(ctx, &aigridv1.ModelsCreateRequest{Object: gitSampleModel("sim-model", "site-a")}); err != nil {
 		t.Fatalf("seed model error = %v", err)
 	}
-	if _, err := mustGitSubscriptionsServer(t, seed).Create(ctx, &aigridv1.SubscriptionsCreateRequest{Object: gitSampleSubscription("team-a")}); err != nil {
+	createdSubscription, err := mustGitSubscriptionsServer(t, seed).Create(ctx, &aigridv1.SubscriptionsCreateRequest{Object: gitSampleSubscription("team-a")})
+	if err != nil {
 		t.Fatalf("seed subscription error = %v", err)
 	}
+	subscriptionID := createdSubscription.GetObject().GetId()
 	writer := &conflictingWriter{MemoryWriter: seed}
 	models := mustGitModelsServer(t, writer)
 	subscriptions := mustGitSubscriptionsServer(t, writer)
-	subUpdate := gitSampleSubscription("team-a")
+	subUpdate := gitSampleSubscription(subscriptionID)
 	subUpdate.Spec.Priority = 20
 
 	for _, tc := range []struct {
@@ -565,15 +561,15 @@ func TestGitWritesGiveUpAfterConflictAttempts(t *testing.T) {
 			_, err := subscriptions.Create(ctx, &aigridv1.SubscriptionsCreateRequest{Object: gitSampleSubscription("team-b")})
 			return err
 		}},
-		{"Subscriptions/Update", staleSubscriptionError("update", "team-a"), func() error {
+		{"Subscriptions/Update", staleSubscriptionError("update", subscriptionID), func() error {
 			_, err := subscriptions.Update(ctx, &aigridv1.SubscriptionsUpdateRequest{
 				Object:     subUpdate,
 				UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.priority"}},
 			})
 			return err
 		}},
-		{"Subscriptions/Delete", staleSubscriptionError("delete", "team-a"), func() error {
-			_, err := subscriptions.Delete(ctx, &aigridv1.SubscriptionsDeleteRequest{Id: "team-a"})
+		{"Subscriptions/Delete", staleSubscriptionError("delete", subscriptionID), func() error {
+			_, err := subscriptions.Delete(ctx, &aigridv1.SubscriptionsDeleteRequest{Id: subscriptionID})
 			return err
 		}},
 	} {
@@ -584,7 +580,16 @@ func TestGitWritesGiveUpAfterConflictAttempts(t *testing.T) {
 			t.Fatalf("%s error = %v, want the last conflict as its cause", tc.name, err)
 		}
 		var cerr *connect.Error
-		if !errors.As(err, &cerr) || cerr.Message() != tc.want.Message() {
+		if !errors.As(err, &cerr) {
+			t.Fatalf("%s error = %v, want a Connect error", tc.name, err)
+		}
+		if tc.name == "Subscriptions/Create" {
+			var generatedID string
+			if _, parseErr := fmt.Sscanf(cerr.Message(), "create Subscription %q: the subscription changed since it was read; reload and retry", &generatedID); parseErr != nil {
+				t.Fatalf("%s message = %q, want a stale-create message: %v", tc.name, cerr.Message(), parseErr)
+			}
+			assertGeneratedSubscriptionID(t, generatedID, "team-b")
+		} else if cerr.Message() != tc.want.Message() {
 			t.Fatalf("%s message = %q, want %q", tc.name, cerr.Message(), tc.want.Message())
 		}
 		if writer.commits != gitops.ConflictAttempts {

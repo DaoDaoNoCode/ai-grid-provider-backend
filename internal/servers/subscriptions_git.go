@@ -3,6 +3,7 @@ package servers
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -335,11 +336,9 @@ func (s *SubscriptionsServer) gitCreate(ctx context.Context, object *aigridv1.Su
 
 // gitCreateOn decides and commits the create of object on head.
 func (s *SubscriptionsServer) gitCreateOn(ctx context.Context, head gitops.Snapshot, object *aigridv1.Subscription) (*aigridv1.SubscriptionsCreateResponse, error) {
-	id := subscriptionID(object)
-	if _, err := head.Read(subscriptionGitPath(id)); err == nil {
-		return nil, connect.Errorf(connect.CodeAlreadyExists, "Subscription %q already exists", id)
-	} else if !errors.Is(err, gitops.ErrNotFound) {
-		return nil, subscriptionGitError("create", id, err)
+	_, err := assignGeneratedSubscriptionID(head, object)
+	if err != nil {
+		return nil, err
 	}
 	read, err := s.gitEnsureModelsExist(head, "create", object)
 	if err != nil {
@@ -355,6 +354,50 @@ func (s *SubscriptionsServer) gitCreateOn(ctx context.Context, head gitops.Snaps
 		Object:     withSubscriptionPhase(doc.sub, s.readReports(ctx, kindMaaSSubscription)),
 		AuthPolicy: withAuthPolicyStatus(doc.policy, s.readReports(ctx, kindMaaSAuthPolicy)),
 	}, nil
+}
+
+func assignGeneratedSubscriptionID(head gitops.Snapshot, object *aigridv1.Subscription) (string, error) {
+	base := subscriptionID(object)
+	for range subscriptionGeneratedSuffixAttempts {
+		suffix, err := generatedSubscriptionSuffix()
+		if err != nil {
+			return "", connect.Errorf(connect.CodeInternal, "generate Subscription suffix: %v", err).WithCause(err)
+		}
+		id := base + "-" + suffix
+		if _, err := head.Read(subscriptionGitPath(id)); errors.Is(err, gitops.ErrNotFound) {
+			object.Id = id
+			if object.Metadata == nil {
+				object.Metadata = &aigridv1.Metadata{}
+			}
+			object.Metadata.Name = id
+			return id, nil
+		} else if err != nil {
+			return "", subscriptionGitError("create", id, err)
+		}
+	}
+	return "", connect.Errorf(connect.CodeInternal, "generate an unused Subscription id for base %q", base)
+}
+
+func generatedSubscriptionSuffix() (string, error) {
+	const alphabet = "abcdefghijklmnopqrstuvwxyz0123456789"
+	// 252 is the largest multiple of the alphabet length that fits in a
+	// byte. Rejecting values at or above it avoids modulo bias.
+	const maxUnbiasedByte = 252
+	suffix := make([]byte, subscriptionGeneratedSuffixLength)
+	for i := range suffix {
+		for {
+			var value [1]byte
+			if _, err := rand.Read(value[:]); err != nil {
+				return "", fmt.Errorf("read random bytes: %w", err)
+			}
+			if value[0] >= maxUnbiasedByte {
+				continue
+			}
+			suffix[i] = alphabet[int(value[0])%len(alphabet)]
+			break
+		}
+	}
+	return string(suffix), nil
 }
 
 func (s *SubscriptionsServer) gitUpdate(ctx context.Context, req *aigridv1.SubscriptionsUpdateRequest) (*aigridv1.SubscriptionsUpdateResponse, error) {

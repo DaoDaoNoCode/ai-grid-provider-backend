@@ -940,6 +940,12 @@ committed to the backend's Git repository, `catalog/subscriptions/<id>.yaml`,
 which Argo CD delivers to the ingress clusters in
 `AI_GRID_SUBSCRIPTION_NAMESPACE` (default `models-as-a-service`).
 OSAC shape: `id` + `metadata` + `spec` + `status`. `id` equals `metadata.name`.
+On Create, `id` (or `metadata.name`) is only the requested base name. The
+backend always appends a short generated suffix, writes the final name to both
+fields, and returns it; omit both to use the base name `sub`. When both are
+supplied, they must match. Keep the human-readable name in
+`metadata.annotations["openshift.io/display-name"]`. An exact caller-chosen
+final `id` is not supported.
 
 `spec.organization.id` is required. `spec.owner.groups` take bare group names
 (a group already prefixed with the same organization is accepted; another
@@ -995,7 +1001,8 @@ Display name / description for the subscription itself stay in
 (int32, the file's `ai-grid/version` annotation, incremented on every write);
 BFF maps that to string ETags.
 
-Subscription ids must leave room for the `-policy` suffix (max 56 chars).
+On Create, the requested base id is limited to 49 characters; the generated
+final id is at most 56 characters, leaving room for the `-policy` suffix.
 
 **List `filter` / `order`:** applied as filter → order → offset/limit.
 `total` is the match count after filter.

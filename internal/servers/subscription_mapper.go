@@ -13,6 +13,14 @@ const (
 	authPolicyNameSuffix = "-policy"
 	// maxSubscriptionIDLen leaves room for authPolicyNameSuffix within DNS-1123 (63).
 	maxSubscriptionIDLen = 63 - len(authPolicyNameSuffix)
+	// maxSubscriptionBaseIDLen leaves room for "-" plus a short generated
+	// suffix, and for authPolicyNameSuffix, within DNS-1123 (63).
+	maxSubscriptionBaseIDLen = maxSubscriptionIDLen - 1 - subscriptionGeneratedSuffixLength
+	// subscriptionGeneratedSuffixLength gives 36^6 possible suffixes while
+	// keeping generated names readable and short.
+	subscriptionGeneratedSuffixLength = 6
+	// subscriptionGeneratedSuffixAttempts bounds the negligible-collision loop.
+	subscriptionGeneratedSuffixAttempts = 10
 
 	subscriptionLabelKey = "ai-grid/subscription"
 

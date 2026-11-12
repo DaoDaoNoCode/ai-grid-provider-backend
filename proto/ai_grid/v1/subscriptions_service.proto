@@ -56,6 +56,10 @@ message SubscriptionsGetResponse {
 }
 
 message SubscriptionsCreateRequest {
+  // The backend appends a short generated suffix to object.id (or
+  // object.metadata.name, or "sub" when both are empty) and returns the final
+  // Subscription identifier. The human-readable name remains
+  // metadata.annotations["openshift.io/display-name"].
   Subscription object = 1;
 }
 

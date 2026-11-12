@@ -142,18 +142,15 @@ func (s *SubscriptionsServer) Get(ctx context.Context, req *aigridv1.Subscriptio
 	return s.gitGet(ctx, id)
 }
 
-// Create commits a subscription and its managed AuthPolicy <id>-policy. A
-// commit that conflicts reruns the whole create on the new head
-// (gitops.RetryOnConflict): a subscription created meanwhile under the same
-// id is AlreadyExists, and a model ref to a model deleted meanwhile is
-// FailedPrecondition.
+// Create commits a subscription and its managed AuthPolicy. A commit that
+// conflicts reruns the whole create on the new head, with a freshly generated
+// suffix; a model ref to a model deleted meanwhile is FailedPrecondition.
 func (s *SubscriptionsServer) Create(ctx context.Context, req *aigridv1.SubscriptionsCreateRequest) (*aigridv1.SubscriptionsCreateResponse, error) {
 	object := req.GetObject()
 	if object == nil {
 		return nil, connect.Errorf(connect.CodeInvalidArgument, "object is required")
 	}
-	id := subscriptionID(object)
-	if err := validateSubscriptionID(id); err != nil {
+	if err := prepareSubscriptionCreate(object); err != nil {
 		return nil, err
 	}
 	if err := validateSubscriptionSpec(object.GetSpec()); err != nil {
@@ -165,6 +162,31 @@ func (s *SubscriptionsServer) Create(ctx context.Context, req *aigridv1.Subscrip
 		return err
 	})
 	return resp, err
+}
+
+func prepareSubscriptionCreate(object *aigridv1.Subscription) error {
+	base := subscriptionID(object)
+	if base == "" {
+		base = "sub"
+	}
+	if name := object.GetMetadata().GetName(); name != "" && name != base {
+		return connect.Errorf(connect.CodeInvalidArgument, "id and metadata.name must match when both are set")
+	}
+	object.Id = base
+	return validateSubscriptionBaseID(base)
+}
+
+func validateSubscriptionBaseID(base string) error {
+	if base == "" {
+		return connect.Errorf(connect.CodeInvalidArgument, "id is required")
+	}
+	if !names.ValidDNSLabel(base) {
+		return connect.Errorf(connect.CodeInvalidArgument, "id %q is not a valid RFC 1123 DNS label", base)
+	}
+	if len(base) > maxSubscriptionBaseIDLen {
+		return connect.Errorf(connect.CodeInvalidArgument, "id %q is too long; the base is limited to %d characters", base, maxSubscriptionBaseIDLen)
+	}
+	return nil
 }
 
 // Update commits the fields the mask selects, to the subscription and its
