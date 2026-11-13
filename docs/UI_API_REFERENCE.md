@@ -472,9 +472,12 @@ For a member, `id` names the Keycloak user UUID. `username` names the local
 Keycloak login. `preferred_username` is the optional profile label from the
 upstream identity provider. A brokered account can use a generated UUID as its
 local login. Use `preferred_username` for labels. Use `id` to select a member
-in the configured realm. Canonical MaaS ownership still requires the broker
-issuer and subject. Never construct that issuer from an internal
-administration URL.
+in the configured realm.
+
+MaaS currently uses `preferred_username` for ownership, with `sub` as its fallback.
+Two users with the same label therefore share the MaaS ownership value today.
+Ownership based on the broker issuer (`iss`) and subject (`sub`) requires a separate MaaS change.
+Never construct that issuer from an internal administration URL.
 
 | Field | Meaning for UI |
 | --- | --- |
@@ -625,6 +628,11 @@ Notes:
   create (an org made in Keycloak directly, with its own provider under the
   org's alias) is `400` (`FailedPrecondition`) and changes nothing: that
   provider is managed in Keycloak.
+- If an identity provider has another username mapper, a rename-only Update
+  returns `400` (`FailedPrecondition`). The message names the conflicting mapper.
+  The organization is already saved when the mapper refresh fails.
+  Resolve the mapper conflict in Keycloak. Reload the tenant.
+  Retry the update with `metadata.name` in its mask.
 - A change also needs the previous client secret, from the Secret the stored
   identity provider names, to restore it if the change fails; if that Secret
   is gone or empty, the change is `400` (`FailedPrecondition`) and nothing is

@@ -72,6 +72,16 @@ type IdentityProviderMapperSpec struct {
 	OrganizationName string
 }
 
+// UsernameMapperConflictError identifies a username mapper this backend does not own.
+type UsernameMapperConflictError struct {
+	Alias      string
+	MapperName string
+}
+
+func (e *UsernameMapperConflictError) Error() string {
+	return fmt.Sprintf("identity provider %q has conflicting username mapper %q", e.Alias, e.MapperName)
+}
+
 // OrganizationIdentityProviderLink configures an org↔IdP association.
 type OrganizationIdentityProviderLink struct {
 	AutoMembership bool   `json:"autoMembership"`
@@ -301,7 +311,7 @@ func (c *Client) UpsertIdentityProviderMapper(ctx context.Context, spec Identity
 	}
 	for _, current := range existing {
 		if current.IdentityProviderMapper == "oidc-username-idp-mapper" && current.Name != identityProviderUsernameMapperName {
-			return fmt.Errorf("identity provider %q has unexpected username mapper %q", spec.Alias, current.Name)
+			return &UsernameMapperConflictError{Alias: spec.Alias, MapperName: current.Name}
 		}
 	}
 	for _, mapper := range identityProviderMappers(spec) {

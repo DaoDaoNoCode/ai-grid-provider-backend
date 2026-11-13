@@ -861,7 +861,10 @@ func validateTenantDomains(domains []keycloak.OrganizationDomain) error {
 }
 
 func mapTenantKeycloakError(op, id string, err error) error {
+	var mapperConflict *keycloak.UsernameMapperConflictError
 	switch {
+	case errors.As(err, &mapperConflict):
+		return connect.Errorf(connect.CodeFailedPrecondition, "%s tenant %q: %v", op, id, err).WithCause(err)
 	case keycloak.IsNotFound(err):
 		if id == "" {
 			return connect.Errorf(connect.CodeNotFound, "tenant not found").WithCause(err)

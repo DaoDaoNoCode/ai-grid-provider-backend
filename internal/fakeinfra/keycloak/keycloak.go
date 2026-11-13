@@ -528,6 +528,7 @@ func (s *Server) delete(w http.ResponseWriter, r *http.Request) {
 	}
 	delete(s.orgs, id)
 	delete(s.orgIdPs, id)
+	delete(s.members, id)
 	s.logger.Debug("organization deleted", "id", id)
 	w.WriteHeader(http.StatusNoContent)
 }

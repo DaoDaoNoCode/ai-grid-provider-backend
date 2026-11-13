@@ -409,9 +409,18 @@ func TestUpdateFullRepresentation(t *testing.T) {
 }
 
 func TestDelete(t *testing.T) {
-	f := start(t)
+	f := start(t, func(s *Server) {
+		if err := s.SeedMembers(map[string][]OrganizationMember{
+			globexID: {{ID: "563344fa-4307-4d6b-9cee-f9932243e145", Username: "alice"}},
+		}); err != nil {
+			t.Fatalf("SeedMembers() error = %v", err)
+		}
+	})
 	if code, body, _ := f.do(t, http.MethodDelete, orgs+"/"+globexID, ""); code != http.StatusNoContent || body != "" {
 		t.Fatalf("DELETE = %d %s", code, body)
+	}
+	if code, body, _ := f.do(t, http.MethodGet, orgs+"/"+globexID+"/members", ""); code != http.StatusNotFound {
+		t.Fatalf("members after DELETE = %d %s, want 404", code, body)
 	}
 	if code, body, _ := f.do(t, http.MethodDelete, orgs+"/"+globexID, ""); code != 404 || body != `{"errorMessage":"Organization not found."}` {
 		t.Fatalf("DELETE again = %d %s", code, body)

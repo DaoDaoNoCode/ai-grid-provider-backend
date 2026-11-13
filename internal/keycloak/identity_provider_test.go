@@ -255,8 +255,12 @@ func TestUpsertIdentityProviderMapper(t *testing.T) {
 		err := testClient(recorder.server).UpsertIdentityProviderMapper(context.Background(), IdentityProviderMapperSpec{
 			Alias: "acme", OrganizationID: "uuid-1", OrganizationName: "Acme",
 		})
-		if err == nil {
-			t.Fatal("Upsert succeeded with a differently named username preprocessor")
+		var conflict *UsernameMapperConflictError
+		if !errors.As(err, &conflict) {
+			t.Fatalf("Upsert error = %v, want UsernameMapperConflictError", err)
+		}
+		if conflict.Alias != "acme" || conflict.MapperName != "Legacy username" {
+			t.Fatalf("conflict = %+v, want acme and Legacy username", conflict)
 		}
 		if recorder.posts != 0 || len(recorder.puts) != 0 || len(recorder.mappers) != 1 {
 			t.Fatalf("writes occurred: posts=%d puts=%d mappers=%d", recorder.posts, len(recorder.puts), len(recorder.mappers))

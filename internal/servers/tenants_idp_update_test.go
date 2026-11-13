@@ -570,7 +570,39 @@ func TestUpdateTenantAddTakesOverItsLeftoverIdentityProvider(t *testing.T) {
 	})
 }
 
-// TestUpdateTenantAddsIdentityProvider:an organization created without an IdP
+func TestUpdateTenantRenameWithUsernameMapperConflict(t *testing.T) {
+	t.Parallel()
+	store := idpStore(t, orgWithIdP(t))
+	store.mapperErr = &keycloak.UsernameMapperConflictError{Alias: "acme", MapperName: "Manual username"}
+	server := mustTenantsServerWithSecrets(t, store, idpSecrets())
+	request := &aigridv1.TenantsUpdateRequest{
+		Object:     &aigridv1.Tenant{Id: "org-1", Metadata: &aigridv1.Metadata{Version: 1, Name: "acme-corp"}},
+		UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"metadata.name"}},
+	}
+
+	_, err := server.Update(context.Background(), request)
+	assertConnectCode(t, err, connect.CodeFailedPrecondition)
+	var conflict *keycloak.UsernameMapperConflictError
+	if !errors.As(err, &conflict) || conflict.Alias != "acme" || conflict.MapperName != "Manual username" {
+		t.Fatalf("Update error = %v, want the conflicting mapper", err)
+	}
+	stored := store.byID["org-1"]
+	if stored.Name != "acme-corp" || organizationVersion(stored) != 2 {
+		t.Fatalf("organization = %+v, want acme-corp at version 2", stored)
+	}
+
+	store.mapperErr = nil
+	request.Object.Metadata.Version = 2
+	got, err := server.Update(context.Background(), request)
+	if err != nil {
+		t.Fatalf("Update after removing the conflict: %v", err)
+	}
+	if got.GetObject().GetMetadata().GetName() != "acme-corp" || store.mapperOrgNames["acme"] != "acme-corp" {
+		t.Fatalf("tenant = %v, mapper name = %q", got.GetObject(), store.mapperOrgNames["acme"])
+	}
+}
+
+// TestUpdateTenantAddsIdentityProvider: an organization created without an IdP
 // gets one the way Create sets it up, and keeps its id, members and domains,
 // which are now routed to the new IdP.
 func TestUpdateTenantAddsIdentityProvider(t *testing.T) {
@@ -594,6 +626,21 @@ func TestUpdateTenantAddsIdentityProvider(t *testing.T) {
 	kc, ok := store.idps["acme"]
 	if !ok || !kc.TrustEmail || kc.Config["clientSecret"] != "old-secret" || kc.Config["clientId"] != "client" {
 		t.Fatalf("keycloak idp = %+v, want acme with the client and its secret", kc)
+	}
+	var flow string
+	if err := json.Unmarshal(kc.Extra["firstBrokerLoginFlowAlias"], &flow); err != nil || flow != "first broker login" {
+		t.Fatalf("firstBrokerLoginFlowAlias = %q, want first broker login", kc.Extra["firstBrokerLoginFlowAlias"])
+	}
+	wantMappers := []string{
+		"AI Grid org id",
+		"AI Grid org name",
+		"AI Grid groups",
+		"AI Grid roles",
+		"AI Grid local username",
+		"AI Grid preferred username",
+	}
+	if !slices.Equal(store.mapperNames["acme"], wantMappers) {
+		t.Fatalf("mappers = %v, want %v", store.mapperNames["acme"], wantMappers)
 	}
 	if store.links["org-1"] != "acme" || store.mappers["acme"].Config["attribute.value"] != "org-1" || len(store.members["org-1"]) != 1 {
 		t.Fatalf("link = %q, mapper = %+v, members = %v", store.links["org-1"], store.mappers["acme"], store.members["org-1"])

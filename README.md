@@ -556,24 +556,50 @@ configures the backend with the development Keycloak admin credentials. Use a
 dedicated service account with organization manage/query roles instead of these
 credentials outside local testing.
 
+This version requires a fresh shared Keycloak realm. The backend provides no
+migration from earlier broker configurations. Before upgrading a populated realm,
+reset that realm. A reset deletes all data in that realm. Then apply the GitOps
+configuration described below. The Update behavior below applies to realms
+created with this version.
+
 Optional `spec.identity_provider` on Create configures a realm OIDC IdP linked
 to the Organization. The IdP uses Keycloak's built-in `first broker login`
 flow. GitOps sets the `idp-create-user-if-unique` execution in `User creation or
 linking` to `REQUIRED` and keeps the flow's organization-membership step. The
-backend does not create or look up authentication flows. The backend upserts
+backend does not create or look up authentication flows.
+
+The backend upserts
 six broker mappers. `maas_org_id` and
 `maas_org_name` hold the organization's UUID and name, and `maas_groups`,
 `maas_roles`, and `maas_preferred_username` copy the tenant IdP's `groups`,
 `roles`, and `preferred_username` claims on every login (`FORCE`). The local
-username mapper generates a UUID once at import (`IMPORT`). Set the built-in
-`profile` client scope's `username` mapper to read `maas_preferred_username`.
+username mapper generates a UUID once at import (`IMPORT`). Existing users keep
+their local usernames because this mapper runs only at import.
+
+In the shared realm, change the built-in `profile` scope's `username` mapper
+to type `oidc-usermodel-attribute-mapper`.
+Set `user.attribute` to `maas_preferred_username`.
+Keep `claim.name` as `preferred_username`.
+The default `oidc-usermodel-property-mapper` reads only built-in properties.
+Changing its `user.attribute` alone does not read custom attributes.
+
 Remove any second client mapper that writes `preferred_username`. Two mappers
 for the same claim can expose the generated UUID, depending on import order.
+
 The other realm client mappers turn `maas_org_id`, `maas_org_name`,
 `maas_groups`, and `maas_roles` into the flat `org_id`, `org_name`, `groups`,
 and `roles` claims (ODH-ADR-MS-0007). This changes the shared `profile` scope's
 username mapper. The built-in `email` scope stays unchanged. When the upstream
 IdP sends no `preferred_username`, the token has no `preferred_username` claim.
+
+The shared realm also needs the user profile from
+[ai-grid-cluster-gitops#294](https://github.com/ai-grid-cloud/ai-grid-cluster-gitops/pull/294),
+including `unmanagedAttributePolicy: ADMIN_EDIT` and admin-only `username` permissions.
+This policy lets the Admin API read and write custom attributes.
+`Tenants/ListMembers` reads `maas_preferred_username` from those attributes
+to fill its optional `preferred_username` field.
+GitOps owns this realm configuration. The backend does not apply it.
+
 The backend creates the IdP with `trustEmail` on, so Keycloak takes each user's
 `email_verified` from the tenant IdP, on every login. The tenant IdP must send
 `email_verified: true` for its users in the ID token, and also in the userinfo
@@ -595,6 +621,17 @@ Secret again, and re-applies the mappers. An Update that repeats the stored IdP 
 nothing, so to rotate the client secret, put the new one in a Secret with a new name and
 change `config.client_secret_secret_name`. Removing the IdP is refused: Keycloak would
 drop every member's link to it, and members have no other way to sign in.
+
+Existing IdPs receive all six mappers when an Update changes `spec.identity_provider`.
+An Update whose mask includes `metadata.name` also refreshes the mappers,
+even when the name stays the same.
+An Update that only repeats the stored IdP writes nothing and does not
+refresh its mappers.
+
+If an IdP has another username mapper, a rename-only Update returns
+`FailedPrecondition` and names that mapper. The organization is already saved
+when the mapper refresh fails. Resolve the mapper conflict in Keycloak. Reload the tenant.
+Retry the update with `metadata.name` in its mask.
 
 The client id, the Secret name, the endpoints, the scopes, the signature settings and the
 title change in place at any time. The issuer changes in place only while nobody has signed
@@ -669,20 +706,6 @@ identity-provider permission on every organization IdP call, so without the
 identity-provider roles a Create with `spec.identity_provider` gets 403.
 `manage-identity-providers` is realm-wide: it lets the backend edit any IdP in
 the realm, not only its organizations'.
-
-Tenants created by an earlier build have IdPs without `trustEmail`. An Update that changes
-the tenant's IdP sets it; otherwise, to fix one, turn on **Trust email** on
-the IdP (its alias is the tenant's IdP alias, or the organization name) in the
-Keycloak admin console, under the realm's **Identity providers**. Or, with the
-Admin REST API, `GET` `/admin/realms/<realm>/identity-provider/instances/<alias>`,
-set `"trustEmail": true` in the response, and `PUT` it back to the same path; the
-masked `clientSecret` in the response keeps the stored secret. The change applies
-from each user's next login, as long as the IdP sends `email_verified`.
-
-IdPs created by an earlier build also lack `kc.org.broker.login.hide-when-org-unknown`, which
-an Update that changes the IdP also sets. To fix one otherwise, turn on **Hide on login page when organization not resolved** in the IdP's **Settings**,
-section **Organization settings**, or with the Admin REST API, add the key with value `"true"`
-to `config` in the same `GET` and `PUT`.
 
 ## Local architecture
 
@@ -794,6 +817,10 @@ authorization-code flow. It makes sure that two companies can use the profile us
 It makes sure that repeat logins keep broker identities and upstream renames leave local handles
 and provider links unchanged. It also tests missing profile data, matching-email conflicts, and
 legacy local usernames.
+
+CI and `make unit` do not run this regression. Run it locally through
+`make kind-test` or the dedicated target below.
+Without its runtime inputs, `go test ./integration -run Isolation` skips the regression.
 
 From the repository root, run:
 

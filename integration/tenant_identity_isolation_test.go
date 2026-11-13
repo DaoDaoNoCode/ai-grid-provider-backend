@@ -331,8 +331,12 @@ func TestFormActionBelongsToRealm(t *testing.T) {
 
 func requireIdentityIsolationInputs(t *testing.T) identityIsolationEnv {
 	t.Helper()
+	address := os.Getenv("AI_GRID_GRPC_ADDRESS")
+	if address == "" {
+		t.Skip("AI_GRID_GRPC_ADDRESS is not set; run via make test-tenant-identity-isolation")
+	}
 	env := identityIsolationEnv{
-		GRPCAddress:         os.Getenv("AI_GRID_GRPC_ADDRESS"),
+		GRPCAddress:         address,
 		KeycloakURL:         os.Getenv("KEYCLOAK_URL"),
 		InternalKeycloakURL: os.Getenv("IDENTITY_ISOLATION_INTERNAL_KEYCLOAK_URL"),
 		AdminRealm:          os.Getenv("KEYCLOAK_ADMIN_REALM"),
@@ -355,16 +359,7 @@ func requireIdentityIsolationInputs(t *testing.T) identityIsolationEnv {
 		ProfileClient:       os.Getenv("IDENTITY_ISOLATION_PROFILE_CLIENT"),
 		ProfileSecret:       os.Getenv("IDENTITY_ISOLATION_PROFILE_SECRET"),
 	}
-	callbackPort, err := strconv.Atoi(os.Getenv("IDENTITY_ISOLATION_CALLBACK_PORT"))
-	if err != nil {
-		t.Fatalf("parse IDENTITY_ISOLATION_CALLBACK_PORT: %v", err)
-	}
-	env.CallbackPort = callbackPort
-	brokerLoginCallbackPort = callbackPort
 	missing := []string{}
-	if env.GRPCAddress == "" {
-		missing = append(missing, "AI_GRID_GRPC_ADDRESS")
-	}
 	if env.KeycloakURL == "" {
 		missing = append(missing, "KEYCLOAK_URL")
 	}
@@ -428,9 +423,19 @@ func requireIdentityIsolationInputs(t *testing.T) identityIsolationEnv {
 	if env.ProfileSecret == "" {
 		missing = append(missing, "IDENTITY_ISOLATION_PROFILE_SECRET")
 	}
-	if len(missing) > 0 {
-		t.Fatalf("missing identity-isolation runtime inputs: %s", strings.Join(missing, ", "))
+	callbackPortInput := os.Getenv("IDENTITY_ISOLATION_CALLBACK_PORT")
+	if callbackPortInput == "" {
+		missing = append(missing, "IDENTITY_ISOLATION_CALLBACK_PORT")
 	}
+	if len(missing) > 0 {
+		t.Skipf("missing identity-isolation runtime inputs: %s", strings.Join(missing, ", "))
+	}
+	callbackPort, err := strconv.Atoi(callbackPortInput)
+	if err != nil {
+		t.Fatalf("parse IDENTITY_ISOLATION_CALLBACK_PORT: %v", err)
+	}
+	env.CallbackPort = callbackPort
+	brokerLoginCallbackPort = callbackPort
 	return env
 }
 
@@ -781,9 +786,10 @@ func configureProfileScope(t *testing.T, admin adminContext, realm, userAttribut
 	if usernameMapper == nil {
 		t.Fatal("profile username mapper not found")
 	}
-	if usernameMapper.Config["user.attribute"] == userAttribute {
+	if usernameMapper.ProtocolMapper == "oidc-usermodel-attribute-mapper" && usernameMapper.Config["user.attribute"] == userAttribute {
 		return
 	}
+	usernameMapper.ProtocolMapper = "oidc-usermodel-attribute-mapper"
 	usernameMapper.Config["user.attribute"] = userAttribute
 	mapperBody, err := json.Marshal(usernameMapper)
 	if err != nil {
