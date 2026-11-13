@@ -37,6 +37,7 @@ import (
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/dynamic"
@@ -677,11 +678,65 @@ func startCatalogServersFrom(t *testing.T, dir string) (*servers.ModelsServer, *
 	return models, subscriptions, writer
 }
 
+// retargetedCatalogSubscriptionsServer serves the same Git catalog through a
+// fake hub whose fixture reports name the generated Subscription id.
+func retargetedCatalogSubscriptionsServer(t *testing.T, writer *gitops.MemoryWriter, id string) *servers.SubscriptionsServer {
+	t.Helper()
+	fx, err := hub.LoadFixtures(fixturesDir)
+	if err != nil {
+		t.Fatalf("hub.LoadFixtures() error = %v", err)
+	}
+	for index := range fx.Applications {
+		resources, found, err := unstructured.NestedSlice(fx.Applications[index].Object, "status", "resources")
+		if err != nil {
+			t.Fatalf("read Application %d resources: %v", index, err)
+		}
+		if !found {
+			continue
+		}
+		for _, resource := range resources {
+			entry, ok := resource.(map[string]interface{})
+			if !ok {
+				continue
+			}
+			if entry["kind"] == "MaaSSubscription" && entry["name"] == "team-a" {
+				entry["name"] = id
+			}
+			if entry["kind"] == "MaaSAuthPolicy" && entry["name"] == "team-a-policy" {
+				entry["name"] = id + "-policy"
+			}
+		}
+		if err := unstructured.SetNestedSlice(fx.Applications[index].Object, resources, "status", "resources"); err != nil {
+			t.Fatalf("write Application %d resources: %v", index, err)
+		}
+	}
+	h, err := hub.New(fx, hub.WithLogger(slog.New(slog.DiscardHandler)))
+	if err != nil {
+		t.Fatalf("hub.New() error = %v", err)
+	}
+	hubServer := httptest.NewServer(h.Handler())
+	t.Cleanup(hubServer.Close)
+	cfg := &rest.Config{Host: hubServer.URL, BearerToken: h.ServiceAccountToken(), QPS: 1000, Burst: 1000}
+	client, err := dynamic.NewForConfig(cfg)
+	if err != nil {
+		t.Fatalf("dynamic.NewForConfig() error = %v", err)
+	}
+	subscriptions, err := servers.NewSubscriptionsServer().
+		SetLogger(slog.New(slog.DiscardHandler)).
+		SetWriter(writer).
+		SetCatalogStatus(servers.NewCatalogStatusReader(client, servers.CatalogApps{})).
+		Build()
+	if err != nil {
+		t.Fatalf("Subscriptions Build() error = %v", err)
+	}
+	return subscriptions
+}
+
 // The real Models and Subscriptions servers, committing to an in-memory
 // repository, read status from the fake hub's catalog Applications
 // (fixtures/default/applications.json), as in make dev-fake.
 func TestRealCatalogStatusOnFakeHub(t *testing.T) {
-	models, subscriptions, _ := startCatalogServers(t)
+	models, subscriptions, writer := startCatalogServers(t)
 	ctx := context.Background()
 
 	replicas := int32(1)
@@ -734,11 +789,28 @@ func TestRealCatalogStatusOnFakeHub(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Subscriptions Create() error = %v", err)
 	}
-	if phase := sub.GetObject().GetStatus().GetPhase(); phase != "Active" {
-		t.Fatalf("subscription phase = %q, want Active", phase)
+	// The fixture reports the legacy team-a name; the generated name is
+	// missing from every reporting cluster, which is Pending.
+	if phase := sub.GetObject().GetStatus().GetPhase(); phase != "Pending" {
+		t.Fatalf("subscription phase = %q, want Pending", phase)
 	}
-	if phase := sub.GetAuthPolicy().GetPhase(); phase != "Active" {
-		t.Fatalf("auth policy %q phase = %q, want Active", sub.GetAuthPolicy().GetId(), phase)
+	if phase := sub.GetAuthPolicy().GetPhase(); phase != "Pending" {
+		t.Fatalf("auth policy %q phase = %q, want Pending", sub.GetAuthPolicy().GetId(), phase)
+	}
+	retargeted := retargetedCatalogSubscriptionsServer(t, writer, sub.GetObject().GetId())
+	reported, err := retargeted.Get(ctx, &aigridv1.SubscriptionsGetRequest{Id: sub.GetObject().GetId()})
+	if err != nil {
+		t.Fatalf("Get(retargeted generated id) error = %v", err)
+	}
+	if phase := reported.GetObject().GetStatus().GetPhase(); phase != "Active" {
+		t.Fatalf("retargeted subscription phase = %q, want Active", phase)
+	}
+	policies := reported.GetAuthPolicies()
+	if len(policies) != 1 {
+		t.Fatalf("retargeted auth_policies = %v, want one", policies)
+	}
+	if phase := policies[0].GetPhase(); phase != "Active" {
+		t.Fatalf("retargeted auth policy phase = %q, want Active", phase)
 	}
 	// As the README says: the ref reads back joined to the model.
 	ref := sub.GetObject().GetSpec().GetModelRefs()[0]
@@ -818,6 +890,7 @@ func TestRealSubscriptionsTokenWindowOnFakeHub(t *testing.T) {
 			},
 		}
 	}
+	windowIDs := make(map[string]string)
 
 	for _, window := range []string{"9999h", "8785h"} {
 		commits := len(writer.Messages())
@@ -830,14 +903,16 @@ func TestRealSubscriptionsTokenWindowOnFakeHub(t *testing.T) {
 		}
 	}
 	for _, window := range []string{"8784h", "24h"} {
-		if _, err := subscriptions.Create(ctx, &aigridv1.SubscriptionsCreateRequest{Object: subscription("win-"+window, window)}); err != nil {
+		created, err := subscriptions.Create(ctx, &aigridv1.SubscriptionsCreateRequest{Object: subscription("win-"+window, window)})
+		if err != nil {
 			t.Fatalf("Create(window %q) error = %v", window, err)
 		}
+		windowIDs[window] = created.GetObject().GetId()
 	}
 
 	commits := len(writer.Messages())
 	_, err := subscriptions.Update(ctx, &aigridv1.SubscriptionsUpdateRequest{
-		Object:     subscription("win-24h", "9999h"),
+		Object:     subscription(windowIDs["24h"], "9999h"),
 		UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.model_refs"}},
 	})
 	if connect.CodeOf(err) != connect.CodeInvalidArgument {
@@ -846,7 +921,7 @@ func TestRealSubscriptionsTokenWindowOnFakeHub(t *testing.T) {
 	if n := len(writer.Messages()); n != commits {
 		t.Fatalf("Update(window 9999h) commits = %d, want %d", n, commits)
 	}
-	got, err := subscriptions.Get(ctx, &aigridv1.SubscriptionsGetRequest{Id: "win-24h"})
+	got, err := subscriptions.Get(ctx, &aigridv1.SubscriptionsGetRequest{Id: windowIDs["24h"]})
 	if err != nil {
 		t.Fatalf("Get(win-24h) error = %v", err)
 	}
@@ -1046,16 +1121,18 @@ func TestRealClustersServerRoleChangesOnFakeHub(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Build() error = %v", err)
 	}
-	if _, err := subscriptions.Create(ctx, &aigridv1.SubscriptionsCreateRequest{Object: &aigridv1.Subscription{
+	createdSubscription, err := subscriptions.Create(ctx, &aigridv1.SubscriptionsCreateRequest{Object: &aigridv1.Subscription{
 		Id: "team-a",
 		Spec: &aigridv1.SubscriptionSpec{
 			Organization: &aigridv1.SubscriptionOrganization{Id: "org-a"},
 			Owner:        &aigridv1.SubscriptionOwner{Groups: []string{"team-a"}},
 			ModelRefs:    []*aigridv1.SubscriptionModelRef{{Name: "granite-3b", Unlimited: true}},
 		},
-	}}); err != nil {
+	}})
+	if err != nil {
 		t.Fatalf("Subscriptions Create() error = %v", err)
 	}
+	subscriptionID := createdSubscription.GetObject().GetId()
 	remove := func(id string) error {
 		t.Helper()
 		got, err := clusters.Get(ctx, &aigridv1.ClustersGetRequest{Id: id})
@@ -1100,7 +1177,7 @@ func TestRealClustersServerRoleChangesOnFakeHub(t *testing.T) {
 
 	refused("site-madrid-1", "team-a's keys would be revoked")
 	refused("site-paris-1", "granite-3b is placed on it")
-	if _, err := subscriptions.Delete(ctx, &aigridv1.SubscriptionsDeleteRequest{Id: "team-a"}); err != nil {
+	if _, err := subscriptions.Delete(ctx, &aigridv1.SubscriptionsDeleteRequest{Id: subscriptionID}); err != nil {
 		t.Fatalf("Subscriptions Delete() error = %v", err)
 	}
 	refused("site-madrid-1", "the last ingress cluster, site-paris-1 stays")

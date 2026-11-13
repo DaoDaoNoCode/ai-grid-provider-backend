@@ -359,13 +359,20 @@ else
     call_grpc 'Subscriptions/Create' \
       "{\"object\":{\"id\":\"${smoke_sub_grpc}\",\"metadata\":{\"name\":\"${smoke_sub_grpc}\"},\"spec\":{\"organization\":{\"id\":\"smoke-org\"},\"owner\":{\"groups\":[\"smoke\"]},\"model_refs\":[{\"name\":\"${smoke_sub_model}\",\"token_rate_limits\":[{\"limit\":50,\"window\":\"1m\"}]}],\"priority\":5}}}" \
       'ai_grid.v1.Subscriptions/Create'
+    smoke_sub_grpc_id=""
     if (( failed == before_failed )); then
-      cleanup_subscription_ids+=("$smoke_sub_grpc")
-      call_grpc 'Subscriptions/Get' "{\"id\":\"${smoke_sub_grpc}\"}" 'ai_grid.v1.Subscriptions/Get'
+      smoke_sub_grpc_id="$(json_get "$CALL_OUT" '(data.get("object") or {}).get("id") or ""')"
+    fi
+    if [[ -n "$smoke_sub_grpc_id" ]]; then
+      cleanup_subscription_ids+=("$smoke_sub_grpc_id")
+      call_grpc 'Subscriptions/Get' "{\"id\":\"${smoke_sub_grpc_id}\"}" 'ai_grid.v1.Subscriptions/Get'
       call_grpc 'Subscriptions/Update (update_mask=spec)' \
-        "{\"object\":{\"id\":\"${smoke_sub_grpc}\",\"metadata\":{\"name\":\"${smoke_sub_grpc}\"},\"spec\":{\"organization\":{\"id\":\"smoke-org\"},\"owner\":{\"groups\":[\"smoke-admins\"]},\"model_refs\":[{\"name\":\"${smoke_sub_model}\",\"token_rate_limits\":[{\"limit\":50,\"window\":\"1m\"}]}],\"priority\":9}},\"update_mask\":{\"paths\":[\"spec\"]}}" \
+        "{\"object\":{\"id\":\"${smoke_sub_grpc_id}\",\"metadata\":{\"name\":\"${smoke_sub_grpc_id}\"},\"spec\":{\"organization\":{\"id\":\"smoke-org\"},\"owner\":{\"groups\":[\"smoke-admins\"]},\"model_refs\":[{\"name\":\"${smoke_sub_model}\",\"token_rate_limits\":[{\"limit\":50,\"window\":\"1m\"}]}],\"priority\":9}},\"update_mask\":{\"paths\":[\"spec\"]}}" \
         'ai_grid.v1.Subscriptions/Update'
-      call_grpc 'Subscriptions/Delete' "{\"id\":\"${smoke_sub_grpc}\"}" 'ai_grid.v1.Subscriptions/Delete'
+      call_grpc 'Subscriptions/Delete' "{\"id\":\"${smoke_sub_grpc_id}\"}" 'ai_grid.v1.Subscriptions/Delete'
+    else
+      printf 'fail Subscriptions gRPC CRUD (missing created id)\n' >&2
+      failed=$((failed + 1))
     fi
 
     call_http 'GET /api/v1/subscriptions' GET '/api/v1/subscriptions'
@@ -374,13 +381,20 @@ else
 
     before_failed=$failed
     call_http 'POST /api/v1/subscriptions' POST '/api/v1/subscriptions' \
-      "{\"id\":\"${smoke_sub_rest}\",\"metadata\":{\"name\":\"${smoke_sub_rest}\"},\"spec\":{\"organization\":{\"id\":\"smoke-org\"},\"owner\":{\"groups\":[\"smoke\"]},\"model_refs\":[{\"name\":\"${smoke_sub_model}\",\"token_rate_limits\":[{\"limit\":50,\"window\":\"1m\"}]}],\"priority\":5}}"
+      "{\"object\":{\"id\":\"${smoke_sub_rest}\",\"metadata\":{\"name\":\"${smoke_sub_rest}\"},\"spec\":{\"organization\":{\"id\":\"smoke-org\"},\"owner\":{\"groups\":[\"smoke\"]},\"model_refs\":[{\"name\":\"${smoke_sub_model}\",\"token_rate_limits\":[{\"limit\":50,\"window\":\"1m\"}]}],\"priority\":5}}}"
+    smoke_sub_rest_id=""
     if (( failed == before_failed )); then
-      cleanup_subscription_ids+=("$smoke_sub_rest")
-      call_http "GET /api/v1/subscriptions/${smoke_sub_rest}" GET "/api/v1/subscriptions/${smoke_sub_rest}"
-      call_http "PATCH /api/v1/subscriptions/${smoke_sub_rest}" PATCH "/api/v1/subscriptions/${smoke_sub_rest}" \
-        "{\"id\":\"${smoke_sub_rest}\",\"metadata\":{\"name\":\"${smoke_sub_rest}\"},\"spec\":{\"organization\":{\"id\":\"smoke-org\"},\"owner\":{\"groups\":[\"smoke-admins\"]},\"model_refs\":[{\"name\":\"${smoke_sub_model}\",\"token_rate_limits\":[{\"limit\":50,\"window\":\"1m\"}]}],\"priority\":9}}"
-      call_http "DELETE /api/v1/subscriptions/${smoke_sub_rest}" DELETE "/api/v1/subscriptions/${smoke_sub_rest}"
+      smoke_sub_rest_id="$(json_get "$CALL_OUT" '(data.get("object") or {}).get("id") or ""')"
+    fi
+    if [[ -n "$smoke_sub_rest_id" ]]; then
+      cleanup_subscription_ids+=("$smoke_sub_rest_id")
+      call_http "GET /api/v1/subscriptions/${smoke_sub_rest_id}" GET "/api/v1/subscriptions/${smoke_sub_rest_id}"
+      call_http "PATCH /api/v1/subscriptions/${smoke_sub_rest_id}" PATCH "/api/v1/subscriptions/${smoke_sub_rest_id}" \
+        "{\"id\":\"${smoke_sub_rest_id}\",\"metadata\":{\"name\":\"${smoke_sub_rest_id}\"},\"spec\":{\"organization\":{\"id\":\"smoke-org\"},\"owner\":{\"groups\":[\"smoke-admins\"]},\"model_refs\":[{\"name\":\"${smoke_sub_model}\",\"token_rate_limits\":[{\"limit\":50,\"window\":\"1m\"}]}],\"priority\":9}}"
+      call_http "DELETE /api/v1/subscriptions/${smoke_sub_rest_id}" DELETE "/api/v1/subscriptions/${smoke_sub_rest_id}"
+    else
+      printf 'fail Subscriptions REST CRUD (missing created id)\n' >&2
+      failed=$((failed + 1))
     fi
   fi
 fi

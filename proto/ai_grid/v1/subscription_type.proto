@@ -19,11 +19,14 @@ option go_package = "github.com/osac-project/ai-grid-provider-backend/gen/ai_gri
 // The `spec` contains the desired details and may be modified by the user.
 // The `status` contains the current status and is provided by the system.
 message Subscription {
-  // Unique identifier of the subscription. Equals metadata.name.
-  string id = 1 [(buf.validate.field).string = {
-    min_len: 1
-    max_len: 63
-    pattern: "^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$"
+  // Unique identifier of the subscription. Equals metadata.name. On Create,
+  // this is the requested base name, which may be empty: the backend always
+  // appends a short generated suffix and returns the resulting final
+  // identifier.
+  string id = 1 [(buf.validate.field).cel = {
+    id: "subscription.id.dns_label"
+    message: "id must be empty or a valid RFC 1123 DNS label of at most 56 characters"
+    expression: "this == '' || (this.size() <= 56 && this.matches('^[a-z0-9]([a-z0-9-]{0,54}[a-z0-9])?$'))"
   }];
 
   Metadata metadata = 2;

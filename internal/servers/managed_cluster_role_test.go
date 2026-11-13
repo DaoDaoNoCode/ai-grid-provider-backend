@@ -55,14 +55,18 @@ func newRoleCatalog() *gitops.MemoryWriter {
 
 // createSubscriptions commits one subscription per id to writer, a catalog
 // from newRoleCatalog, through the real Subscriptions server.
-func createSubscriptions(t *testing.T, writer gitops.Writer, ids ...string) {
+func createSubscriptions(t *testing.T, writer gitops.Writer, ids ...string) []string {
 	t.Helper()
 	subscriptions := mustGitSubscriptionsServer(t, writer)
+	createdIDs := make([]string, 0, len(ids))
 	for _, id := range ids {
-		if _, err := subscriptions.Create(context.Background(), &aigridv1.SubscriptionsCreateRequest{Object: gitSampleSubscription(id)}); err != nil {
+		created, err := subscriptions.Create(context.Background(), &aigridv1.SubscriptionsCreateRequest{Object: gitSampleSubscription(id)})
+		if err != nil {
 			t.Fatalf("Create subscription %s: %v", id, err)
 		}
+		createdIDs = append(createdIDs, created.GetObject().GetId())
 	}
+	return createdIDs
 }
 
 // removeLabels is the label set a removal from the grid sends: the cluster's
@@ -648,23 +652,23 @@ func TestUpdateClusterRemoveAndSubscriptionMessages(t *testing.T) {
 	assertConnectCode(t, err, connect.CodeFailedPrecondition)
 	assertConnectMessage(t, err, `Cluster "site-c" has 1 model placed on it (solo). Move it to another cluster before removing it from AI Grid.`)
 
-	createSubscriptions(t, writer, "sub-a")
+	subscriptionIDs := createSubscriptions(t, writer, "sub-a")
 	_, err = server.Update(ctx, labelsUpdate("site-a", removeLabels("ingress")))
 	assertConnectCode(t, err, connect.CodeFailedPrecondition)
-	assertConnectMessage(t, err, `Cluster "site-a" serves ingress for 1 subscription (sub-a). Removing it from AI Grid deletes its copy of that subscription, and its API keys are then revoked on every cluster. Delete the subscription first, or keep the cluster in AI Grid.`)
+	assertConnectMessage(t, err, `Cluster "site-a" serves ingress for 1 subscription (`+subscriptionIDs[0]+`). Removing it from AI Grid deletes its copy of that subscription, and its API keys are then revoked on every cluster. Delete the subscription first, or keep the cluster in AI Grid.`)
 
-	createSubscriptions(t, writer, "sub-b", "sub-c")
+	subscriptionIDs = append(subscriptionIDs, createSubscriptions(t, writer, "sub-b", "sub-c")...)
 	_, err = server.Update(ctx, labelsUpdate("site-a", roleLabels("inference")))
 	assertConnectCode(t, err, connect.CodeFailedPrecondition)
-	assertConnectMessage(t, err, `Cluster "site-a" serves ingress for 3 subscriptions (sub-a, sub-b, sub-c). Changing its role turns MaaS off there, which can revoke every API key in AI Grid. Delete the subscriptions first, or keep the ingress or combined role.`)
+	assertConnectMessage(t, err, `Cluster "site-a" serves ingress for 3 subscriptions (`+subscriptionIDs[0]+`, `+subscriptionIDs[1]+`, `+subscriptionIDs[2]+`). Changing its role turns MaaS off there, which can revoke every API key in AI Grid. Delete the subscriptions first, or keep the ingress or combined role.`)
 
-	createSubscriptions(t, writer, "sub-d", "sub-e", "sub-f", "sub-g")
+	subscriptionIDs = append(subscriptionIDs, createSubscriptions(t, writer, "sub-d", "sub-e", "sub-f", "sub-g")...)
 	_, err = server.Update(ctx, labelsUpdate("site-d", roleLabels("inference")))
 	assertConnectCode(t, err, connect.CodeFailedPrecondition)
-	assertConnectMessage(t, err, `Cluster "site-d" serves ingress for 7 subscriptions (sub-a, sub-b, sub-c, sub-d, sub-e and 2 more). Changing its role turns MaaS off there, which can revoke every API key in AI Grid. Delete the subscriptions first, or keep the ingress or combined role.`)
+	assertConnectMessage(t, err, `Cluster "site-d" serves ingress for 7 subscriptions (`+subscriptionIDs[0]+`, `+subscriptionIDs[1]+`, `+subscriptionIDs[2]+`, `+subscriptionIDs[3]+`, `+subscriptionIDs[4]+` and 2 more). Changing its role turns MaaS off there, which can revoke every API key in AI Grid. Delete the subscriptions first, or keep the ingress or combined role.`)
 	_, err = server.Update(ctx, labelsUpdate("site-d", removeLabels("ingress")))
 	assertConnectCode(t, err, connect.CodeFailedPrecondition)
-	assertConnectMessage(t, err, `Cluster "site-d" serves ingress for 7 subscriptions (sub-a, sub-b, sub-c, sub-d, sub-e and 2 more). Removing it from AI Grid deletes its copies of those subscriptions, and their API keys are then revoked on every cluster. Delete the subscriptions first, or keep the cluster in AI Grid.`)
+	assertConnectMessage(t, err, `Cluster "site-d" serves ingress for 7 subscriptions (`+subscriptionIDs[0]+`, `+subscriptionIDs[1]+`, `+subscriptionIDs[2]+`, `+subscriptionIDs[3]+`, `+subscriptionIDs[4]+` and 2 more). Removing it from AI Grid deletes its copies of those subscriptions, and their API keys are then revoked on every cluster. Delete the subscriptions first, or keep the cluster in AI Grid.`)
 }
 
 // When several rules refuse one update, the first in checkRoleChange's
@@ -702,8 +706,9 @@ func TestUpdateClusterRoleRuleOrder(t *testing.T) {
 			if tc.models {
 				placeModels(t, writer, map[string][]string{"model-a": {"site-a"}})
 			}
+			var subscriptionIDs []string
 			if tc.subscriptions {
-				createSubscriptions(t, writer, "sub-a")
+				subscriptionIDs = createSubscriptions(t, writer, "sub-a")
 			}
 			// site-b keeps the grid from being empty without site-a.
 			other := "inference"
@@ -716,7 +721,11 @@ func TestUpdateClusterRoleRuleOrder(t *testing.T) {
 			}
 			_, err = server.Update(ctx, tc.request)
 			assertConnectCode(t, err, connect.CodeFailedPrecondition)
-			assertConnectMessage(t, err, tc.want)
+			want := tc.want
+			if len(subscriptionIDs) != 0 {
+				want = strings.Replace(want, "sub-a", subscriptionIDs[0], 1)
+			}
+			assertConnectMessage(t, err, want)
 		})
 	}
 }
@@ -1208,7 +1217,21 @@ func TestUpdateClusterRoleLiveSubscriptions(t *testing.T) {
 			t.Parallel()
 			ctx := context.Background()
 			writer := newRoleCatalog()
-			createSubscriptions(t, writer, tc.catalog...)
+			catalogIDs := createSubscriptions(t, writer, tc.catalog...)
+			search := tc.search
+			if search != nil && search.subscriptions != nil {
+				search = &fakeSubscriptionSearch{subscriptions: maps.Clone(search.subscriptions), err: search.err}
+				for cluster, names := range search.subscriptions {
+					for index, name := range names {
+						for baseIndex, base := range tc.catalog {
+							if name == base {
+								names[index] = catalogIDs[baseIndex]
+							}
+						}
+					}
+					search.subscriptions[cluster] = names
+				}
+			}
 			var catalog catalogReader = writer
 			if tc.catalogErr != nil {
 				catalog = unreadableCatalog{err: tc.catalogErr}
@@ -1217,7 +1240,7 @@ func TestUpdateClusterRoleLiveSubscriptions(t *testing.T) {
 			// the grid's last member applies.
 			server, err := NewClustersServer().
 				SetDynamicClient(newManagedClusterClient(gridCluster("site-a", "combined"), gridCluster("site-b", "combined"))).
-				SetCatalog(catalog).SetSubscriptionSearch(tc.search).Build()
+				SetCatalog(catalog).SetSubscriptionSearch(search).Build()
 			if err != nil {
 				t.Fatalf("Build() error = %v", err)
 			}
@@ -1233,7 +1256,11 @@ func TestUpdateClusterRoleLiveSubscriptions(t *testing.T) {
 			}
 			assertConnectCode(t, err, tc.want)
 			if tc.message != "" {
-				assertConnectMessage(t, err, tc.message)
+				message := tc.message
+				for index, base := range tc.catalog {
+					message = strings.ReplaceAll(message, base, catalogIDs[index])
+				}
+				assertConnectMessage(t, err, message)
 			}
 			if tc.noConsoleDelete {
 				assertNoConsoleDelete(t, err)

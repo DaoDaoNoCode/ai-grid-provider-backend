@@ -3,6 +3,7 @@ syntax = "proto3";
 package ai_grid.v1;
 
 import "ai_grid/v1/subscription_type.proto";
+import "buf/validate/validate.proto";
 import "google/api/annotations.proto";
 import "google/protobuf/field_mask.proto";
 
@@ -56,7 +57,22 @@ message SubscriptionsGetResponse {
 }
 
 message SubscriptionsCreateRequest {
+  // The backend appends a short generated suffix to object.id (or
+  // object.metadata.name, or "sub" when both are empty) and returns the final
+  // Subscription identifier. The human-readable name remains
+  // metadata.annotations["openshift.io/display-name"].
   Subscription object = 1;
+
+  // Optional client-generated request token. Send the same lower-case UUIDv4
+  // when retrying a Create whose answer was lost: if its Subscription still
+  // exists and the create payload is equivalent, the backend returns that
+  // Subscription instead of creating another one. A different payload for the
+  // same token is AlreadyExists. Only a SHA-256 of the token is stored.
+  string request_token = 2 [(buf.validate.field).cel = {
+    id: "subscriptions_create_request.request_token.uuid_v4"
+    message: "request_token must be empty or a lower-case UUIDv4"
+    expression: "this == '' || this.matches('^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$')"
+  }];
 }
 
 message SubscriptionsCreateResponse {
@@ -107,7 +123,7 @@ service Subscriptions {
   rpc Create(SubscriptionsCreateRequest) returns (SubscriptionsCreateResponse) {
     option (google.api.http) = {
       post: "/api/v1/subscriptions"
-      body: "object"
+      body: "*"
     };
   }
 

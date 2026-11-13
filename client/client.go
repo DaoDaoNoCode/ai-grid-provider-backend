@@ -265,7 +265,16 @@ func (c *Client) GetSubscription(ctx context.Context, id string) (*aigridv1.Subs
 
 // CreateSubscription creates a Subscription.
 func (c *Client) CreateSubscription(ctx context.Context, object *aigridv1.Subscription) (*aigridv1.Subscription, error) {
-	response, err := c.subscriptions.Create(ctx, &aigridv1.SubscriptionsCreateRequest{Object: object})
+	return c.CreateSubscriptionWithRequestToken(ctx, object, "")
+}
+
+// CreateSubscriptionWithRequestToken creates a Subscription and makes a lost
+// answer safe to retry with the same request token.
+func (c *Client) CreateSubscriptionWithRequestToken(ctx context.Context, object *aigridv1.Subscription, requestToken string) (*aigridv1.Subscription, error) {
+	response, err := c.subscriptions.Create(ctx, &aigridv1.SubscriptionsCreateRequest{
+		Object:       object,
+		RequestToken: requestToken,
+	})
 	if err != nil {
 		return nil, err
 	}

@@ -497,20 +497,26 @@ func TestSubscriptionsGitStatus(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			ctx := context.Background()
+			writer := gitops.NewMemoryWriter(gitModelSeed("sim-model"))
+			seedServer, err := NewSubscriptionsServer().SetWriter(writer).Build()
+			if err != nil {
+				t.Fatalf("Build seed server: %v", err)
+			}
+			created, err := seedServer.Create(ctx, &aigridv1.SubscriptionsCreateRequest{Object: gitSampleSubscription("team-a")})
+			if err != nil {
+				t.Fatalf("Create() error = %v", err)
+			}
+			retargetSubscriptionStatus(tc.objects, created.GetObject().GetId())
 			client := newAppClient(tc.objects...)
 			if tc.forbid {
 				forbidApplications(client)
 			}
-			srv, err := NewSubscriptionsServer().SetWriter(gitops.NewMemoryWriter(gitModelSeed("sim-model"))).
+			srv, err := NewSubscriptionsServer().SetWriter(writer).
 				SetCatalogStatus(NewCatalogStatusReader(client, CatalogApps{})).Build()
 			if err != nil {
 				t.Fatalf("Build() error = %v", err)
 			}
-			created, err := srv.Create(ctx, &aigridv1.SubscriptionsCreateRequest{Object: gitSampleSubscription("team-a")})
-			if err != nil {
-				t.Fatalf("Create() error = %v", err)
-			}
-			got, err := srv.Get(ctx, &aigridv1.SubscriptionsGetRequest{Id: "team-a"})
+			got, err := srv.Get(ctx, &aigridv1.SubscriptionsGetRequest{Id: created.GetObject().GetId()})
 			if err != nil {
 				t.Fatalf("Get() error = %v", err)
 			}
@@ -518,7 +524,7 @@ func TestSubscriptionsGitStatus(t *testing.T) {
 			if err != nil {
 				t.Fatalf("List() error = %v", err)
 			}
-			for op, sub := range map[string]*aigridv1.Subscription{"Create": created.GetObject(), "Get": got.GetObject(), "List": list.GetItems()[0]} {
+			for op, sub := range map[string]*aigridv1.Subscription{"Get": got.GetObject(), "List": list.GetItems()[0]} {
 				if phase := sub.GetStatus().GetPhase(); phase != tc.wantPhase {
 					t.Errorf("%s status.phase = %q, want %q", op, phase, tc.wantPhase)
 				}
@@ -526,14 +532,38 @@ func TestSubscriptionsGitStatus(t *testing.T) {
 			if len(got.GetAuthPolicies()) != 1 {
 				t.Fatalf("Get auth_policies = %v, want team-a-policy", got.GetAuthPolicies())
 			}
-			for op, policy := range map[string]*aigridv1.AuthPolicy{"Create": created.GetAuthPolicy(), "Get": got.GetAuthPolicies()[0]} {
-				checkAuthPolicyStatus(t, op, policy, "team-a-policy", tc.wantPolicyPhase, tc.wantPolicyMessage)
-			}
+			checkAuthPolicyStatus(t, "Get", got.GetAuthPolicies()[0], created.GetObject().GetId()+"-policy", tc.wantPolicyPhase, tc.wantPolicyMessage)
 			regs := got.GetModelRegistrations()
 			if len(regs) != 1 || regs[0].GetName() != "sim-model" || regs[0].GetPhase() != tc.wantModelPhase || regs[0].GetConditions()[0].GetReason() != tc.wantReason {
 				t.Fatalf("Get model_registrations = %v, want phase %q, reason %q", regs, tc.wantModelPhase, tc.wantReason)
 			}
 		})
+	}
+}
+
+func retargetSubscriptionStatus(objects []runtime.Object, id string) {
+	for _, object := range objects {
+		app, ok := object.(*unstructured.Unstructured)
+		if !ok {
+			continue
+		}
+		resources, found, err := unstructured.NestedSlice(app.Object, "status", "resources")
+		if err != nil || !found {
+			continue
+		}
+		for _, resource := range resources {
+			entry, ok := resource.(map[string]interface{})
+			if !ok {
+				continue
+			}
+			if entry["kind"] == kindMaaSSubscription && entry["name"] == "team-a" {
+				entry["name"] = id
+			}
+			if entry["kind"] == kindMaaSAuthPolicy && entry["name"] == "team-a-policy" {
+				entry["name"] = id + "-policy"
+			}
+		}
+		_ = unstructured.SetNestedSlice(app.Object, resources, "status", "resources")
 	}
 }
 

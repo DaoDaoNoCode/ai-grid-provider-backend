@@ -77,6 +77,11 @@ them through the real Kubernetes and Keycloak clients.
 | `applications.json` | fake hub | An `ApplicationList` (`argoproj.io/v1alpha1`) of Argo CD Applications served by namespace: the catalog's Applications in `openshift-gitops` (`<ApplicationSet>-<cluster>`, owned by the ApplicationSet), whose `status.resources[]` health the backend reads models' and subscriptions' status from. Optional; missing means no reports, so everything shows Saved to Git. `default/` reports `granite-3b` ready on `site-paris-1`, progressing on `site-madrid-1` and its MaaSModelRef ready on `site-ashburn-1`, so placed on the first two it is partially available (P13). `default/` also reports `granite-stopped` (Stopped), `granite-failed` (Failed), `granite-syncing` (OutOfSync, the previous revision Healthy) and `granite-unsubscribed` (running, MaaSModelRef awaiting a subscription) on `site-paris-1` and `site-ashburn-1`; `poc/` is the same file with `site1`, `site2` and `site3`. | hand-authored |
 | `searchnodes.json` | fake ACM Search (on the fake hub's port) | `{"items": [{cluster, name, labels, ready}]}`: the nodes Search indexes, with NVIDIA GPU Feature Discovery's labels as an ACM hub's spokes carry them. Each cluster's GPUs add up to its `status.capacity["nvidia.com/gpu"]`. **Hand-written, not converted**: the console has no node fixtures, so `hack/convert-console-fixtures` doesn't touch this file. | (none) |
 
+Subscription status names are exact, like Argo CD's: the API always generates
+`team-a-<suffix>`, so the seeded `team-a` report does not make that API-created
+subscription active. Retarget the fixture (or the e2e setup) to the returned final id
+when a test needs an active API-created subscription.
+
 The backend no longer reads `maassubscriptions.json`, `maasauthpolicies.json`,
 `maasmodelrefs.json` or `llminferenceservices.json`: Models and Subscriptions
 live in Git (README, "Git catalog"). The fake hub still serves them.
