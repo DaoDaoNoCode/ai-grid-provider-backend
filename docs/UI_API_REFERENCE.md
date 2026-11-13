@@ -491,7 +491,7 @@ Member fields:
 | Field | Meaning for UI |
 | --- | --- |
 | `username` | Local Keycloak login. A brokered account can use a generated UUID. |
-| `preferred_username` | Optional upstream profile label. It may repeat or be empty. |
+| `preferred_username` | Optional upstream profile label. It can repeat or be empty. |
 
 UI should treat **`id`** as the stable identifier for Get/Update/Delete, and
 **`metadata.name`** as the display / create name.

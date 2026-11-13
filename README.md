@@ -567,12 +567,12 @@ six broker mappers. `maas_org_id` and
 `roles`, and `preferred_username` claims on every login (`FORCE`). The local
 username mapper generates a UUID once at import (`IMPORT`). Set the built-in
 `profile` client scope's `username` mapper to read `maas_preferred_username`.
-Remove any second client mapper that writes `preferred_username`; two mappers
+Remove any second client mapper that writes `preferred_username`. Two mappers
 for the same claim can expose the generated UUID, depending on import order.
 The other realm client mappers turn `maas_org_id`, `maas_org_name`,
 `maas_groups`, and `maas_roles` into the flat `org_id`, `org_name`, `groups`,
 and `roles` claims (ODH-ADR-MS-0007). This changes the shared `profile` scope's
-username mapper; the built-in `email` scope stays unchanged. When the upstream
+username mapper. The built-in `email` scope stays unchanged. When the upstream
 IdP sends no `preferred_username`, the token has no `preferred_username` claim.
 The backend creates the IdP with `trustEmail` on, so Keycloak takes each user's
 `email_verified` from the tenant IdP, on every login. The tenant IdP must send
@@ -765,31 +765,35 @@ The script:
 6. Creates the `ai-grid` Keycloak realm and two sample Organizations.
 7. Port-forwards the backend gRPC Service.
 8. Runs typed Go gRPC integration tests and verifies ping, clusters, and tenants.
+9. Runs the tenant identity-isolation regression in generated test realms.
 
 The sample resources are defined in
 [deploy/kind/sample-managedclusters.yaml](deploy/kind/sample-managedclusters.yaml).
 
 ## Run the tenant identity-isolation regression
 
-The target uses the Kind Keycloak 26.8.0 deployment and a local backend process. Set every input
-below before you run it. The script lists missing input names and stops.
-
-- Ports: `IDENTITY_ISOLATION_KEYCLOAK_PORT`, `IDENTITY_ISOLATION_BACKEND_PORT`, and `IDENTITY_ISOLATION_CALLBACK_PORT`.
-- Keycloak: `IDENTITY_ISOLATION_INTERNAL_KEYCLOAK_URL`, `KEYCLOAK_ADMIN_REALM`, `KEYCLOAK_ADMIN_USERNAME`, and `KEYCLOAK_ADMIN_PASSWORD`.
-- Realm names: `IDENTITY_ISOLATION_TARGET_REALM`, `IDENTITY_ISOLATION_UPSTREAM_REALM_A`, and `IDENTITY_ISOLATION_UPSTREAM_REALM_B`.
-- Client IDs: `IDENTITY_ISOLATION_BROKER_CLIENT_ID`, `IDENTITY_ISOLATION_UPSTREAM_CLIENT_A`, `IDENTITY_ISOLATION_UPSTREAM_CLIENT_B`, `IDENTITY_ISOLATION_SHARED_CLIENT_1`, `IDENTITY_ISOLATION_SHARED_CLIENT_2`, `IDENTITY_ISOLATION_NO_PROFILE_CLIENT`, and `IDENTITY_ISOLATION_PROFILE_CLIENT`.
-- Secret names: `IDENTITY_ISOLATION_UPSTREAM_SECRET_A`, `IDENTITY_ISOLATION_UPSTREAM_SECRET_B`, `IDENTITY_ISOLATION_SHARED_SECRET_1`, `IDENTITY_ISOLATION_SHARED_SECRET_2`, `IDENTITY_ISOLATION_NO_PROFILE_SECRET`, and `IDENTITY_ISOLATION_PROFILE_SECRET`.
+The target uses the Kind Keycloak 26.8.0 deployment and a local backend process. No environment setup is required.
+The runner generates realm and Secret names and supplies the fixture client IDs. It removes the fixture realms and Secrets afterward.
+The test refuses existing realms.
 
 The runner uses the `ai-grid-hub` cluster and Podman by default. Set `KIND_CLUSTER_NAME` or
-`KIND_EXPERIMENTAL_PROVIDER` to choose another value. The backend uses the target realm as its
-`KEYCLOAK_REALM`. Choose realm names that do not exist. The test stops if a target or upstream
-realm already exists, and it does not delete existing realms.
+`KIND_EXPERIMENTAL_PROVIDER` to choose another value. Optional connection overrides are:
+
+| Variable | Default |
+| --- | --- |
+| `IDENTITY_ISOLATION_KEYCLOAK_PORT` | `18081` |
+| `IDENTITY_ISOLATION_BACKEND_PORT` | `19090` |
+| `IDENTITY_ISOLATION_CALLBACK_PORT` | `18082` |
+| `IDENTITY_ISOLATION_INTERNAL_KEYCLOAK_URL` | `http://keycloak.ai-grid.svc.cluster.local:8080` |
+
+The runner uses administrator realm `master` and development-only credentials `admin` / `admin`, as defined in `deploy/kind/keycloak.yaml`.
+If you change that local deployment, set `KEYCLOAK_ADMIN_REALM`, `KEYCLOAK_ADMIN_USERNAME`, and `KEYCLOAK_ADMIN_PASSWORD` to match.
 
 The test creates tenants through the real onboarding path and logs in through the broker
-authorization-code flow. It checks that two companies can use the profile username `alice`,
-that repeat logins keep their broker identities, and that upstream renames leave local handles
-and provider links unchanged. It also checks missing profile data, matching-email conflicts,
-and legacy local usernames.
+authorization-code flow. It makes sure that two companies can use the profile username `alice`.
+It makes sure that repeat logins keep broker identities and upstream renames leave local handles
+and provider links unchanged. It also tests missing profile data, matching-email conflicts, and
+legacy local usernames.
 
 From the repository root, run:
 

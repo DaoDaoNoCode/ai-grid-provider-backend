@@ -8,66 +8,31 @@ cluster_name="${KIND_CLUSTER_NAME:-ai-grid-hub}"
 kube_context="kind-${cluster_name}"
 export KIND_EXPERIMENTAL_PROVIDER="${KIND_EXPERIMENTAL_PROVIDER:-podman}"
 
-required_inputs=(
-  IDENTITY_ISOLATION_KEYCLOAK_PORT
-  IDENTITY_ISOLATION_INTERNAL_KEYCLOAK_URL
-  IDENTITY_ISOLATION_BACKEND_PORT
-  IDENTITY_ISOLATION_CALLBACK_PORT
-  IDENTITY_ISOLATION_TARGET_REALM
-  IDENTITY_ISOLATION_UPSTREAM_REALM_A
-  IDENTITY_ISOLATION_UPSTREAM_REALM_B
-  IDENTITY_ISOLATION_BROKER_CLIENT_ID
-  IDENTITY_ISOLATION_UPSTREAM_CLIENT_A
-  IDENTITY_ISOLATION_UPSTREAM_CLIENT_B
-  IDENTITY_ISOLATION_SHARED_CLIENT_1
-  IDENTITY_ISOLATION_SHARED_CLIENT_2
-  IDENTITY_ISOLATION_NO_PROFILE_CLIENT
-  IDENTITY_ISOLATION_PROFILE_CLIENT
-  IDENTITY_ISOLATION_UPSTREAM_SECRET_A
-  IDENTITY_ISOLATION_UPSTREAM_SECRET_B
-  IDENTITY_ISOLATION_SHARED_SECRET_1
-  IDENTITY_ISOLATION_SHARED_SECRET_2
-  IDENTITY_ISOLATION_NO_PROFILE_SECRET
-  IDENTITY_ISOLATION_PROFILE_SECRET
-  KEYCLOAK_ADMIN_REALM
-  KEYCLOAK_ADMIN_USERNAME
-  KEYCLOAK_ADMIN_PASSWORD
-)
-missing_inputs=()
-for input_name in "${required_inputs[@]}"; do
-  if [[ -z "${!input_name:-}" ]]; then
-    missing_inputs+=("$input_name")
-  fi
-done
-if ((${#missing_inputs[@]} > 0)); then
-  printf 'error: missing required runtime inputs:\n' >&2
-  printf '  %s\n' "${missing_inputs[@]}" >&2
-  exit 1
-fi
-
-keycloak_port="$IDENTITY_ISOLATION_KEYCLOAK_PORT"
-internal_keycloak_url="$IDENTITY_ISOLATION_INTERNAL_KEYCLOAK_URL"
-backend_port="$IDENTITY_ISOLATION_BACKEND_PORT"
-callback_port="$IDENTITY_ISOLATION_CALLBACK_PORT"
-target_realm="$IDENTITY_ISOLATION_TARGET_REALM"
-upstream_realm_a="$IDENTITY_ISOLATION_UPSTREAM_REALM_A"
-upstream_realm_b="$IDENTITY_ISOLATION_UPSTREAM_REALM_B"
-broker_client_id="$IDENTITY_ISOLATION_BROKER_CLIENT_ID"
-upstream_client_a="$IDENTITY_ISOLATION_UPSTREAM_CLIENT_A"
-upstream_client_b="$IDENTITY_ISOLATION_UPSTREAM_CLIENT_B"
-shared_client_1="$IDENTITY_ISOLATION_SHARED_CLIENT_1"
-shared_client_2="$IDENTITY_ISOLATION_SHARED_CLIENT_2"
-no_profile_client="$IDENTITY_ISOLATION_NO_PROFILE_CLIENT"
-profile_client="$IDENTITY_ISOLATION_PROFILE_CLIENT"
-upstream_secret_a="$IDENTITY_ISOLATION_UPSTREAM_SECRET_A"
-upstream_secret_b="$IDENTITY_ISOLATION_UPSTREAM_SECRET_B"
-shared_secret_1="$IDENTITY_ISOLATION_SHARED_SECRET_1"
-shared_secret_2="$IDENTITY_ISOLATION_SHARED_SECRET_2"
-no_profile_secret="$IDENTITY_ISOLATION_NO_PROFILE_SECRET"
-profile_secret="$IDENTITY_ISOLATION_PROFILE_SECRET"
-admin_username="$KEYCLOAK_ADMIN_USERNAME"
-admin_password="$KEYCLOAK_ADMIN_PASSWORD"
-admin_realm="$KEYCLOAK_ADMIN_REALM"
+run_id="identity-isolation-$$-${RANDOM}"
+keycloak_port="${IDENTITY_ISOLATION_KEYCLOAK_PORT:-18081}"
+internal_keycloak_url="${IDENTITY_ISOLATION_INTERNAL_KEYCLOAK_URL:-http://keycloak.ai-grid.svc.cluster.local:8080}"
+backend_port="${IDENTITY_ISOLATION_BACKEND_PORT:-19090}"
+callback_port="${IDENTITY_ISOLATION_CALLBACK_PORT:-18082}"
+target_realm="${run_id}-broker"
+upstream_realm_a="${run_id}-upstream-a"
+upstream_realm_b="${run_id}-upstream-b"
+broker_client_id="identity-isolation"
+upstream_client_a="saas-broker-a"
+upstream_client_b="saas-broker-b"
+shared_client_1="shared-1"
+shared_client_2="shared-2"
+no_profile_client="no-profile"
+profile_client="profile"
+upstream_secret_a="${run_id}-upstream-a"
+upstream_secret_b="${run_id}-upstream-b"
+shared_secret_1="${run_id}-shared-1"
+shared_secret_2="${run_id}-shared-2"
+no_profile_secret="${run_id}-no-profile"
+profile_secret="${run_id}-profile"
+secret_names=("$upstream_secret_a" "$upstream_secret_b" "$shared_secret_1" "$shared_secret_2" "$no_profile_secret" "$profile_secret")
+admin_username="${KEYCLOAK_ADMIN_USERNAME:-admin}"
+admin_password="${KEYCLOAK_ADMIN_PASSWORD:-admin}"
+admin_realm="${KEYCLOAK_ADMIN_REALM:-master}"
 
 for command_name in go podman kind kubectl curl grpcurl; do
   if ! command -v "$command_name" >/dev/null 2>&1; then
@@ -91,20 +56,6 @@ kubectl -n ai-grid rollout status deployment/keycloak --timeout=5m
 
 apply_namespace ai-grid-idp-secrets
 
-create_secret() {
-  local name="$1"
-  local value="$2"
-  kubectl -n ai-grid-idp-secrets create secret generic "$name" \
-    --from-literal=client-secret="$value" \
-    --dry-run=client -o yaml | kubectl apply -f -
-}
-create_secret "$upstream_secret_a" "$upstream_secret_a"
-create_secret "$upstream_secret_b" "$upstream_secret_b"
-create_secret "$shared_secret_1" "$shared_secret_1"
-create_secret "$shared_secret_2" "$shared_secret_2"
-create_secret "$no_profile_secret" "$no_profile_secret"
-create_secret "$profile_secret" "$profile_secret"
-
 work="$(mktemp -d)"
 port_forward_pid=""
 backend_pid=""
@@ -117,9 +68,17 @@ cleanup() {
     kill "$port_forward_pid" 2>/dev/null || true
     wait "$port_forward_pid" 2>/dev/null || true
   fi
+  kubectl --context="$kube_context" -n ai-grid-idp-secrets delete secret "${secret_names[@]}" \
+    --ignore-not-found >/dev/null 2>&1 || true
   rm -rf "$work"
 }
 trap cleanup EXIT
+
+for secret_name in "${secret_names[@]}"; do
+  kubectl -n ai-grid-idp-secrets create secret generic "$secret_name" \
+    --from-literal=client-secret="$secret_name" \
+    --dry-run=client -o yaml | kubectl apply -f -
+done
 
 kubectl -n ai-grid port-forward service/keycloak "${keycloak_port}:8080" >"$work/keycloak-port-forward.log" 2>&1 &
 port_forward_pid=$!
