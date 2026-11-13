@@ -15,6 +15,11 @@ at commit `537df38`:
 | `default/` | `mock/fixtures/` | Ten clusters in every state the ACM console distinguishes, six organizations, a timeline of cluster events. |
 | `poc/` | `mock/fixtures-poc/` | The PoC's four sites (`site1`-`site4`) and three organizations; no timeline, so nothing changes over time. Also seeds the same hand-authored MaaS / LLMInferenceService CRs as `default/` so `make dev-fake-poc` exercises Models and Subscriptions. |
 
+Both directories also carry hand-authored `members.json` files. The fake
+Keycloak serves these users through the organization members endpoint.
+The two files intentionally contain the same three members so both presets
+exercise the same member projection.
+
 `locations/` is **hand-written, not converted**: one ready cluster per edge case of
 `status.location` (README, "Cluster locations"); `make dev-fake-locations` serves it.
 `hack/convert-console-fixtures` doesn't touch it. Each cluster has only what the location,
@@ -66,6 +71,7 @@ them through the real Kubernetes and Keycloak clients.
 |---|---|---|---|
 | `managedclusters.json` | fake hub | A `ManagedClusterList` (`cluster.open-cluster-management.io/v1`) of full CRs: `metadata` (name, uid, resourceVersion, generation, creationTimestamp, deletionTimestamp, labels, annotations, finalizers), `spec` (managedClusterClientConfigs, hubAcceptsClient, leaseDurationSeconds, taints), `status` (conditions, capacity, allocatable, version, clusterClaims). | `managedclusters.json` |
 | `organizations.json` | fake Keycloak | A JSON array of Keycloak 26.8 `OrganizationRepresentation`, as `GET /admin/realms/ai-grid/organizations?briefRepresentation=false` returns them: id, name, alias, enabled, description, attributes (Keycloak's map of string arrays), domains (`name`, `verified`, `autoRedirect`). | `tenants.json` |
+| `members.json` | fake Keycloak | A JSON object keyed by organization UUID. Each value is an array of member representations with `id`, `username`, and optional `attributes`. This file is optional. If it is missing, the fake has no members. | hand-authored |
 | `access.json` | fake hub | Which bearer tokens the hub rejects (401), denies (SelfSubjectAccessReview `allowed: false`, 403 on managedclusters) or allows, plus the backend's ServiceAccount token that `bin/fake-kubeconfig` carries. | `access.json` |
 | `scenarios.json` | fake hub | Timed events that the hub controllers apply to the CRs (joined, imported, add-ons available, lease lost or recovered, API server down or up, detaching, detached). | `scenarios.json` |
 | `settings.json` | fake hub | `speed` of the scenario clock; optional `detachAfter`. | `settings.json` |

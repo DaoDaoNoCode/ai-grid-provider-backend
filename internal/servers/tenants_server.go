@@ -2,6 +2,7 @@ package servers
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"hash/fnv"
@@ -59,7 +60,7 @@ type organizationClient interface {
 	ReloadIdentityProviderKeys(ctx context.Context, alias string) (bool, error)
 	LinkOrganizationIdentityProvider(ctx context.Context, orgID, alias string) error
 	ConfigureOrganizationIdentityProvider(ctx context.Context, orgID, alias string) error
-	UpsertIdentityProviderMapper(ctx context.Context, alias, organizationID, organizationName string) error
+	UpsertIdentityProviderMapper(ctx context.Context, spec keycloak.IdentityProviderMapperSpec) error
 	ListIdentityProviderMappers(ctx context.Context, alias string) ([]keycloak.IdentityProviderMapper, error)
 	CountIdentityProviderUsers(ctx context.Context, alias string) (int, error)
 }
@@ -556,7 +557,9 @@ func (s *TenantsServer) refreshIdentityProviderMappers(ctx context.Context, org 
 		return nil
 	}
 	alias := identityProviderAliasOf(org)
-	if err := s.tenants.UpsertIdentityProviderMapper(ctx, alias, org.ID, org.Name); err != nil {
+	if err := s.tenants.UpsertIdentityProviderMapper(ctx, keycloak.IdentityProviderMapperSpec{
+		Alias: alias, OrganizationID: org.ID, OrganizationName: org.Name,
+	}); err != nil {
 		return mapTenantKeycloakError("update identity provider mappers", alias, err)
 	}
 	return nil
@@ -718,13 +721,18 @@ func staleTenantError(op, id string) *connect.Error {
 }
 
 func tenantMemberFromOrganizationMember(member keycloak.OrganizationMember) *aigridv1.TenantMember {
+	preferredUsername := ""
+	if values := member.Attributes["maas_preferred_username"]; len(values) > 0 {
+		preferredUsername = values[0]
+	}
 	return &aigridv1.TenantMember{
-		Id:        member.ID,
-		Username:  member.Username,
-		Email:     member.Email,
-		FirstName: member.FirstName,
-		LastName:  member.LastName,
-		Enabled:   member.Enabled,
+		Id:                member.ID,
+		Username:          member.Username,
+		Email:             member.Email,
+		FirstName:         member.FirstName,
+		LastName:          member.LastName,
+		Enabled:           member.Enabled,
+		PreferredUsername: preferredUsername,
 	}
 }
 
@@ -853,7 +861,10 @@ func validateTenantDomains(domains []keycloak.OrganizationDomain) error {
 }
 
 func mapTenantKeycloakError(op, id string, err error) error {
+	var mapperConflict *keycloak.UsernameMapperConflictError
 	switch {
+	case errors.As(err, &mapperConflict):
+		return connect.Errorf(connect.CodeFailedPrecondition, "%s tenant %q: %v", op, id, err).WithCause(err)
 	case keycloak.IsNotFound(err):
 		if id == "" {
 			return connect.Errorf(connect.CodeNotFound, "tenant not found").WithCause(err)
@@ -1004,7 +1015,11 @@ func (s *TenantsServer) setupIdentityProvider(ctx context.Context, org keycloak.
 		return false, err
 	}
 	alias := identityProviderAliasOf(org)
-	if err := s.tenants.CreateIdentityProvider(ctx, keycloakIdentityProvider(alias, idp, secret)); err != nil {
+	kcIdP := keycloakIdentityProvider(alias, idp, secret)
+	kcIdP.Extra = map[string]json.RawMessage{
+		"firstBrokerLoginFlowAlias": json.RawMessage(strconv.Quote(keycloak.FirstBrokerLoginFlowAlias)),
+	}
+	if err := s.tenants.CreateIdentityProvider(ctx, kcIdP); err != nil {
 		return false, mapTenantKeycloakError("create identity provider", alias, err)
 	}
 	idpCreated = true
@@ -1017,7 +1032,9 @@ func (s *TenantsServer) setupIdentityProvider(ctx context.Context, org keycloak.
 	if err := s.tenants.ConfigureOrganizationIdentityProvider(ctx, org.ID, alias); err != nil {
 		return idpCreated, mapTenantKeycloakError("configure identity provider", alias, err)
 	}
-	if err := s.tenants.UpsertIdentityProviderMapper(ctx, alias, org.ID, org.Name); err != nil {
+	if err := s.tenants.UpsertIdentityProviderMapper(ctx, keycloak.IdentityProviderMapperSpec{
+		Alias: alias, OrganizationID: org.ID, OrganizationName: org.Name,
+	}); err != nil {
 		return idpCreated, mapTenantKeycloakError("upsert identity provider mapper", alias, err)
 	}
 	return idpCreated, nil
@@ -1144,7 +1161,9 @@ func (s *TenantsServer) replaceIdentityProvider(ctx context.Context, current key
 	if err := s.checkSigningKeys(ctx, alias, idp.GetConfig()); err != nil {
 		return keycloak.IdentityProvider{}, restore(err)
 	}
-	if err := s.tenants.UpsertIdentityProviderMapper(ctx, alias, current.ID, name); err != nil {
+	if err := s.tenants.UpsertIdentityProviderMapper(ctx, keycloak.IdentityProviderMapperSpec{
+		Alias: alias, OrganizationID: current.ID, OrganizationName: name,
+	}); err != nil {
 		return keycloak.IdentityProvider{}, restore(mapTenantKeycloakError("upsert identity provider mapper", alias, err))
 	}
 	return previous, nil
@@ -1159,7 +1178,9 @@ func (s *TenantsServer) restoreIdentityProvider(ctx context.Context, current key
 	if err := s.tenants.UpdateIdentityProvider(ctx, previous); err != nil {
 		return connect.Errorf(connect.CodeInternal, "identity provider update failed (%v); restoring the previous identity provider also failed (%v), so the realm identity provider %q is left on the new config while the organization wasn't saved: retry the update, or revert the identity provider in Keycloak", cause, err, previous.Alias)
 	}
-	if err := s.tenants.UpsertIdentityProviderMapper(ctx, previous.Alias, current.ID, current.Name); err != nil {
+	if err := s.tenants.UpsertIdentityProviderMapper(ctx, keycloak.IdentityProviderMapperSpec{
+		Alias: previous.Alias, OrganizationID: current.ID, OrganizationName: current.Name,
+	}); err != nil {
 		return connect.Errorf(connect.CodeInternal, "identity provider update failed (%v); the previous identity provider was restored, but restoring its mappers failed: %v", cause, err)
 	}
 	return cause

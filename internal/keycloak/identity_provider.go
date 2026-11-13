@@ -12,11 +12,16 @@ import (
 const (
 	// IdentityProviderOrgIDMapperName names the mapper this backend puts on every IdP it
 	// creates; an IdP without it was made outside this API.
-	IdentityProviderOrgIDMapperName   = "AI Grid org id"
-	identityProviderOrgNameMapperName = "AI Grid org name"
-	identityProviderGroupsMapperName  = "AI Grid groups"
-	identityProviderRolesMapperName   = "AI Grid roles"
+	IdentityProviderOrgIDMapperName             = "AI Grid org id"
+	identityProviderOrgNameMapperName           = "AI Grid org name"
+	identityProviderGroupsMapperName            = "AI Grid groups"
+	identityProviderRolesMapperName             = "AI Grid roles"
+	identityProviderUsernameMapperName          = "AI Grid local username"
+	identityProviderPreferredUsernameMapperName = "AI Grid preferred username"
 )
+
+// FirstBrokerLoginFlowAlias is Keycloak's built-in first broker login flow.
+const FirstBrokerLoginFlowAlias = "first broker login"
 
 // IdentityProvider is a realm-level identity provider instance. TrustEmail is Keycloak's
 // trustEmail: with it on, Keycloak takes a brokered user's email_verified from the IdP instead
@@ -58,6 +63,23 @@ type IdentityProviderMapper struct {
 	IdentityProviderAlias  string            `json:"identityProviderAlias"`
 	IdentityProviderMapper string            `json:"identityProviderMapper"`
 	Config                 map[string]string `json:"config"`
+}
+
+// IdentityProviderMapperSpec holds the identity and organization values for a tenant IdP.
+type IdentityProviderMapperSpec struct {
+	Alias            string
+	OrganizationID   string
+	OrganizationName string
+}
+
+// UsernameMapperConflictError identifies a username mapper this backend does not own.
+type UsernameMapperConflictError struct {
+	Alias      string
+	MapperName string
+}
+
+func (e *UsernameMapperConflictError) Error() string {
+	return fmt.Sprintf("identity provider %q has conflicting username mapper %q", e.Alias, e.MapperName)
 }
 
 // OrganizationIdentityProviderLink configures an org↔IdP association.
@@ -267,31 +289,37 @@ func (c *Client) ConfigureOrganizationIdentityProvider(ctx context.Context, orgI
 }
 
 // UpsertIdentityProviderMapper creates or updates the broker mappers that put the AI Grid
-// identity claims on a tenant user: the organization id and name (fixed per IdP), and the
-// tenant IdP's groups and roles claims, copied on every login (FORCE). The realm's client
-// scopes turn the maas_* user attributes into the flat org_id, org_name, groups and roles
-// token claims (ODH-ADR-MS-0007).
-func (c *Client) UpsertIdentityProviderMapper(ctx context.Context, alias, organizationID, organizationName string) error {
-	if alias == "" || organizationID == "" {
+// identity claims on a tenant user. The organization id and name are fixed per IdP. The
+// tenant IdP's groups, roles, and preferred username claims are copied on every login
+// (FORCE). The local username is generated once when Keycloak imports the user (IMPORT).
+// The realm's client scopes turn the maas_* user attributes into the flat org_id, org_name,
+// groups, and roles token claims (ODH-ADR-MS-0007).
+func (c *Client) UpsertIdentityProviderMapper(ctx context.Context, spec IdentityProviderMapperSpec) error {
+	if spec.Alias == "" || spec.OrganizationID == "" {
 		return fmt.Errorf("identity provider alias and organization id are required")
 	}
-	if organizationName == "" {
-		organizationName = alias
+	if spec.OrganizationName == "" {
+		spec.OrganizationName = spec.Alias
 	}
 	token, err := c.token(ctx)
 	if err != nil {
 		return err
 	}
 	var existing []IdentityProviderMapper
-	if err := c.doJSON(ctx, http.MethodGet, c.idpMappersURL(alias), token, nil, &existing, "list identity provider mappers"); err != nil {
+	if err := c.doJSON(ctx, http.MethodGet, c.idpMappersURL(spec.Alias), token, nil, &existing, "list identity provider mappers"); err != nil {
 		return err
 	}
-	for _, mapper := range identityProviderMappers(alias, organizationID, organizationName) {
-		method, url, op := http.MethodPost, c.idpMappersURL(alias), "create identity provider mapper"
+	for _, current := range existing {
+		if current.IdentityProviderMapper == "oidc-username-idp-mapper" && current.Name != identityProviderUsernameMapperName {
+			return &UsernameMapperConflictError{Alias: spec.Alias, MapperName: current.Name}
+		}
+	}
+	for _, mapper := range identityProviderMappers(spec) {
+		method, url, op := http.MethodPost, c.idpMappersURL(spec.Alias), "create identity provider mapper"
 		for _, e := range existing {
 			if e.Name == mapper.Name {
 				mapper.ID = e.ID
-				method, url, op = http.MethodPut, c.idpMapperURL(alias, e.ID), "update identity provider mapper"
+				method, url, op = http.MethodPut, c.idpMapperURL(spec.Alias, e.ID), "update identity provider mapper"
 				break
 			}
 		}
@@ -306,24 +334,30 @@ func (c *Client) UpsertIdentityProviderMapper(ctx context.Context, alias, organi
 	return nil
 }
 
-func identityProviderMappers(alias, organizationID, organizationName string) []IdentityProviderMapper {
+func identityProviderMappers(spec IdentityProviderMapperSpec) []IdentityProviderMapper {
 	hardcoded := func(name, attribute, value string) IdentityProviderMapper {
 		return IdentityProviderMapper{
-			Name: name, IdentityProviderAlias: alias, IdentityProviderMapper: "hardcoded-attribute-idp-mapper",
+			Name: name, IdentityProviderAlias: spec.Alias, IdentityProviderMapper: "hardcoded-attribute-idp-mapper",
 			Config: map[string]string{"attribute": attribute, "attribute.value": value, "syncMode": "FORCE"},
 		}
 	}
 	fromClaim := func(name, claim, attribute string) IdentityProviderMapper {
 		return IdentityProviderMapper{
-			Name: name, IdentityProviderAlias: alias, IdentityProviderMapper: "oidc-user-attribute-idp-mapper",
+			Name: name, IdentityProviderAlias: spec.Alias, IdentityProviderMapper: "oidc-user-attribute-idp-mapper",
 			Config: map[string]string{"claim": claim, "user.attribute": attribute, "syncMode": "FORCE"},
 		}
 	}
 	return []IdentityProviderMapper{
-		hardcoded(IdentityProviderOrgIDMapperName, "maas_org_id", organizationID),
-		hardcoded(identityProviderOrgNameMapperName, "maas_org_name", organizationName),
+		hardcoded(IdentityProviderOrgIDMapperName, "maas_org_id", spec.OrganizationID),
+		hardcoded(identityProviderOrgNameMapperName, "maas_org_name", spec.OrganizationName),
 		fromClaim(identityProviderGroupsMapperName, "groups", "maas_groups"),
 		fromClaim(identityProviderRolesMapperName, "roles", "maas_roles"),
+		{
+			Name: identityProviderUsernameMapperName, IdentityProviderAlias: spec.Alias,
+			IdentityProviderMapper: "oidc-username-idp-mapper",
+			Config:                 map[string]string{"template": "${UUID}", "target": "LOCAL", "syncMode": "IMPORT"},
+		},
+		fromClaim(identityProviderPreferredUsernameMapperName, "preferred_username", "maas_preferred_username"),
 	}
 }
 

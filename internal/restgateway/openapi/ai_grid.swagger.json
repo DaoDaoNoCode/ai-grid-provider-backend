@@ -2694,7 +2694,7 @@
         },
         "username": {
           "type": "string",
-          "description": "Login username."
+          "description": "Local Keycloak login username."
         },
         "email": {
           "type": "string",
@@ -2709,6 +2709,10 @@
         "enabled": {
           "type": "boolean",
           "description": "Whether the Keycloak user is enabled."
+        },
+        "preferred_username": {
+          "type": "string",
+          "description": "Optional profile label from the upstream identity provider. It can repeat\nacross members or be empty. Do not use it as a member identity."
         }
       },
       "description": "TenantMember is a Keycloak user that belongs to the tenant's Organization.\nThis is a read projection for listing; full user management is out of scope."

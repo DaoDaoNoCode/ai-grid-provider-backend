@@ -319,9 +319,16 @@ func TestRealTenantsServerOnFakeKeycloak(t *testing.T) {
 	if err != nil {
 		t.Fatalf("keycloak.LoadFixtures() error = %v", err)
 	}
+	members, err := fakekeycloak.LoadMemberFixtures(fixturesDir)
+	if err != nil {
+		t.Fatalf("keycloak.LoadMemberFixtures() error = %v", err)
+	}
 	kc, err := fakekeycloak.New(fakekeycloak.Config{AdminRealm: "master", Realm: "ai-grid", Username: "admin", Password: "admin", Logger: slog.New(slog.DiscardHandler)}, orgs)
 	if err != nil {
 		t.Fatalf("keycloak fake New() error = %v", err)
+	}
+	if err := kc.SeedMembers(members); err != nil {
+		t.Fatalf("keycloak fake SeedMembers() error = %v", err)
 	}
 	srv := httptest.NewServer(kc.Handler())
 	t.Cleanup(srv.Close)
@@ -353,6 +360,13 @@ func TestRealTenantsServerOnFakeKeycloak(t *testing.T) {
 	}
 	if _, err := tenants("wrong").List(context.Background(), &aigridv1.TenantsListRequest{}); err == nil {
 		t.Fatal("List() with a wrong password succeeded")
+	}
+	memberList, err := tenants("admin").ListMembers(context.Background(), &aigridv1.TenantsListMembersRequest{Id: acme.GetId()})
+	if err != nil {
+		t.Fatalf("ListMembers() error = %v", err)
+	}
+	if memberList.GetTotal() != 3 || memberList.GetItems()[0].GetPreferredUsername() != "alice" {
+		t.Fatalf("ListMembers() = %+v", memberList.GetItems())
 	}
 }
 

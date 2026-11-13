@@ -27,7 +27,8 @@ func TestIdentityProviderRoutes(t *testing.T) {
 
 	createBody, _ := json.Marshal(map[string]any{
 		"alias": "acme", "providerId": "oidc", "enabled": true, "trustEmail": true,
-		"config": map[string]string{"clientId": "c", "clientSecret": "secret-value"},
+		"firstBrokerLoginFlowAlias": "first broker login",
+		"config":                    map[string]string{"clientId": "c", "clientSecret": "secret-value"},
 	})
 	res := doAdmin(t, ts, token, http.MethodPost, "/admin/realms/ai-grid/identity-provider/instances", createBody)
 	if res.StatusCode != http.StatusCreated {
@@ -46,6 +47,9 @@ func TestIdentityProviderRoutes(t *testing.T) {
 	}
 	if got["trustEmail"] != true {
 		t.Fatalf("get trustEmail = %#v, want true", got["trustEmail"])
+	}
+	if got["firstBrokerLoginFlowAlias"] != "first broker login" {
+		t.Fatalf("get firstBrokerLoginFlowAlias = %#v", got["firstBrokerLoginFlowAlias"])
 	}
 
 	orgIdP := "/admin/realms/ai-grid/organizations/" + orgID + "/identity-providers/acme"

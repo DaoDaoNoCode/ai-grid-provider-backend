@@ -1,9 +1,9 @@
 // Package keycloak is a fake of the part of Keycloak 26.8.0 that
 // ai-grid-provider-backend calls: the OpenID Connect password grant on
-// /realms/{admin realm}/protocol/openid-connect/token and the Organizations
-// Admin REST API under /admin/realms/{realm}/organizations. It answers with
-// Keycloak's status codes, body shapes and messages (validation.go names the
-// Keycloak source line of each), so the backend's client code runs unchanged.
+// /realms/{admin realm}/protocol/openid-connect/token, the Organizations Admin
+// REST API, and organization identity-provider Admin REST API. It answers with
+// Keycloak's status codes, body shapes and messages (handlers cite their
+// Keycloak source lines), so the backend's client code runs unchanged.
 package keycloak
 
 import (
@@ -68,6 +68,7 @@ type Server struct {
 
 	mu      sync.Mutex
 	orgs    map[string]*organization
+	members map[string][]OrganizationMember
 	tokens  map[string]time.Time
 	idps    map[string]*identityProvider
 	orgIdPs map[string]orgIdPLinkState
@@ -103,7 +104,7 @@ func New(cfg Config, seed []Organization) (*Server, error) {
 	}
 	s := &Server{
 		cfg: cfg, clock: cfg.Clock, logger: cfg.Logger,
-		orgs: map[string]*organization{}, tokens: map[string]time.Time{},
+		orgs: map[string]*organization{}, members: map[string][]OrganizationMember{}, tokens: map[string]time.Time{},
 		idps: map[string]*identityProvider{}, orgIdPs: map[string]orgIdPLinkState{},
 		mappers: map[string][]*identityProviderMapper{}, federated: map[string]map[string]string{},
 	}
@@ -137,6 +138,41 @@ func (s *Server) seed(rep Organization) error {
 	return nil
 }
 
+// SeedMembers stores fixture members by organization ID. Every member ID is
+// a lower-case UUID and each organization holds each member once.
+func (s *Server) SeedMembers(seed map[string][]OrganizationMember) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	seen := map[string]bool{}
+	for organizationID, reps := range seed {
+		if _, ok := s.orgs[organizationID]; !ok {
+			return fmt.Errorf("member fixture organization %q does not exist", organizationID)
+		}
+		members := make([]OrganizationMember, 0, len(reps))
+		for _, rep := range reps {
+			if !uuidPattern.MatchString(rep.ID) {
+				return fmt.Errorf("member fixture for organization %q: id %q is not a lower-case UUID as Keycloak assigns them", organizationID, rep.ID)
+			}
+			if javaIsBlank(rep.Username) {
+				return fmt.Errorf("member fixture for organization %q: username is blank", organizationID)
+			}
+			if seen[rep.ID] {
+				return fmt.Errorf("member fixture id %q listed twice", rep.ID)
+			}
+			seen[rep.ID] = true
+			member := OrganizationMember{ID: rep.ID, Username: rep.Username}
+			if rep.Attributes != nil {
+				attrs := cloneAttributes(*rep.Attributes)
+				member.Attributes = &attrs
+			}
+			members = append(members, member)
+		}
+		sort.Slice(members, func(i, j int) bool { return members[i].Username < members[j].Username })
+		s.members[organizationID] = members
+	}
+	return nil
+}
+
 // Handler returns the HTTP handler.
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
@@ -146,6 +182,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET "+orgs+"/count", s.admin(s.count))
 	mux.HandleFunc("POST "+orgs, s.admin(s.create))
 	mux.HandleFunc("GET "+orgs+"/{id}", s.admin(s.get))
+	mux.HandleFunc("GET "+orgs+"/{id}/members", s.admin(s.listMembers))
 	mux.HandleFunc("PUT "+orgs+"/{id}", s.admin(s.update))
 	mux.HandleFunc("DELETE "+orgs+"/{id}", s.admin(s.delete))
 	idps := "/admin/realms/{realm}/identity-provider/instances"
@@ -164,7 +201,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("PUT "+orgs+"/{id}/identity-providers/{alias}", s.admin(s.configureOrgIdP))
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		// Everything else is a resource this fake does not serve
-		// (members, groups, invitations, other admin endpoints).
+		// (groups, invitations, other admin endpoints).
 		writeError(w, http.StatusNotFound, "HTTP 404 Not Found")
 	})
 	return mux
@@ -376,6 +413,47 @@ func (s *Server) count(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, len(s.filtered(r)))
 }
 
+// listMembers is GET /organizations/{id}/members. Keycloak's
+// OrganizationMemberResource.java L183-210 defines paging and brief/full
+// representations, L440-443 builds the member representation, and
+// OrganizationsResource.java L202-215 returns the missing-organization 404.
+func (s *Server) listMembers(w http.ResponseWriter, r *http.Request) {
+	organizationID := r.PathValue("id")
+	all, ok := s.members[organizationID]
+	if !ok {
+		if _, exists := s.orgs[organizationID]; !exists {
+			writeErrorMessage(w, http.StatusNotFound, MsgOrganizationMissing)
+			return
+		}
+		all = nil
+	}
+	query := r.URL.Query()
+	first, okFirst := intParam(query, "first", 0)
+	max, okMax := intParam(query, "max", defaultMax)
+	if !okFirst || !okMax {
+		writeError(w, http.StatusNotFound, "HTTP 404 Not Found")
+		return
+	}
+	brief := !query.Has("briefRepresentation") || strings.EqualFold(query.Get("briefRepresentation"), "true")
+	page := slices.Clone(all)
+	if first > 0 {
+		page = page[min(first, len(page)):]
+	}
+	if max >= 0 && max < len(page) {
+		page = page[:max]
+	}
+	out := make([]OrganizationMember, 0, len(page))
+	for _, member := range page {
+		rep := OrganizationMember{ID: member.ID, Username: member.Username}
+		if !brief && member.Attributes != nil {
+			attrs := cloneAttributes(*member.Attributes)
+			rep.Attributes = &attrs
+		}
+		out = append(out, rep)
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
 // intParam reads an Integer query parameter the way JAX-RS does: absent is
 // the default, unparseable is a failed request (JAX-RS answers 404).
 func intParam(query url.Values, name string, def int) (int, bool) {
@@ -450,6 +528,7 @@ func (s *Server) delete(w http.ResponseWriter, r *http.Request) {
 	}
 	delete(s.orgs, id)
 	delete(s.orgIdPs, id)
+	delete(s.members, id)
 	s.logger.Debug("organization deleted", "id", id)
 	w.WriteHeader(http.StatusNoContent)
 }

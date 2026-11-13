@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -210,6 +211,48 @@ func TestAdminAuthAndRealms(t *testing.T) {
 	}
 }
 
+func TestOrganizationMembers(t *testing.T) {
+	members, err := LoadMemberFixtures(filepath.Join("..", "..", "..", "fixtures", "default"))
+	if err != nil {
+		t.Fatalf("LoadMemberFixtures() error = %v", err)
+	}
+	if len(members[acmeID]) != 3 {
+		t.Fatalf("acme members = %+v", members[acmeID])
+	}
+	f := start(t, func(s *Server) {
+		if err := s.SeedMembers(members); err != nil {
+			t.Fatalf("SeedMembers() error = %v", err)
+		}
+	})
+
+	code, body, _ := f.do(t, http.MethodGet, orgs+"/"+acmeID+"/members?first=0&max=10&briefRepresentation=false", "")
+	if code != http.StatusOK {
+		t.Fatalf("list members = %d %s", code, body)
+	}
+	var full []OrganizationMember
+	if err := json.Unmarshal([]byte(body), &full); err != nil {
+		t.Fatalf("list members body %s: %v", body, err)
+	}
+	if len(full) != 3 {
+		t.Fatalf("list members = %+v", full)
+	}
+	if full[0].Attributes == nil || (*full[0].Attributes)["maas_preferred_username"][0] != "alice" {
+		t.Fatalf("full member attributes = %+v", full[0].Attributes)
+	}
+
+	code, body, _ = f.do(t, http.MethodGet, orgs+"/"+acmeID+"/members?first=0&max=10&briefRepresentation=true", "")
+	if code != http.StatusOK {
+		t.Fatalf("list brief members = %d %s", code, body)
+	}
+	var brief []OrganizationMember
+	if err := json.Unmarshal([]byte(body), &brief); err != nil {
+		t.Fatalf("list brief members body %s: %v", body, err)
+	}
+	if brief[0].Attributes != nil {
+		t.Fatalf("brief member attributes = %+v", brief[0].Attributes)
+	}
+}
+
 func TestListParameters(t *testing.T) {
 	f := start(t)
 	// Twelve more organizations, to see the default page of ten.
@@ -366,9 +409,18 @@ func TestUpdateFullRepresentation(t *testing.T) {
 }
 
 func TestDelete(t *testing.T) {
-	f := start(t)
+	f := start(t, func(s *Server) {
+		if err := s.SeedMembers(map[string][]OrganizationMember{
+			globexID: {{ID: "563344fa-4307-4d6b-9cee-f9932243e145", Username: "alice"}},
+		}); err != nil {
+			t.Fatalf("SeedMembers() error = %v", err)
+		}
+	})
 	if code, body, _ := f.do(t, http.MethodDelete, orgs+"/"+globexID, ""); code != http.StatusNoContent || body != "" {
 		t.Fatalf("DELETE = %d %s", code, body)
+	}
+	if code, body, _ := f.do(t, http.MethodGet, orgs+"/"+globexID+"/members", ""); code != http.StatusNotFound {
+		t.Fatalf("members after DELETE = %d %s, want 404", code, body)
 	}
 	if code, body, _ := f.do(t, http.MethodDelete, orgs+"/"+globexID, ""); code != 404 || body != `{"errorMessage":"Organization not found."}` {
 		t.Fatalf("DELETE again = %d %s", code, body)

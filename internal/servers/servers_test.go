@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"maps"
 	"net/http"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -1124,6 +1125,109 @@ func TestListSkipsUnreadableIdentityProvider(t *testing.T) {
 	}
 }
 
+func TestTenantIdentityProviderLoginIsolation(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	createTenant := func(t *testing.T, store *fakeOrganizationStore) (*aigridv1.TenantsCreateResponse, error) {
+		t.Helper()
+		server := mustTenantsServerWithSecrets(t, store, &fakeSecretReader{
+			secrets: map[string][]byte{"acme-idp-secret": []byte("s3cret")},
+		})
+		return server.Create(ctx, &aigridv1.TenantsCreateRequest{
+			Object: &aigridv1.Tenant{
+				Metadata: &aigridv1.Metadata{Name: "acme"},
+				Spec:     &aigridv1.TenantSpec{IdentityProvider: validCreateIdP()},
+			},
+		})
+	}
+
+	t.Run("uses the built-in flow and installs six mappers", func(t *testing.T) {
+		t.Parallel()
+		store := newFakeOrganizationStore()
+		got, err := createTenant(t, store)
+		if err != nil {
+			t.Fatalf("Create: %v", err)
+		}
+		idp := store.idps["acme"]
+		var flow string
+		if err := json.Unmarshal(idp.Extra["firstBrokerLoginFlowAlias"], &flow); err != nil || flow != keycloak.FirstBrokerLoginFlowAlias {
+			t.Fatalf("firstBrokerLoginFlowAlias = %q, want %q", idp.Extra["firstBrokerLoginFlowAlias"], keycloak.FirstBrokerLoginFlowAlias)
+		}
+		wantMappers := []string{
+			"AI Grid org id",
+			"AI Grid org name",
+			"AI Grid groups",
+			"AI Grid roles",
+			"AI Grid local username",
+			"AI Grid preferred username",
+		}
+		if !slices.Equal(store.mapperNames["acme"], wantMappers) {
+			t.Fatalf("mappers = %v, want %v", store.mapperNames["acme"], wantMappers)
+		}
+		if store.mapperCalls != 1 {
+			t.Fatalf("mapper calls = %d, want 1", store.mapperCalls)
+		}
+		if got.GetObject().GetSpec().GetIdentityProvider() == nil {
+			t.Fatal("response omitted identity provider")
+		}
+	})
+
+	t.Run("new mapper failure cleans up", func(t *testing.T) {
+		t.Parallel()
+		for _, name := range []string{"AI Grid local username", "AI Grid preferred username"} {
+			t.Run(name, func(t *testing.T) {
+				store := newFakeOrganizationStore()
+				store.failMapperName = name
+				_, err := createTenant(t, store)
+				assertConnectCode(t, err, connect.CodeInternal)
+				if len(store.byID) != 0 || len(store.idps) != 0 || len(store.links) != 0 {
+					t.Fatalf("cleanup failed: orgs=%v idps=%v links=%v", store.byID, store.idps, store.links)
+				}
+			})
+		}
+	})
+
+	t.Run("tenant without an idp does not touch idp state", func(t *testing.T) {
+		t.Parallel()
+		store := newFakeOrganizationStore()
+		server := mustTenantsServer(t, store)
+		if _, err := server.Create(ctx, &aigridv1.TenantsCreateRequest{
+			Object: &aigridv1.Tenant{Metadata: &aigridv1.Metadata{Name: "acme"}},
+		}); err != nil {
+			t.Fatalf("Create: %v", err)
+		}
+		if len(store.idps) != 0 || store.mapperCalls != 0 {
+			t.Fatalf("idps=%v mapperCalls=%d, want no idp writes", store.idps, store.mapperCalls)
+		}
+	})
+
+	t.Run("existing tenant update refreshes mappers", func(t *testing.T) {
+		t.Parallel()
+		store := newFakeOrganizationStore()
+		got, err := createTenant(t, store)
+		if err != nil {
+			t.Fatalf("Create: %v", err)
+		}
+		server := mustTenantsServerWithSecrets(t, store, &fakeSecretReader{
+			secrets: map[string][]byte{"acme-idp-secret": []byte("s3cret")},
+		})
+		if _, err := server.Update(ctx, &aigridv1.TenantsUpdateRequest{
+			Object: &aigridv1.Tenant{
+				Id: got.GetObject().GetId(), Metadata: &aigridv1.Metadata{Version: 1, Name: "acme-corp"},
+			},
+			UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"metadata.name"}},
+		}); err != nil {
+			t.Fatalf("Update: %v", err)
+		}
+		if store.mapperCalls != 2 {
+			t.Fatalf("mapper calls = %d, want 2", store.mapperCalls)
+		}
+		if got := store.mapperOrgNames["acme"]; got != "acme-corp" {
+			t.Fatalf("mapper org name = %q, want acme-corp", got)
+		}
+	})
+}
+
 func TestUpdateTenantIdentityProvider(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -1480,6 +1584,84 @@ func TestUpdateTenant(t *testing.T) {
 	})
 }
 
+func TestTenantMemberSeparatesIdentityAndUsernames(t *testing.T) {
+	t.Parallel()
+
+	store := newFakeOrganizationStore(
+		keycloak.Organization{ID: "org-1", Name: "acme"},
+	)
+	store.members["org-1"] = []keycloak.OrganizationMember{
+		{
+			ID: "user-alice-a", Username: "11111111-2222-4333-8444-555555555555", Enabled: true,
+			Attributes: map[string][]string{"maas_preferred_username": {"alice"}},
+		},
+		{
+			ID: "user-alice-b", Username: "66666666-7777-4888-9999-aaaaaaaaaaaa", Enabled: true,
+			Attributes: map[string][]string{"maas_preferred_username": {"alice"}},
+		},
+	}
+	server := mustTenantsServer(t, store)
+	got, err := server.ListMembers(context.Background(), &aigridv1.TenantsListMembersRequest{Id: "org-1"})
+	if err != nil {
+		t.Fatalf("ListMembers() error = %v", err)
+	}
+	if len(got.GetItems()) != 2 {
+		t.Fatalf("ListMembers() items = %+v", got.GetItems())
+	}
+	members := []struct {
+		id                string
+		username          string
+		preferredUsername string
+	}{
+		{id: "user-alice-a", username: "11111111-2222-4333-8444-555555555555", preferredUsername: "alice"},
+		{id: "user-alice-b", username: "66666666-7777-4888-9999-aaaaaaaaaaaa", preferredUsername: "alice"},
+	}
+	for i, want := range members {
+		item := got.GetItems()[i]
+		if item.GetId() != want.id || item.GetUsername() != want.username {
+			t.Fatalf("member %d identity = %+v", i, item)
+		}
+		if item.GetPreferredUsername() != want.preferredUsername {
+			t.Fatalf("member %d preferred username = %q, want %q", i, item.GetPreferredUsername(), want.preferredUsername)
+		}
+	}
+
+	missing := tenantMemberFromOrganizationMember(keycloak.OrganizationMember{
+		ID: "user-missing", Username: "11111111-2222-4333-8444-555555555555",
+	})
+	if missing.GetUsername() != "11111111-2222-4333-8444-555555555555" || missing.GetPreferredUsername() != "" {
+		t.Fatalf("missing profile usernames = %q and %q", missing.GetUsername(), missing.GetPreferredUsername())
+	}
+	legacy := tenantMemberFromOrganizationMember(keycloak.OrganizationMember{
+		ID: "user-legacy", Username: "bob",
+	})
+	if legacy.GetUsername() != "bob" || legacy.GetPreferredUsername() != "" {
+		t.Fatalf("legacy usernames = %q and %q, want bob and empty", legacy.GetUsername(), legacy.GetPreferredUsername())
+	}
+	renamedLegacy := tenantMemberFromOrganizationMember(keycloak.OrganizationMember{
+		ID: "user-renamed-legacy", Username: "bob",
+		Attributes: map[string][]string{"maas_preferred_username": {"bob-renamed"}},
+	})
+	if renamedLegacy.GetUsername() != "bob" || renamedLegacy.GetPreferredUsername() != "bob-renamed" {
+		t.Fatalf("renamed legacy usernames = %q and %q, want bob and bob-renamed", renamedLegacy.GetUsername(), renamedLegacy.GetPreferredUsername())
+	}
+
+	before := keycloak.OrganizationMember{
+		ID: "user-renamed", Username: "bbbbbbbb-2222-4333-8444-555555555555",
+		Attributes: map[string][]string{"maas_preferred_username": {"alice"}},
+	}
+	after := before
+	after.Attributes = map[string][]string{"maas_preferred_username": {"alice-renamed"}}
+	beforeMember := tenantMemberFromOrganizationMember(before)
+	afterMember := tenantMemberFromOrganizationMember(after)
+	if beforeMember.GetId() != afterMember.GetId() || beforeMember.GetUsername() != afterMember.GetUsername() {
+		t.Fatalf("rename changed identity: before=%+v after=%+v", beforeMember, afterMember)
+	}
+	if beforeMember.GetPreferredUsername() != "alice" || afterMember.GetPreferredUsername() != "alice-renamed" {
+		t.Fatalf("renamed profile username = %q, want alice-renamed", afterMember.GetPreferredUsername())
+	}
+}
+
 func TestListTenantMembers(t *testing.T) {
 	t.Parallel()
 
@@ -1618,6 +1800,13 @@ type fakeOrganizationStore struct {
 	idps    map[string]keycloak.IdentityProvider
 	links   map[string]string // orgID -> alias
 	mappers map[string]keycloak.IdentityProviderMapper
+	// mapperNames records the names the fake upsert would write.
+	mapperNames map[string][]string
+	mapperCalls int
+	// mapperUpserts counts every mapper upsert.
+	mapperUpserts int
+	// failMapperName makes the fake fail when it reaches that mapper.
+	failMapperName string
 	// mapperOrgNames is the org name each alias's mappers were last upserted with.
 	mapperOrgNames map[string]string
 	next           int
@@ -1650,7 +1839,6 @@ type fakeOrganizationStore struct {
 	reloadKeysErr     error
 	reloadKeysFalse   bool
 	reloadKeysCalls   int
-	mapperUpserts     int
 	// mapperErrOnce fails the next mapper upsert only.
 	mapperErrOnce error
 	// lostAnswerErr makes UpdateOrganization store the change, then fail with it,
@@ -1679,6 +1867,7 @@ func newFakeOrganizationStore(orgs ...keycloak.Organization) *fakeOrganizationSt
 		idps:           make(map[string]keycloak.IdentityProvider),
 		links:          make(map[string]string),
 		mappers:        make(map[string]keycloak.IdentityProviderMapper),
+		mapperNames:    make(map[string][]string),
 		mapperOrgNames: make(map[string]string),
 	}
 	for _, org := range orgs {
@@ -1951,7 +2140,7 @@ func (f *fakeOrganizationStore) ConfigureOrganizationIdentityProvider(_ context.
 	return nil
 }
 
-func (f *fakeOrganizationStore) UpsertIdentityProviderMapper(_ context.Context, alias, organizationID, organizationName string) error {
+func (f *fakeOrganizationStore) UpsertIdentityProviderMapper(_ context.Context, spec keycloak.IdentityProviderMapperSpec) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.mapperErr != nil {
@@ -1961,16 +2150,32 @@ func (f *fakeOrganizationStore) UpsertIdentityProviderMapper(_ context.Context, 
 		f.mapperErrOnce = nil
 		return err
 	}
-	if _, ok := f.idps[alias]; !ok {
+	if _, ok := f.idps[spec.Alias]; !ok {
 		return &keycloak.APIError{Op: "upsert identity provider mapper", StatusCode: http.StatusNotFound}
 	}
+	f.mapperCalls++
 	f.mapperUpserts++
-	f.mappers[alias] = keycloak.IdentityProviderMapper{
-		Name: "AI Grid org id", IdentityProviderAlias: alias,
-		IdentityProviderMapper: "hardcoded-attribute-idp-mapper",
-		Config:                 map[string]string{"attribute": "maas_org_id", "attribute.value": organizationID, "syncMode": "FORCE"},
+	names := []string{
+		"AI Grid org id",
+		"AI Grid org name",
+		"AI Grid groups",
+		"AI Grid roles",
+		"AI Grid local username",
+		"AI Grid preferred username",
 	}
-	f.mapperOrgNames[alias] = organizationName
+	f.mapperNames[spec.Alias] = nil
+	for _, name := range names {
+		if name == f.failMapperName {
+			return &keycloak.APIError{Op: "upsert identity provider mapper", StatusCode: http.StatusBadGateway}
+		}
+		f.mapperNames[spec.Alias] = append(f.mapperNames[spec.Alias], name)
+	}
+	f.mappers[spec.Alias] = keycloak.IdentityProviderMapper{
+		Name: "AI Grid org id", IdentityProviderAlias: spec.Alias,
+		IdentityProviderMapper: "hardcoded-attribute-idp-mapper",
+		Config:                 map[string]string{"attribute": "maas_org_id", "attribute.value": spec.OrganizationID, "syncMode": "FORCE"},
+	}
+	f.mapperOrgNames[spec.Alias] = spec.OrganizationName
 	return nil
 }
 

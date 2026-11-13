@@ -468,6 +468,17 @@ Organization **members** can be listed via `GET .../tenants/{id}:listMembers`.
 Full user CRUD remains out of scope for this API today; the org's own identity
 provider is `spec.identity_provider`.
 
+For a member, `id` names the Keycloak user UUID. `username` names the local
+Keycloak login. `preferred_username` is the optional profile label from the
+upstream identity provider. A brokered account can use a generated UUID as its
+local login. Use `preferred_username` for labels. Use `id` to select a member
+in the configured realm.
+
+MaaS currently uses `preferred_username` for ownership, with `sub` as its fallback.
+Two users with the same label therefore share the MaaS ownership value today.
+Ownership based on the broker issuer (`iss`) and subject (`sub`) requires a separate MaaS change.
+Never construct that issuer from an internal administration URL.
+
 | Field | Meaning for UI |
 | --- | --- |
 | `id` | Keycloak organization **UUID** (server-assigned on create) |
@@ -477,6 +488,13 @@ provider is `spec.identity_provider`.
 | `spec.domains` | Email domains for the org (DNS hostnames, ≥2 labels, lowercase) |
 | `spec.identity_provider` | The org's OIDC identity provider (the Secret **name** of its client secret, never the value). Absent when the org has none: its members can't sign in yet, so show "sign-in not configured" |
 | `status` | Empty object today |
+
+Member fields:
+
+| Field | Meaning for UI |
+| --- | --- |
+| `username` | Local Keycloak login. A brokered account can use a generated UUID. |
+| `preferred_username` | Optional upstream profile label. It can repeat or be empty. |
 
 UI should treat **`id`** as the stable identifier for Get/Update/Delete, and
 **`metadata.name`** as the display / create name.
@@ -610,6 +628,11 @@ Notes:
   create (an org made in Keycloak directly, with its own provider under the
   org's alias) is `400` (`FailedPrecondition`) and changes nothing: that
   provider is managed in Keycloak.
+- If an identity provider has another username mapper, a rename-only Update
+  returns `400` (`FailedPrecondition`). The message names the conflicting mapper.
+  The organization is already saved when the mapper refresh fails.
+  Resolve the mapper conflict in Keycloak. Reload the tenant.
+  Retry the update with `metadata.name` in its mask.
 - A change also needs the previous client secret, from the Secret the stored
   identity provider names, to restore it if the change fails; if that Secret
   is gone or empty, the change is `400` (`FailedPrecondition`) and nothing is
@@ -685,7 +708,8 @@ Optional query: `offset`, `limit` (same semantics as other List RPCs).
   "items": [
     {
       "id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
-      "username": "alice",
+      "username": "11111111-2222-4333-8444-555555555555",
+      "preferred_username": "alice",
       "email": "alice@acme.example.com",
       "first_name": "Alice",
       "last_name": "Admin",
@@ -693,7 +717,8 @@ Optional query: `offset`, `limit` (same semantics as other List RPCs).
     },
     {
       "id": "b2c3d4e5-f6a7-8901-bcde-f12345678901",
-      "username": "bob",
+      "username": "66666666-7777-4888-9999-aaaaaaaaaaaa",
+      "preferred_username": "bob",
       "email": "bob@acme.example.com",
       "first_name": "Bob",
       "last_name": "Builder",
