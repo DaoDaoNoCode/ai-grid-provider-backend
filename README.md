@@ -1092,10 +1092,10 @@ make dev-catalog-reset                # delete the repository and start from the
 `granite-3b` shows `PARTIALLY_AVAILABLE`: the fixtures report it ready on
 `site-paris-1`, not ready on `site-madrid-1`, and its `MaaSModelRef` ready on
 the ingress `site-ashburn-1`, and `status.clusters` has an entry for each of
-the two placed clusters. Any name not in the fixtures shows `SavedToGit`. The
-subscription's final id is `team-a-<suffix>`; because the fixture reports the exact
-name `team-a`, the API-created subscription and policy stay `SavedToGit` unless their
-fixture entries are retargeted to the returned final ids. On
+the two placed clusters. Any model name not in the fixtures shows `SavedToGit`. The
+subscription's final id is `team-a-<suffix>`; because the fixtures report the exact
+name `team-a` but not the generated id, the API-created subscription and policy stay
+`Pending` unless their fixture entries are retargeted to the returned final ids. On
 `make dev-fake-poc`, place `granite-3b` on `site1` and `site2` instead:
 `fixtures/poc/policies.json` reports it the same way. `team-a`'s model ref
 reads back joined to the model: `namespace` `models-as-a-service`,

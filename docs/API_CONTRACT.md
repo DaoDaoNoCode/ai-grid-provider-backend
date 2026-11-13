@@ -137,21 +137,27 @@ safe.
   explicit 2026-11-12 tech-preview waiver for this behavior; no compatibility window is
   required. The Go client returns the response object and its tests use the returned
   identifier. The console's backend pin is `cd03b7f`
-  (`cd03b7fab706e4e4836eac98f9dd0935ab85e734`). Its Create caller discards the response
-  and navigates to the list, but its notification entry still keeps the requested id and
-  uses it both for the active-subscription watch and for the lost-answer `readBack`; those
-  paths, the 49-character Create form limit, and the subscription-active e2e test must
-  move to the returned `object.id` with this change.
-  **Condition:** every Create caller uses the returned `object.id` (or metadata name) for
-  subsequent operations and keeps the human-readable name in the display-name annotation.
-  A caller that assumes its requested id is the final id cannot Get, Update, or Delete the
-  new Subscription. The generated name is a technical identity; user-facing UIs should
-  prefer the display-name annotation.
+  (`cd03b7fab706e4e4836eac98f9dd0935ab85e734`). Console #185, merged as `1f38514`
+  (`1f3851459c8e3469c27139d4957144432dd22182`), already uses the returned `object.id`
+  for the active-subscription watch, the View link, and the subscription-active e2e test,
+  and caps the Create base at 49 characters. Once its backend pin moves to this change,
+  it still needs to generate a `request_token` and retry with that token when a Create
+  answer is lost.
+  **Condition:** a caller that needs to identify or operate on the Subscription uses the
+  returned `object.id` (or metadata name) only after it receives a Create response. If it
+  may lose that response, it generates a `request_token` before the initial Create and
+  retries with the same token and an equivalent payload. A caller that assumes its
+  requested id is the final id cannot Get, Update, or Delete the new Subscription. The
+  generated name is a technical identity; user-facing UIs should prefer the
+  display-name annotation.
 - **`Subscriptions/Create` request token and REST body (2026-11-12).** Create now accepts
   an optional `request_token`, a lower-case UUIDv4, for retrying a Create whose answer was
   lost. The REST body changed from the bare Subscription to the request wrapper
-  `{"request_token": "...", "object": {...}}`; the no-compatibility tech-preview waiver
-  above covers this REST shape change as well. The backend stores only SHA-256 hashes of
+  `{"request_token": "...", "object": {...}}`; the API owner's same no-compatibility
+  tech-preview waiver above covers this shape change. The wrapper is deliberate: it
+  matches the gRPC/Connect request and keeps the token out of URLs and access logs,
+  rather than sending it as a query parameter with `body: "object"`. The backend stores
+  only SHA-256 hashes of
   the token and of an equivalent-create payload fingerprint, never the raw token, and
   returns them to no caller. A retry with the same token and an equivalent payload
   returns the existing Subscription (including any later Updates); a different payload
