@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"maps"
 	"net/http"
+	"reflect"
 	"slices"
 	"strings"
 	"sync"
@@ -720,7 +721,7 @@ func TestCreateTenant(t *testing.T) {
 			keycloak.Organization{ID: "org-1", Name: "acme"},
 		))
 		_, err := server.Create(context.Background(), &aigridv1.TenantsCreateRequest{
-			Object: &aigridv1.Tenant{Metadata: &aigridv1.Metadata{Name: "acme"}},
+			Object: &aigridv1.Tenant{Metadata: &aigridv1.Metadata{Name: "acme"}, Spec: &aigridv1.TenantSpec{Domains: []string{"acme.example.com"}}},
 		})
 		assertConnectCode(t, err, connect.CodeAlreadyExists)
 	})
@@ -873,7 +874,7 @@ func TestCreateTenant(t *testing.T) {
 		idp := validCreateIdP()
 		idp.Config.Issuer = "https://idp.example.com/"
 		if _, err := server.Create(context.Background(), &aigridv1.TenantsCreateRequest{
-			Object: &aigridv1.Tenant{Metadata: &aigridv1.Metadata{Name: "acme"}, Spec: &aigridv1.TenantSpec{IdentityProvider: idp}},
+			Object: &aigridv1.Tenant{Metadata: &aigridv1.Metadata{Name: "acme"}, Spec: &aigridv1.TenantSpec{Domains: []string{"acme.example.com"}, IdentityProvider: idp}},
 		}); err != nil {
 			t.Fatalf("Create: %v", err)
 		}
@@ -885,7 +886,7 @@ func TestCreateTenant(t *testing.T) {
 		store.discoveredIssuers = map[string]string{"https://idp.example.com/.well-known/openid-configuration": "https://idp.example.com/realms/other"}
 		server := mustTenantsServerWithSecrets(t, store, &fakeSecretReader{secrets: map[string][]byte{"acme-idp-secret": []byte("x")}})
 		_, err := server.Create(context.Background(), &aigridv1.TenantsCreateRequest{
-			Object: &aigridv1.Tenant{Metadata: &aigridv1.Metadata{Name: "acme"}, Spec: &aigridv1.TenantSpec{IdentityProvider: validCreateIdP()}},
+			Object: &aigridv1.Tenant{Metadata: &aigridv1.Metadata{Name: "acme"}, Spec: &aigridv1.TenantSpec{Domains: []string{"acme.example.com"}, IdentityProvider: validCreateIdP()}},
 		})
 		assertConnectCode(t, err, connect.CodeInvalidArgument)
 		if len(store.byID) != 0 || len(store.idps) != 0 {
@@ -899,7 +900,7 @@ func TestCreateTenant(t *testing.T) {
 		store.importErr = &keycloak.APIError{Op: "import identity provider config", StatusCode: http.StatusInternalServerError}
 		server := mustTenantsServerWithSecrets(t, store, &fakeSecretReader{secrets: map[string][]byte{"acme-idp-secret": []byte("x")}})
 		_, err := server.Create(context.Background(), &aigridv1.TenantsCreateRequest{
-			Object: &aigridv1.Tenant{Metadata: &aigridv1.Metadata{Name: "acme"}, Spec: &aigridv1.TenantSpec{IdentityProvider: validCreateIdP()}},
+			Object: &aigridv1.Tenant{Metadata: &aigridv1.Metadata{Name: "acme"}, Spec: &aigridv1.TenantSpec{Domains: []string{"acme.example.com"}, IdentityProvider: validCreateIdP()}},
 		})
 		assertConnectCode(t, err, connect.CodeFailedPrecondition)
 		if len(store.byID) != 0 || len(store.idps) != 0 {
@@ -913,7 +914,7 @@ func TestCreateTenant(t *testing.T) {
 		store.reloadKeysErr = &keycloak.APIError{Op: "reload identity provider keys", StatusCode: http.StatusInternalServerError}
 		server := mustTenantsServerWithSecrets(t, store, &fakeSecretReader{secrets: map[string][]byte{"acme-idp-secret": []byte("x")}})
 		_, err := server.Create(context.Background(), &aigridv1.TenantsCreateRequest{
-			Object: &aigridv1.Tenant{Metadata: &aigridv1.Metadata{Name: "acme"}, Spec: &aigridv1.TenantSpec{IdentityProvider: validCreateIdP()}},
+			Object: &aigridv1.Tenant{Metadata: &aigridv1.Metadata{Name: "acme"}, Spec: &aigridv1.TenantSpec{Domains: []string{"acme.example.com"}, IdentityProvider: validCreateIdP()}},
 		})
 		assertConnectCode(t, err, connect.CodeFailedPrecondition)
 		if len(store.byID) != 0 || len(store.idps) != 0 {
@@ -921,21 +922,28 @@ func TestCreateTenant(t *testing.T) {
 		}
 	})
 
-	t.Run("with identity provider and no domains writes no routing", func(t *testing.T) {
+	t.Run("no domains is refused before anything is created", func(t *testing.T) {
 		t.Parallel()
-		store := newFakeOrganizationStore()
-		secrets := &fakeSecretReader{secrets: map[string][]byte{"acme-idp-secret": []byte("s3cret")}}
-		server := mustTenantsServerWithSecrets(t, store, secrets)
-		if _, err := server.Create(context.Background(), &aigridv1.TenantsCreateRequest{
-			Object: &aigridv1.Tenant{
-				Metadata: &aigridv1.Metadata{Name: "acme"},
-				Spec:     &aigridv1.TenantSpec{IdentityProvider: validCreateIdP()},
-			},
-		}); err != nil {
-			t.Fatalf("Create: %v", err)
-		}
-		if store.puts != 0 {
-			t.Fatalf("unexpected organization write: puts=%d", store.puts)
+		for name, spec := range map[string]*aigridv1.TenantSpec{
+			"no spec":                          nil,
+			"empty domains":                    {Domains: []string{}},
+			"identity provider and no domains": {IdentityProvider: validCreateIdP()},
+		} {
+			t.Run(name, func(t *testing.T) {
+				t.Parallel()
+				store := newFakeOrganizationStore()
+				server := mustTenantsServerWithSecrets(t, store, &fakeSecretReader{secrets: map[string][]byte{"acme-idp-secret": []byte("s3cret")}})
+				_, err := server.Create(context.Background(), &aigridv1.TenantsCreateRequest{
+					Object: &aigridv1.Tenant{Metadata: &aigridv1.Metadata{Name: "acme"}, Spec: spec},
+				})
+				assertConnectCode(t, err, connect.CodeInvalidArgument)
+				if !strings.Contains(err.Error(), "spec.domains must contain at least one domain") {
+					t.Fatalf("Create() error = %v, want the domains message", err)
+				}
+				if len(store.byID) != 0 || len(store.idps) != 0 {
+					t.Fatalf("created orgs=%v idps=%v", store.byID, store.idps)
+				}
+			})
 		}
 	})
 
@@ -946,7 +954,7 @@ func TestCreateTenant(t *testing.T) {
 		_, err := server.Create(context.Background(), &aigridv1.TenantsCreateRequest{
 			Object: &aigridv1.Tenant{
 				Metadata: &aigridv1.Metadata{Name: "acme"},
-				Spec:     &aigridv1.TenantSpec{IdentityProvider: validCreateIdP()},
+				Spec:     &aigridv1.TenantSpec{Domains: []string{"acme.example.com"}, IdentityProvider: validCreateIdP()},
 			},
 		})
 		assertConnectCode(t, err, connect.CodeNotFound)
@@ -962,7 +970,7 @@ func TestCreateTenant(t *testing.T) {
 		_, err := server.Create(context.Background(), &aigridv1.TenantsCreateRequest{
 			Object: &aigridv1.Tenant{
 				Metadata: &aigridv1.Metadata{Name: "acme"},
-				Spec:     &aigridv1.TenantSpec{IdentityProvider: validCreateIdP()},
+				Spec:     &aigridv1.TenantSpec{Domains: []string{"acme.example.com"}, IdentityProvider: validCreateIdP()},
 			},
 		})
 		assertConnectCode(t, err, connect.CodeFailedPrecondition)
@@ -979,7 +987,7 @@ func TestCreateTenant(t *testing.T) {
 		_, err := server.Create(context.Background(), &aigridv1.TenantsCreateRequest{
 			Object: &aigridv1.Tenant{
 				Metadata: &aigridv1.Metadata{Name: "acme"},
-				Spec:     &aigridv1.TenantSpec{IdentityProvider: validCreateIdP()},
+				Spec:     &aigridv1.TenantSpec{Domains: []string{"acme.example.com"}, IdentityProvider: validCreateIdP()},
 			},
 		})
 		if err == nil {
@@ -998,7 +1006,7 @@ func TestCreateTenant(t *testing.T) {
 		_, err := server.Create(context.Background(), &aigridv1.TenantsCreateRequest{
 			Object: &aigridv1.Tenant{
 				Metadata: &aigridv1.Metadata{Name: "acme"},
-				Spec:     &aigridv1.TenantSpec{IdentityProvider: validCreateIdP()},
+				Spec:     &aigridv1.TenantSpec{Domains: []string{"acme.example.com"}, IdentityProvider: validCreateIdP()},
 			},
 		})
 		if err == nil {
@@ -1020,7 +1028,7 @@ func TestCreateTenant(t *testing.T) {
 		_, err := server.Create(ctx, &aigridv1.TenantsCreateRequest{
 			Object: &aigridv1.Tenant{
 				Metadata: &aigridv1.Metadata{Name: "acme"},
-				Spec:     &aigridv1.TenantSpec{IdentityProvider: validCreateIdP()},
+				Spec:     &aigridv1.TenantSpec{Domains: []string{"acme.example.com"}, IdentityProvider: validCreateIdP()},
 			},
 		})
 		if err == nil {
@@ -1039,7 +1047,7 @@ func TestCreateTenant(t *testing.T) {
 		_, err := server.Create(context.Background(), &aigridv1.TenantsCreateRequest{
 			Object: &aigridv1.Tenant{
 				Metadata: &aigridv1.Metadata{Name: "acme"},
-				Spec:     &aigridv1.TenantSpec{IdentityProvider: validCreateIdP()},
+				Spec:     &aigridv1.TenantSpec{Domains: []string{"acme.example.com"}, IdentityProvider: validCreateIdP()},
 			},
 		})
 		if err == nil {
@@ -1059,7 +1067,7 @@ func TestCreateTenant(t *testing.T) {
 		_, err := server.Create(context.Background(), &aigridv1.TenantsCreateRequest{
 			Object: &aigridv1.Tenant{
 				Metadata: &aigridv1.Metadata{Name: "acme"},
-				Spec:     &aigridv1.TenantSpec{IdentityProvider: validCreateIdP()},
+				Spec:     &aigridv1.TenantSpec{Domains: []string{"acme.example.com"}, IdentityProvider: validCreateIdP()},
 			},
 		})
 		assertConnectCode(t, err, connect.CodeInternal)
@@ -1136,7 +1144,7 @@ func TestTenantIdentityProviderLoginIsolation(t *testing.T) {
 		return server.Create(ctx, &aigridv1.TenantsCreateRequest{
 			Object: &aigridv1.Tenant{
 				Metadata: &aigridv1.Metadata{Name: "acme"},
-				Spec:     &aigridv1.TenantSpec{IdentityProvider: validCreateIdP()},
+				Spec:     &aigridv1.TenantSpec{Domains: []string{"acme.example.com"}, IdentityProvider: validCreateIdP()},
 			},
 		})
 	}
@@ -1192,7 +1200,7 @@ func TestTenantIdentityProviderLoginIsolation(t *testing.T) {
 		store := newFakeOrganizationStore()
 		server := mustTenantsServer(t, store)
 		if _, err := server.Create(ctx, &aigridv1.TenantsCreateRequest{
-			Object: &aigridv1.Tenant{Metadata: &aigridv1.Metadata{Name: "acme"}},
+			Object: &aigridv1.Tenant{Metadata: &aigridv1.Metadata{Name: "acme"}, Spec: &aigridv1.TenantSpec{Domains: []string{"acme.example.com"}}},
 		}); err != nil {
 			t.Fatalf("Create: %v", err)
 		}
@@ -2339,7 +2347,7 @@ func TestTenantVersion(t *testing.T) {
 		t.Parallel()
 		server := mustTenantsServer(t, newFakeOrganizationStore())
 		server.now = func() time.Time { return time.Date(2026, 10, 22, 9, 30, 0, 0, time.FixedZone("ET", -4*3600)) }
-		got, err := server.Create(ctx, &aigridv1.TenantsCreateRequest{Object: &aigridv1.Tenant{Metadata: &aigridv1.Metadata{Name: "acme"}}})
+		got, err := server.Create(ctx, &aigridv1.TenantsCreateRequest{Object: &aigridv1.Tenant{Metadata: &aigridv1.Metadata{Name: "acme"}, Spec: &aigridv1.TenantSpec{Domains: []string{"acme.example.com"}}}})
 		if err != nil {
 			t.Fatalf("Create() error = %v", err)
 		}
@@ -2461,18 +2469,17 @@ func TestTenantVersion(t *testing.T) {
 		}
 	})
 
-	t.Run("removing the last domain clears domains", func(t *testing.T) {
+	t.Run("removing the last domain is refused", func(t *testing.T) {
 		t.Parallel()
 		store := newFakeOrganizationStore(stamped("4"))
+		before := slices.Clone(store.byID["org-1"].Domains)
 		_, err := mustTenantsServer(t, store).Update(ctx, &aigridv1.TenantsUpdateRequest{
 			Object:     &aigridv1.Tenant{Id: "org-1", Metadata: &aigridv1.Metadata{Version: 4}, Spec: &aigridv1.TenantSpec{}},
 			UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.domains"}},
 		})
-		if err != nil {
-			t.Fatalf("Update() error = %v", err)
-		}
-		if got := store.byID["org-1"].Domains; len(got) != 0 {
-			t.Fatalf("domains = %v, want none", got)
+		assertConnectCode(t, err, connect.CodeInvalidArgument)
+		if store.puts != 0 || !reflect.DeepEqual(store.byID["org-1"].Domains, before) {
+			t.Fatalf("puts=%d domains=%v, want no write and %v", store.puts, store.byID["org-1"].Domains, before)
 		}
 	})
 

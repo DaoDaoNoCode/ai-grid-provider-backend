@@ -464,23 +464,31 @@ func TestRealTenantsServerVersionOnFakeKeycloak(t *testing.T) {
 		t.Fatalf("Get() = %v, %v", got, err)
 	}
 
-	clear := &aigridv1.TenantsUpdateRequest{
-		Object:     &aigridv1.Tenant{Id: id, Metadata: &aigridv1.Metadata{Version: 1}, Spec: &aigridv1.TenantSpec{}},
+	replace := &aigridv1.TenantsUpdateRequest{
+		Object:     &aigridv1.Tenant{Id: id, Metadata: &aigridv1.Metadata{Version: 1}, Spec: &aigridv1.TenantSpec{Domains: []string{"scratch.example.org"}}},
 		UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.domains"}},
 		Lock:       true,
 	}
-	updated, err := s.Update(ctx, clear)
+	updated, err := s.Update(ctx, replace)
 	if err != nil {
-		t.Fatalf("Update(clear domains) error = %v", err)
+		t.Fatalf("Update(replace domains) error = %v", err)
 	}
-	if updated.GetObject().GetMetadata().GetVersion() != 2 || len(updated.GetObject().GetSpec().GetDomains()) != 0 {
-		t.Fatalf("Update(clear domains) = %v", updated.GetObject())
+	if updated.GetObject().GetMetadata().GetVersion() != 2 || !slices.Equal(updated.GetObject().GetSpec().GetDomains(), []string{"scratch.example.org"}) {
+		t.Fatalf("Update(replace domains) = %v", updated.GetObject())
 	}
 	if !updated.GetObject().GetMetadata().GetCreationTimestamp().AsTime().Equal(meta.GetCreationTimestamp().AsTime()) {
 		t.Fatalf("Update() changed the creation time: %v", updated.GetObject().GetMetadata())
 	}
-	if _, err := s.Update(ctx, clear); connect.CodeOf(err) != connect.CodeAborted {
+	if _, err := s.Update(ctx, replace); connect.CodeOf(err) != connect.CodeAborted {
 		t.Fatalf("Update(stale version) error = %v, want Aborted", err)
+	}
+	clear := &aigridv1.TenantsUpdateRequest{
+		Object:     &aigridv1.Tenant{Id: id, Metadata: &aigridv1.Metadata{Version: 2}, Spec: &aigridv1.TenantSpec{}},
+		UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.domains"}},
+		Lock:       true,
+	}
+	if _, err := s.Update(ctx, clear); connect.CodeOf(err) != connect.CodeInvalidArgument {
+		t.Fatalf("Update(clear domains) error = %v, want InvalidArgument", err)
 	}
 	if _, err := s.Delete(ctx, &aigridv1.TenantsDeleteRequest{Id: id, Version: 1}); connect.CodeOf(err) != connect.CodeAborted {
 		t.Fatalf("Delete(stale version) error = %v, want Aborted", err)

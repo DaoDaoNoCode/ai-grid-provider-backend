@@ -2725,7 +2725,7 @@
           "items": {
             "type": "string"
           },
-          "description": "Email domains associated with this tenant (DNS hostnames, lowercase)."
+          "description": "Email domains associated with this tenant (DNS hostnames, lowercase).\nCreate and an update of the domains need at least one: Keycloak finds a\nuser's organization, and so its identity provider, by their email domain."
         },
         "identity_provider": {
           "$ref": "#/definitions/v1IdentityProvider",

@@ -159,7 +159,7 @@ func TestRealTenantsServerIdentityProviderOnFakeKeycloak(t *testing.T) {
 	} {
 		_, err := s.Create(ctx, &aigridv1.TenantsCreateRequest{Object: &aigridv1.Tenant{
 			Metadata: &aigridv1.Metadata{Name: "beta"},
-			Spec:     &aigridv1.TenantSpec{IdentityProvider: oidc(r.issuer, "client", "acme-idp", idp.URL+"/keys")},
+			Spec:     &aigridv1.TenantSpec{Domains: []string{"beta.example.com"}, IdentityProvider: oidc(r.issuer, "client", "acme-idp", idp.URL+"/keys")},
 		}})
 		if connect.CodeOf(err) != r.code {
 			t.Fatalf("Create(%s) error = %v, want %v", r.name, err, r.code)

@@ -508,6 +508,10 @@ func createIdentityIsolationTenant(t *testing.T, ctx context.Context, client *cl
 	tenant, err := client.CreateTenant(ctx, &aigridv1.Tenant{
 		Metadata: &aigridv1.Metadata{Name: name},
 		Spec: &aigridv1.TenantSpec{
+			// An organization needs a domain. The users' emails are at
+			// example.com, so this one routes none of them: they sign in
+			// through the broker hint, as before.
+			Domains: []string{name + ".example.com"},
 			IdentityProvider: &aigridv1.IdentityProvider{
 				Title: name,
 				Config: &aigridv1.OidcConfig{

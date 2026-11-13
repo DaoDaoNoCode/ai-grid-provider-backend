@@ -102,6 +102,8 @@ func (x *Tenant) GetStatus() *TenantStatus {
 type TenantSpec struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// Email domains associated with this tenant (DNS hostnames, lowercase).
+	// Create and an update of the domains need at least one: Keycloak finds a
+	// user's organization, and so its identity provider, by their email domain.
 	Domains []string `protobuf:"bytes,1,rep,name=domains,proto3" json:"domains,omitempty"`
 	// Optional OIDC identity provider for this organization; unset means the
 	// organization has none, so its members can't sign in yet. Create sets it;

@@ -26,6 +26,8 @@ message Tenant {
 
 message TenantSpec {
   // Email domains associated with this tenant (DNS hostnames, lowercase).
+  // Create and an update of the domains need at least one: Keycloak finds a
+  // user's organization, and so its identity provider, by their email domain.
   repeated string domains = 1;
 
   // Optional OIDC identity provider for this organization; unset means the

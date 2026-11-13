@@ -269,7 +269,7 @@ func (s *TenantsServer) Create(ctx context.Context, req *aigridv1.TenantsCreateR
 	}
 	if normalizedIdP != nil {
 		idpCreated, setupErr := s.setupIdentityProvider(ctx, created, normalizedIdP)
-		if setupErr == nil && len(created.Domains) > 0 {
+		if setupErr == nil {
 			// Only now that the IdP is linked may a domain name it.
 			created.Domains = routeDomainsToIdentityProvider(created.Domains, identityProviderAliasOf(created))
 			created, setupErr = s.updateRoutedOrganization(ctx, created)
@@ -828,9 +828,13 @@ func validateTenantName(name string) error {
 }
 
 // validateTenantDomains checks domains toward OSAC rules: DNS hostname (not IP),
-// at least two labels, lowercase DNS labels, max lengths, no duplicates.
-// Empty domain lists are allowed.
+// at least two labels, lowercase DNS labels, max lengths, no duplicates. An
+// organization needs at least one domain: Keycloak finds a user's organization,
+// and so its identity provider, from the domain of the email they sign in with.
 func validateTenantDomains(domains []keycloak.OrganizationDomain) error {
+	if len(domains) == 0 {
+		return connect.Errorf(connect.CodeInvalidArgument, "spec.domains must contain at least one domain")
+	}
 	seen := make(map[string]struct{}, len(domains))
 	for _, d := range domains {
 		name := strings.TrimSpace(d.Name)

@@ -485,7 +485,7 @@ Never construct that issuer from an internal administration URL.
 | `metadata.name` | Organization name (RFC 1123 DNS label); required on create |
 | `metadata.version` | Optimistic-concurrency version, kept in the organization attribute `ai-grid/resource-version`: 1 on create, bumped by every update through this API. An organization created in Keycloak directly reads as 1. Edits made in Keycloak directly don't bump it. Output only |
 | `metadata.creation_timestamp` | From the attribute `ai-grid/create-time` (RFC 3339), stamped on create; absent for an organization created in Keycloak directly. Output only |
-| `spec.domains` | Email domains for the org (DNS hostnames, ≥2 labels, lowercase) |
+| `spec.domains` | Email domains for the org (DNS hostnames, ≥2 labels, lowercase). At least one: Keycloak finds a user's organization, and so its identity provider, by the domain of the email they sign in with. An organization created in Keycloak directly can have none |
 | `spec.identity_provider` | The org's OIDC identity provider (the Secret **name** of its client secret, never the value). Absent when the org has none: its members can't sign in yet, so show "sign-in not configured" |
 | `status` | Empty object today |
 
@@ -562,7 +562,9 @@ Notes:
 
 - Do **not** send a client-chosen `id`; Keycloak assigns it.
 - `metadata.name` is required (RFC 1123 DNS label).
-- `spec.domains` entries must be lowercase DNS hostnames with at least two
+- `spec.domains` needs at least one domain; without one (an empty list, or no
+  `spec`) the create is `400` (`InvalidArgument`) and nothing is created.
+  Entries must be lowercase DNS hostnames with at least two
   labels (e.g. `acme.example.com`); IPs and single-label names are rejected.
 - `spec.identity_provider` is optional: without it the org is created with
   sign-in not configured, and a later `PATCH` adds it. With it, Keycloak
@@ -657,6 +659,9 @@ Notes:
   retry the update.
 - Domains in the body **replace** the domain list when domains are updated.
   Blank/whitespace-only domain entries are rejected (`InvalidArgument`), not dropped.
+  An update that would leave no domain is rejected (`InvalidArgument`) and writes
+  nothing. An update that doesn't change the domains is accepted for an
+  organization that has none, such as one created in Keycloak directly.
 - `metadata.version` is required (`400`, `InvalidArgument`, without one) and
   must equal the stored version, or the update is `409` (`Aborted`) and writes
   nothing. Every organization reads as version 1 or more. Every update that
